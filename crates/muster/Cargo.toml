@@ -1,0 +1,29 @@
+[package]
+name = "muster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent multiplexer daemon + CLI: worktree-isolated agents, undo snapshots, policy-gated fleet ops"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+futures = "0.3.34"
+libc = "0.2.191"
+muster-core = { version = "0.1.0", path = "../muster-core" }
+notify = "8.2.2"
+notify-debouncer-mini = "0.7.0"
+portable-pty = "0.9.0"
+ratatui = "0.30.2"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "http2"] }
+russh = "0.65.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+unicode-width = "0.2.3"
+vt100 = "0.18.1"

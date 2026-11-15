@@ -1,0 +1,131 @@
+# muster configuration — ~/.muster/config.toml
+# Anything you set here is merged over these defaults (tables merge, arrays replace).
+
+# ── Agents ───────────────────────────────────────────────────────────────
+# Each agent is a command muster runs in a PTY inside the task's worktree.
+#   prompt_mode: "arg"  -> initial prompt passed as the last argument
+#                "type" -> typed into the TUI after startup
+#                "none" -> ignored
+#   hooks: "claude" injects muster's Claude Code hooks via --settings
+#          (policy gate + snapshot before every tool call + precise attention).
+#   attention_on_idle: idle output counts as "needs you" (turn finished).
+
+[agents.claude]
+command = "claude"
+args = []
+prompt_mode = "arg"
+hooks = "claude"
+attention_on_idle = true
+
+[agents.codex]
+command = "codex"
+args = []
+prompt_mode = "arg"
+attention_on_idle = true
+
+[agents.opencode]
+command = "opencode"
+args = []
+prompt_mode = "type"
+attention_on_idle = true
+
+[agents.shell]
+command = "$SHELL"
+args = []
+prompt_mode = "type"
+attention_on_idle = false
+
+# ── Attention detection ──────────────────────────────────────────────────
+[attention]
+# Seconds without output before a task counts as idle/waiting.
+idle_secs = 6
+# Bottom-of-screen text that means "the agent is asking you something".
+patterns = [
+  "Do you want",
+  "(y/n)",
+  "[y/N]",
+  "[Y/n]",
+  "Allow",
+  "Approve",
+  "Continue?",
+  "Press enter",
+  "Waiting for",
+  "Proceed?",
+]
+
+# ── TUI ──────────────────────────────────────────────────────────────────
+[tui]
+# Prefix key for muster commands while you're typing in a pane (like tmux).
+prefix = "C-b"
+# Ring the terminal bell when an agent starts waiting on you.
+bell = true
+tab_width = 4
+# Editor syntax theme: base16-ocean.dark, base16-eighties.dark, base16-mocha.dark, Solarized (dark), InspiredGitHub
+theme = "base16-ocean.dark"
+
+# ── Snapshots (undo) ─────────────────────────────────────────────────────
+[snapshots]
+# Snapshot automatically after file changes settle, and at the end of each turn.
+auto = true
+debounce_ms = 1500
+# Extra excludes on top of each repo's .gitignore (gitignore syntax).
+exclude = ["node_modules/", "target/", ".venv/", "__pycache__/", ".DS_Store", "dist/", "build/"]
+
+# ── Command policy ───────────────────────────────────────────────────────
+# Every shell command (agent Bash calls, fleet runs, ops investigations)
+# is classified read-only / mutating / destructive, then mapped to a decision.
+[policy]
+read_only = "allow"
+mutating = "ask"
+destructive = "deny"
+# Rules are checked first, in order. `*` and `?` wildcards, whole-command match.
+rules = [
+  { pattern = "git push*--force*", decision = "deny", note = "no force pushes" },
+  { pattern = "git push*-f *", decision = "deny", note = "no force pushes" },
+  { pattern = "cargo test*", decision = "allow", note = "tests are fine" },
+  { pattern = "cargo check*", decision = "allow" },
+  { pattern = "cargo clippy*", decision = "allow" },
+  { pattern = "npm test*", decision = "allow" },
+  { pattern = "go test*", decision = "allow" },
+]
+# Extra program names to treat as read-only.
+read_only_programs = []
+
+# ── Claude Code hook behaviour ───────────────────────────────────────────
+[hooks]
+# "queue": commands that need approval wait in muster's inbox (any client can approve).
+# "agent": defer to Claude Code's own permission prompt.
+mode = "queue"
+# How long a queued approval waits before falling back to the agent's prompt.
+timeout_secs = 540
+# Let read-only Bash commands through without Claude asking.
+auto_allow_read_only = true
+# Tools that trigger a snapshot right before they run.
+snapshot_before = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"]
+
+# ── SSH fleet ────────────────────────────────────────────────────────────
+[ssh]
+# "openssh": shell out to your ssh binary (respects ~/.ssh/config, ProxyJump, agent)
+# "native":  built-in russh client (agent + key files, known_hosts checked)
+transport = "openssh"
+connect_timeout_secs = 10
+command_timeout_secs = 60
+# native only: accept hosts not present in ~/.ssh/known_hosts
+accept_unknown_hosts = false
+
+# ── Ops investigations (LLM) ─────────────────────────────────────────────
+[ops]
+model = "claude-sonnet-5-5"
+api_key_env = "ANTHROPIC_API_KEY"
+base_url = "https://api.anthropic.com"
+max_steps = 16
+max_output_bytes = 6000
+
+# ── Hosts ────────────────────────────────────────────────────────────────
+# Selectors: "all", a name, "web-*", "tag:prod", comma-separated unions.
+hosts = []
+# hosts = [
+#   { name = "prod-1", addr = "10.0.0.11", user = "ubuntu", tags = ["prod", "web"] },
+#   { name = "prod-2", addr = "10.0.0.12", user = "ubuntu", tags = ["prod", "web"] },
+#   { name = "db-1",   addr = "db.internal", port = 2222, user = "admin", key = "~/.ssh/id_ed25519", tags = ["prod", "db"] },
+# ]

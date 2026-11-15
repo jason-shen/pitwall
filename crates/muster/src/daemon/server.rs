@@ -1,0 +1,337 @@
+//! Unix-socket server: one connection per client, requests handled concurrently,
+//! pushes (screen output, events) multiplexed onto the same stream.
+
+use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use muster_core::proto::{ClientFrame, Push, Request, Response, ServerFrame};
+use muster_core::{hosts, policy, wire};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
+
+use super::{fleet, hook, ops, Daemon};
+
+pub async fn serve(d: Arc<Daemon>, sock: &Path) -> Result<()> {
+    let listener = UnixListener::bind(sock)?;
+    std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))?;
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let d = d.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_conn(d, stream).await {
+                tracing::debug!("connection ended: {e:#}");
+            }
+        });
+    }
+}
+
+struct Conn {
+    tx: mpsc::UnboundedSender<ServerFrame>,
+    attached: Mutex<HashMap<String, JoinHandle<()>>>,
+    subscription: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Conn {
+    fn push(&self, p: Push) {
+        let _ = self.tx.send(ServerFrame::Push(p));
+    }
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        for (_, h) in self.attached.lock().unwrap().drain() {
+            h.abort();
+        }
+        if let Some(h) = self.subscription.lock().unwrap().take() {
+            h.abort();
+        }
+    }
+}
+
+async fn handle_conn(d: Arc<Daemon>, stream: UnixStream) -> Result<()> {
+    let (mut rd, mut wr) = stream.into_split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<ServerFrame>();
+    let writer = tokio::spawn(async move {
+        while let Some(f) = rx.recv().await {
+            if wire::write_frame(&mut wr, &f).await.is_err() {
+                break;
+            }
+        }
+    });
+    let conn = Arc::new(Conn {
+        tx,
+        attached: Mutex::new(HashMap::new()),
+        subscription: Mutex::new(None),
+    });
+
+    while let Some(frame) = wire::read_frame::<_, ClientFrame>(&mut rd).await? {
+        let (d, conn) = (d.clone(), conn.clone());
+        // Keystrokes must stay ordered, so handle Input inline; everything else concurrently.
+        if matches!(frame.body, Request::Input { .. } | Request::Resize { .. }) {
+            let body = handle(&d, &conn, frame.body)
+                .await
+                .unwrap_or_else(|e| Response::Error(format!("{e:#}")));
+            let _ = conn.tx.send(ServerFrame::Reply {
+                req: frame.req,
+                body,
+            });
+            continue;
+        }
+        tokio::spawn(async move {
+            let body = handle(&d, &conn, frame.body)
+                .await
+                .unwrap_or_else(|e| Response::Error(format!("{e:#}")));
+            let _ = conn.tx.send(ServerFrame::Reply {
+                req: frame.req,
+                body,
+            });
+        });
+    }
+    drop(conn);
+    writer.abort();
+    Ok(())
+}
+
+async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Response> {
+    Ok(match req {
+        Request::Ping => Response::Pong {
+            version: muster_core::VERSION.into(),
+        },
+        Request::Shutdown => {
+            tokio::spawn(async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let _ = nix_kill_self();
+            });
+            Response::Ok
+        }
+        Request::Subscribe => {
+            let mut rx = d.events.subscribe();
+            let c = conn.clone();
+            let h = tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(p) => c.push(p),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+            if let Some(old) = conn.subscription.lock().unwrap().replace(h) {
+                old.abort();
+            }
+            Response::Ok
+        }
+
+        Request::ListTasks => Response::Tasks(d.list()),
+        Request::NewTask(req) => Response::Task(d.new_task(req).await?),
+        Request::Kill { id } => {
+            let t = d.task(&id)?;
+            t.kill();
+            Response::Ok
+        }
+        Request::Remove { id, prune_worktree } => {
+            d.remove_task(&id, prune_worktree).await?;
+            Response::Ok
+        }
+
+        Request::Attach { id, rows, cols } => {
+            let t = d.task(&id)?;
+            if rows > 0 && cols > 0 {
+                t.resize(rows, cols)?;
+            }
+            let (r, c, data, mut rx) = t.attach();
+            conn.push(Push::Screen {
+                id: t.id.clone(),
+                rows: r,
+                cols: c,
+                data,
+            });
+            let c2 = conn.clone();
+            let t2 = t.clone();
+            let h = tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(data) => c2.push(Push::Output {
+                            id: t2.id.clone(),
+                            data,
+                        }),
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            let (r, c, data, new_rx) = t2.attach();
+                            rx = new_rx;
+                            c2.push(Push::Screen {
+                                id: t2.id.clone(),
+                                rows: r,
+                                cols: c,
+                                data,
+                            });
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            if let Some(old) = conn.attached.lock().unwrap().insert(t.id.clone(), h) {
+                old.abort();
+            }
+            Response::Task(t.info())
+        }
+        Request::Detach { id } => {
+            if let Some(h) = conn.attached.lock().unwrap().remove(&id) {
+                h.abort();
+            }
+            Response::Ok
+        }
+        Request::Input { id, data } => {
+            let t = d.task(&id)?;
+            t.write(&data)?;
+            Response::Ok
+        }
+        Request::Prompt { id, text, from } => {
+            let t = d.task(&id)?;
+            if from.as_deref() == Some(t.id.as_str()) {
+                anyhow::bail!("{} is you", t.id);
+            }
+            let line = muster_core::agents::message_line(from.as_deref(), &text);
+            t.write(line.as_bytes())?;
+            // A Return in the same write reads as part of a paste to TUIs
+            // like Claude Code, which then don't submit it.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            t.write(b"\r")?;
+            d.audit.log(serde_json::json!({
+                "source": "agent", "event": "message", "from": from, "to": t.id, "text": text,
+            }));
+            d.emit(Push::Message {
+                from,
+                to: t.id.clone(),
+                text,
+            });
+            Response::Ok
+        }
+        Request::Read { id, lines } => {
+            Response::Text(d.task(&id)?.tail_text(lines.clamp(1, 500)).join("\n"))
+        }
+        Request::Resize { id, rows, cols } => {
+            d.task(&id)?.resize(rows, cols)?;
+            Response::Ok
+        }
+
+        Request::Snapshots { id } => {
+            let t = d.task(&id)?;
+            let list = tokio::task::spawn_blocking(move || match &t.snaps {
+                Some(s) => s.list(),
+                None => Ok(vec![]),
+            })
+            .await??;
+            Response::Snapshots(list)
+        }
+        Request::TakeSnapshot { id, label } => {
+            let t = d.task(&id)?;
+            if t.snaps.is_none() {
+                return Err(anyhow!("snapshots are not available for this task"));
+            }
+            let label = if label.trim().is_empty() {
+                "manual checkpoint".to_string()
+            } else {
+                label
+            };
+            Response::Snapshot(d.snapshot(&t, label).await)
+        }
+        Request::Revert { id, snapshot } => {
+            let t = d.task(&id)?;
+            let t2 = t.clone();
+            let info = tokio::task::spawn_blocking(move || {
+                t2.snaps
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("snapshots are not available for this task"))?
+                    .restore(&snapshot)
+            })
+            .await??;
+            t.state.lock().unwrap().snap_count = info.seq;
+            d.audit.log(serde_json::json!({"source": "snapshot", "event": "revert", "task": t.id, "to": info.label}));
+            d.emit(Push::SnapshotTaken {
+                task: t.id.clone(),
+                snapshot: info.clone(),
+            });
+            d.emit_task(&t);
+            Response::Snapshot(Some(info))
+        }
+        Request::Diff { id, from, to } => {
+            let t = d.task(&id)?;
+            let text = tokio::task::spawn_blocking(move || {
+                t.snaps
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("snapshots are not available for this task"))?
+                    .diff(from.as_deref(), to.as_deref())
+            })
+            .await??;
+            Response::Diff(text)
+        }
+
+        Request::Approvals => Response::Approvals(d.approvals()),
+        Request::Decide { id, allow } => {
+            d.decide(id, allow)?;
+            Response::Ok
+        }
+
+        Request::Hook(h) => Response::Hook(hook::handle(d, h).await),
+        Request::Classify { command } => {
+            let c = policy::classify(&command, &d.cfg.policy);
+            Response::Classified {
+                tier: c.tier,
+                decision: c.decision,
+                reason: c.reason,
+            }
+        }
+
+        Request::Hosts => Response::Hosts(fleet::host_infos(&d.cfg)),
+        Request::FleetRun {
+            selector,
+            command,
+            confirmed,
+        } => {
+            let targets: Vec<_> = hosts::select(&d.cfg.hosts, &selector)
+                .into_iter()
+                .cloned()
+                .collect();
+            if targets.is_empty() {
+                return Err(anyhow!("selector `{selector}` matches no hosts"));
+            }
+            let c = policy::classify(&command, &d.cfg.policy);
+            let names: Vec<String> = targets.iter().map(|h| h.name.clone()).collect();
+            let auto = c.decision == muster_core::proto::Decision::Allow;
+            if !auto && !confirmed {
+                return Ok(Response::NeedsConfirm {
+                    tier: c.tier,
+                    decision: c.decision,
+                    reason: c.reason,
+                    hosts: names,
+                });
+            }
+            let results = fleet::run(&d.cfg, &targets, &command).await;
+            d.audit.log(serde_json::json!({
+                "source": "fleet", "hosts": names, "command": command, "tier": c.tier.label(),
+                "decision": if auto { "auto" } else { "human-confirmed" },
+                "exits": results.iter().map(|r| (r.host.clone(), r.exit)).collect::<Vec<_>>(),
+            }));
+            Response::Fleet(results)
+        }
+        Request::OpsAsk { question, selector } => {
+            let session = ops::start(d.clone(), question, selector)?;
+            Response::OpsStarted { session }
+        }
+    })
+}
+
+fn nix_kill_self() -> std::io::Result<()> {
+    // SIGTERM ourselves so the normal shutdown path in `run` executes.
+    let r = unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
