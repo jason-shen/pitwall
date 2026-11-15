@@ -1,18 +1,31 @@
 # muster
 
-A terminal app for running coding agents side by side.
+**The workspace for agentic coding.** Write what you want, run agents on it in parallel, review what they did and merge it, all in one window.
 
 ![muster: the project tree and agents on the left, an agent and a file open in two cards](docs/screenshot.png)
 
-muster is a GPU-drawn terminal built around projects and the agents working in them. Your terminals, Claude Code / Codex / OpenCode sessions, each project's git changes and files, and an editor all live in one window. You can see at a glance which agent is working, which one is waiting on you and what each one is doing, and step in without switching apps.
+Running more than one coding agent usually means a terminal tab per agent, a chat window for planning, lazygit for the diffs and an editor for the fixes, and keeping in your head which agent is waiting on you. Agents edit the same checkout and trip over each other. Reviewing means reading a diff and typing your notes back into a prompt.
 
-- **Projects first.** The sidebar is a tree of your projects. Each one holds its Changes, its Files and its terminals; agents across every project are listed below by what needs you.
-- **Real terminals that outlive the window.** Every tab is a real PTY owned by a background daemon. Close muster and your terminals and agents keep running; open it again and everything is where you left it. If the daemon itself restarts, each one comes back in its own folder, and Claude and Codex pick up their last session.
-- **Tabs and tiles.** A project's terminals are tabs. Drag one onto another to tile them, resize the tiles, swap them, maximize one.
-- **Agents in their own worktrees.** An agent you start from muster gets its own git worktree and branch (`muster/<name>`), an undo timeline of snapshots, and an approval bar for the commands it wants to run.
-- **Agents that talk to each other.** Agents can list each other, send messages and wait on each other's work through the `muster` command.
-- **Briefs.** Plan a change in a Markdown doc from a template, let an agent finish it, then hand it to a new agent to build.
-- **Git and an editor built in.** lazygit-style Changes with hunk staging, commit and merge; a file tree that opens files in the built-in editor, nvim/helix inside the card, or VS Code, Zed and friends.
+muster puts that whole loop in one place:
+
+1. **Write the brief.** Say what you want in a Markdown brief made from a template (feature, bug, refactor, UI, spike). Let Claude fill in the rest from your code while you watch it write: the problem, the files involved, the steps, the open questions.
+2. **Hand it to an agent.** Claude Code, Codex or another agent CLI starts on its own git worktree and branch, so agents in parallel never touch your checkout or each other's.
+3. **Watch them.** Every agent in every project is listed by what needs you: waiting on an approval, asking a question, done, working. Each row shows how far through its brief it is and how much it has changed. Commands that change things wait for your approval; destructive ones are refused.
+4. **Review.** Read the agent's diff against where it started, comment on lines and send the comments back to it as one message, or throw away a hunk. Every step it took is a snapshot you can revert to.
+5. **Accept.** One step commits what it left, merges its branch into the one it came from and offers to clean up its worktree.
+
+It's also a real terminal, drawn on the GPU, so the agents run in their own TUIs and your shells, vim and lazygit sit beside them in tiled cards. A background daemon owns every terminal: close the window and everything keeps running; restart the machine and your agents come back in their folders and pick up their sessions.
+
+### What's in it
+
+- **Agents in their own worktrees**, with an undo timeline of snapshots and an approval bar for the commands they want to run.
+- **A command policy that only ever adds restrictions.** muster denies what your rules deny and queues what needs a look; it never quietly allows something on its own reading of a shell command.
+- **Briefs** linked to the agents building them: the agent ticks off each step as it finishes it, and **Review →** takes you to its diff.
+- **Review built for agents:** diff against the agent's base, line comments sent back to it, discard a hunk, Accept to commit and merge.
+- **Agents that talk to each other** through the `muster` command: list, message, wait on and read one another.
+- **Projects first.** The sidebar is a tree of your projects, each with its Changes, Files, briefs and terminals.
+- **Git and an editor built in**: lazygit-style staging and commits, a file tree, a built-in editor with Markdown preview, or nvim, helix, VS Code and friends.
+- **A terminal that holds up**: tabs and tiles, scrollback that survives restarts, text that rewraps when a card narrows, mouse reporting, IME, OSC 52, synchronized output, the kitty keyboard protocol for Shift+Return in Claude Code and Codex.
 
 ## Install
 
@@ -33,10 +46,11 @@ The daemon starts on its own the first time anything needs it.
 ## A quick tour
 
 1. **Open a project.** Run `muster-gui` in a repo, or press **+** beside PROJECTS and pick a folder. It opens with a terminal; name its tab and press Enter (or just Enter to keep `term-1`).
-2. **Start an agent.** **+ Agent** under the project, or ⌘⇧N. Give it a task and a name; the name is also its branch. Or type the task into the command bar (⌘⇧P) and press Enter.
-3. **Watch it.** It appears under AGENTS with its status and what it's working on. When it needs you (an approval, a question, a finished turn), it moves to the top, the project shows "1 waiting", and the dock bounces if muster is in the background.
-4. **Work beside it.** **+** in the tab strip opens another terminal. Drag its tab onto the agent's tab to tile them. Open **± Changes** to review the diff, stage hunks and commit, or **▤ Files** to open a file.
-5. **Approve or undo.** Commands that change things wait for **Approve / Reject**. Every agent has an undo history (⌘⇧U); revert to any step, and undo the revert if you change your mind.
+2. **Write a brief.** **+ Brief** under the project (⌘⌥B), pick a template and a title, and write what you want on the **Ask:** line. **✦ Finish with AI** (⌘⌥F) has Claude read the code and fill in the rest.
+3. **Hand it off.** **Hand to agent →** (⌘⌥↵) opens the New agent form with the brief as the task. Or skip the brief: **+ Agent** (⌘⇧N), or type a task into the command bar (⌘⇧P) and press Enter.
+4. **Watch it.** It appears under AGENTS with its status, what it's doing and how far through the brief it is. When it needs you (an approval, a question, a finished turn), it moves to the top, the project shows "1 waiting", and the dock bounces if muster is in the background. ⌘⇧A jumps to the next one that needs you.
+5. **Review it.** **Review →** on the brief, or **± Changes** on the agent: its diff against where it started. `r` comments on a line, **send to agent** hands your comments back, `d` throws away a hunk, and ⌘⇧U shows every step it took, to revert to any of them.
+6. **Accept it.** `m` commits what it left, merges its branch into yours and offers to remove the worktree.
 
 ## The window
 
@@ -132,7 +146,7 @@ Markdown is always edited in the built-in editor, the way inkterm does it, with 
 
 ### Approvals and undo
 
-muster hooks into Claude Code for that session only, through `--settings`. Codex is hooked the same way (`hooks = "codex"`, the default); Codex asks you once to trust muster's hook. Before a Codex agent starts, muster checks that this Codex reads the hook config, and starts it without the hook if not. Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. It doesn't cover output sent into a file (`cargo test > ~/.zshrc`) or flags that make the tool run another program (`cargo --config`, `go test -exec`, npm's `--script-shell`). Deny rules hold anywhere in the line, including behind `FOO=1`, `sudo` or `git -C dir`, and inside `bash -c '…'`, which is judged by the script it runs. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
+muster hooks into Claude Code for that session only, through `--settings`. Codex is hooked the same way (`hooks = "codex"`, the default); Codex asks you once to trust muster's hook. Before a Codex agent starts, muster checks that this Codex reads the hook config, and starts it without the hook if not. Commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. muster only adds restrictions: it says "allow" only for your own allow rules, and leaves everything else to the agent's own permission prompt, so a command it misreads can't run silently. (`auto_allow_read_only = true` under `[hooks]` lets commands it judges read-only through without the agent asking.) ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. It doesn't cover output sent into a file (`cargo test > ~/.zshrc`) or flags that make the tool run another program (`cargo --config`, `go test -exec`, npm's `--script-shell`). Deny rules hold anywhere in the line, including behind `FOO=1`, `sudo` or `git -C dir`, and inside `bash -c '…'`, which is judged by the script it runs. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
 
 Finish with AI and agents rewriting an open file don't cost you your text: the version before is one ⌘Z away in the editor.
 
@@ -242,6 +256,10 @@ mutating = "ask"
 destructive = "deny"
 rules = [{ pattern = "cargo test*", decision = "allow" }]
 
+[hooks]                     # how agents' commands are gated
+mode = "queue"              # "queue": approvals wait in muster · "agent": the agent's own prompt
+auto_allow_read_only = false
+
 [tui]
 theme = "base16-ocean.dark" # the editor's syntax theme
 ```
@@ -262,7 +280,7 @@ What isn't a setting stays in `~/.muster`: the layout (projects, tabs, cards and
 ## How it works
 
 ```
-muster-gui (egui + wgpu)    muster (terminal UI)    muster <cmd> (CLI)    Claude Code hooks
+muster-gui (egui + wgpu)    muster (terminal UI)    muster <cmd> (CLI)    Claude Code / Codex hooks
         └──────────────────────────┬─────────────────────┬────────────────────┘
                        ~/.muster/muster.sock (msgpack)
                                    │
@@ -285,7 +303,7 @@ scripts/macos-app.sh
 ## Known limitations
 
 - Terminals survive the app closing. When the daemon stops (`muster stop`, a reboot) their processes end; the next daemon starts them again in the same folders, with the same command (an editor card comes back as its editor), and agents that had finished a turn resume their session (`resume_args` in each agent's config); one that never got going starts over with its task. A shell comes back as a fresh shell. A task that can't start again (its folder is on a drive that isn't mounted, say) is kept for the next start rather than forgotten.
-- The approval bar works with Claude Code. Other agents' own prompts show as *waiting* and are answered in their tab.
+- The approval bar works with Claude Code and Codex. Other agents' own prompts show as *waiting* and are answered in their tab.
 - The built-in editor has no multi-cursor. With nothing selected, copy and cut take the whole line.
 - Card sizes reset when the app restarts.
 
