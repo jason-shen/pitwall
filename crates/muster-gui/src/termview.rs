@@ -516,13 +516,15 @@ impl TerminalView {
 
     pub fn paste_bytes(&self, text: &str) -> Vec<u8> {
         let bracketed = self.parser.lock().unwrap().screen().bracketed_paste();
-        // A pasted end-of-paste marker would end the paste early and run the
-        // rest as typed input.
-        let text = text
-            .replace("\x1b[201~", "")
-            .replace("\x1b[200~", "")
-            .replace("\r\n", "\n")
-            .replace('\n', "\r");
+        // An end-of-paste marker inside the text would end the paste early
+        // and run the rest as typed input. Taking out pieces of one can leave
+        // another, so no ESC goes through at all in a bracketed paste.
+        let text = if bracketed {
+            text.replace('\x1b', "")
+        } else {
+            text.to_string()
+        };
+        let text = text.replace("\r\n", "\n").replace('\n', "\r");
         let mut out = Vec::new();
         if bracketed {
             out.extend_from_slice(b"\x1b[200~");
@@ -549,11 +551,17 @@ impl TerminalView {
 
     pub fn clear_scrollback(&mut self) {
         let mut p = self.parser.lock().unwrap();
+        let alt = p.screen().alternate_screen();
         p.screen_mut().clear_scrollback();
-        // The lines the marks pointed at are gone, and the count restarts.
-        p.callbacks_mut().dropped = 0;
+        // The lines the marks and the selection pointed at are gone, and the
+        // count restarts. The alternate screen has a history of its own; the
+        // main screen's numbering is left alone then.
+        if !alt {
+            p.callbacks_mut().dropped = 0;
+        }
         drop(p);
         self.marks.clear();
+        self.clear_selection();
     }
 
     /// Draw the terminal and handle its input. Returns bytes to send / resizes.
@@ -652,6 +660,10 @@ impl TerminalView {
         let mut find_requested = false;
         let mut mark_jump = None;
         let mut enter_pressed = false;
+        if !focused {
+            // A composition doesn't survive losing focus.
+            self.preedit.clear();
+        }
         if focused && interactive {
             let events = ui.input(|i| i.events.clone());
             let mut skip_text = false;
@@ -817,6 +829,12 @@ impl TerminalView {
                                 // Off: the layout's character arrives as text.
                                 continue;
                             }
+                        }
+                        // In a full-screen program (vim, less) Shift+Return is
+                        // Return; the newline meaning is for line editors.
+                        if key == Key::Enter && modifiers.shift && alt_screen {
+                            self.input_typed(&mut actions, vec![b'\r']);
+                            continue;
                         }
                         if let Some(b) = encode_key(key, modifiers, app_cursor) {
                             if modifiers.alt && !modifiers.ctrl && is_letter_or_digit(key) {
@@ -1288,6 +1306,34 @@ impl TerminalView {
             flush(&mut run, run_start, run_style);
         }
 
+        // Input methods (Chinese, Japanese, Korean, dead keys) stay on while
+        // the view has focus, wherever the cursor is and whether a program
+        // hides it (Claude Code does): turning it off and on with the cursor
+        // would cancel a composition halfway.
+        {
+            let (cr, cc) = screen.cursor_position();
+            let at = pos2(
+                origin.x + cc.min(cols.saturating_sub(1)) as f32 * cw,
+                origin.y + cr.min(rows.saturating_sub(1)) as f32 * ch,
+            );
+            if focused && interactive {
+                ui.ctx().output_mut(|o| {
+                    o.ime = Some(egui::output::IMEOutput {
+                        purpose: egui::IMEPurpose::Terminal,
+                        rect,
+                        cursor_rect: Rect::from_min_size(at, vec2(cw, ch)),
+                        should_interrupt_composition: false,
+                    })
+                });
+            }
+            if !self.preedit.is_empty() {
+                let g = painter.layout_no_wrap(self.preedit.clone(), font.clone(), scheme.bg);
+                let r = Rect::from_min_size(at, vec2(g.size().x.max(cw), ch));
+                painter.rect_filled(r, 2.0, scheme.cursor);
+                painter.galley(at + vec2(0.0, text_dy), g, scheme.bg);
+            }
+        }
+
         // cursor
         if !screen.hide_cursor() && !scrolled {
             let (cr, cc) = screen.cursor_position();
@@ -1298,24 +1344,6 @@ impl TerminalView {
                 let wide = screen.cell(cr, cc).is_some_and(|c| c.is_wide());
                 let cell_rect =
                     Rect::from_min_size(pos2(x, y), vec2(if wide { 2.0 * cw } else { cw }, ch));
-                // Lets an input method (Chinese, Japanese, Korean, dead keys)
-                // work here and put its candidate window by the cursor.
-                if focused && interactive {
-                    ui.ctx().output_mut(|o| {
-                        o.ime = Some(egui::output::IMEOutput {
-                            purpose: egui::IMEPurpose::Terminal,
-                            rect,
-                            cursor_rect: cell_rect,
-                            should_interrupt_composition: false,
-                        })
-                    });
-                }
-                if !self.preedit.is_empty() {
-                    let g = painter.layout_no_wrap(self.preedit.clone(), font.clone(), scheme.bg);
-                    let r = Rect::from_min_size(pos2(x, y), vec2(g.size().x.max(cw), ch));
-                    painter.rect_filled(r, 2.0, scheme.cursor);
-                    painter.galley(pos2(x, y + text_dy), g, scheme.bg);
-                }
                 // The shape a program asked for (nvim's bar in insert mode),
                 // else the one in Settings.
                 let shape = match screen.cursor_style() {
@@ -1934,9 +1962,9 @@ mod tests {
         let p = new_parser(3, 20, 10);
         feed(&p, b"\x1b[?2004h");
         let v = TerminalView::new(p, egui::Id::unique("t"), 20, 3);
-        let out = v.paste_bytes("safe\x1b[201~rm -rf ~\n");
+        let out = v.paste_bytes("safe\x1b[20\x1b[201~1~rm -rf ~\n");
         // The inner end marker is gone; the only one left closes the paste.
-        assert_eq!(out, b"\x1b[200~saferm -rf ~\r\x1b[201~".to_vec());
+        assert_eq!(out, b"\x1b[200~safe[20[201~1~rm -rf ~\r\x1b[201~".to_vec());
     }
 
     #[test]

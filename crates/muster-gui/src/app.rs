@@ -231,6 +231,8 @@ pub struct TermState {
     /// one go when the program ends it.
     held: Vec<u8>,
     held_since: Option<Instant>,
+    /// A synchronized update is open (its begin seen, its end not yet).
+    sync_open: bool,
 }
 
 /// Programs that mark their redraws (Claude Code, Codex) say where one starts
@@ -241,20 +243,32 @@ const SYNC_LIMIT: Duration = Duration::from_millis(120);
 impl TermState {
     /// Take output in, holding it while a synchronized update is open.
     fn take(&mut self, data: &[u8]) {
+        // Only the new bytes are looked at, starting a marker's length back
+        // so one split across two reads is still seen.
+        const MARK: usize = 8;
+        let from = self.held.len().saturating_sub(MARK - 1);
         self.held.extend_from_slice(data);
-        let last = |pat: &[u8]| self.held.windows(pat.len()).rposition(|w| w == pat);
-        let open = match (last(b"\x1b[?2026h"), last(b"\x1b[?2026l")) {
-            (Some(b), Some(e)) => b > e,
-            (Some(_), None) => true,
-            _ => false,
-        };
+        let mut k = from;
+        while k + MARK <= self.held.len() {
+            match &self.held[k..k + MARK] {
+                b"\x1b[?2026h" => self.sync_open = true,
+                b"\x1b[?2026l" => self.sync_open = false,
+                _ => {
+                    k += 1;
+                    continue;
+                }
+            }
+            k += MARK;
+        }
         let since = *self.held_since.get_or_insert_with(Instant::now);
-        if !open || since.elapsed() > SYNC_LIMIT {
+        if !self.sync_open || since.elapsed() > SYNC_LIMIT {
             self.flush();
         }
     }
 
     fn flush(&mut self) {
+        // Drawn now; a later end marker on its own closes nothing.
+        self.sync_open = false;
         if !self.held.is_empty() {
             let _ = crate::termview::feed(&self.view.parser, &std::mem::take(&mut self.held));
         }
@@ -274,6 +288,7 @@ impl TermState {
             ),
             held: vec![],
             held_since: None,
+            sync_open: false,
         }
     }
 }
@@ -1272,12 +1287,27 @@ impl App {
     /// already, so they're dropped.
     fn drain_notifications(&mut self) {
         let mut got = vec![];
+        let mut copied = vec![];
         for (id, t) in self.terms.iter() {
-            let n =
-                std::mem::take(&mut t.view.parser.lock().unwrap().callbacks_mut().notifications);
+            let mut p = t.view.parser.lock().unwrap();
+            let n = std::mem::take(&mut p.callbacks_mut().notifications);
             if !n.is_empty() {
                 got.push((id.clone(), n));
             }
+            // OSC 52: nvim's "+y, tmux, anything over ssh.
+            if let Some(text) = p.callbacks_mut().clipboard.take() {
+                copied.push((id.clone(), text));
+            }
+        }
+        for (id, text) in copied {
+            let n = text.chars().count();
+            self.ctx.copy_text(text);
+            let name = self.tasks.get(&id).map(|t| self.label(t)).unwrap_or(id);
+            // Said out loud, so a program can't swap the clipboard unseen.
+            self.notify(
+                format!("{name} copied {n} characters to the clipboard"),
+                false,
+            );
         }
         for (id, msgs) in got {
             if self.watching(&id) {
@@ -1630,7 +1660,7 @@ impl App {
             // typing into it meanwhile.
             match self.brief_runs.get_mut(&e.path) {
                 Some(run) => {
-                    e.readonly = true;
+                    e.locked = true;
                     if e.check_disk_with(!run.recorded) {
                         run.recorded = true;
                     }
@@ -2134,7 +2164,7 @@ impl App {
         // Take the last write now, or the next tick reports it as an outside change.
         for e in self.tabs.iter_mut().flat_map(|t| t.files.iter_mut()) {
             if e.path == path {
-                e.readonly = false;
+                e.locked = false;
                 if !e.dirty {
                     e.reload_with(!recorded);
                 }
@@ -3137,7 +3167,10 @@ mod tests {
         let screen = |t: &super::TermState| t.view.parser.lock().unwrap().screen().contents();
         t.take(b"\x1b[?2026hhalf");
         assert_eq!(screen(&t), "", "drawn before the update ended");
-        t.take(b" done\x1b[?2026l");
+        // The end marker split across two reads.
+        t.take(b" done\x1b[?20");
+        assert_eq!(screen(&t), "");
+        t.take(b"26l");
         assert_eq!(screen(&t), "half done");
         // One that's never ended still shows, after a moment.
         t.take(b"\x1b[?2026h more");

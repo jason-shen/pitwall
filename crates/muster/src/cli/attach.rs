@@ -32,6 +32,54 @@ impl Drop for RawGuard {
     }
 }
 
+/// This terminal's own answers to the program's queries (cursor position,
+/// device attributes, colours). The daemon already answers them, so these
+/// would arrive as a second answer, or as typed garbage.
+fn strip_replies(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if let Some(n) = reply_len(&data[i..]) {
+            i += n;
+        } else {
+            out.push(data[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Length of a query reply at the start of `d`: CSI r;c R, CSI 0 n,
+/// CSI ? … c, CSI > … c, or OSC 10/11 ; … (BEL or ST).
+fn reply_len(d: &[u8]) -> Option<usize> {
+    if let Some(rest) = d.strip_prefix(b"\x1b[") {
+        let body = rest
+            .iter()
+            .take_while(|b| b.is_ascii_digit() || matches!(b, b';' | b'?' | b'>'))
+            .count();
+        let fin = *rest.get(body)?;
+        let params = &rest[..body];
+        let ok = match fin {
+            b'R' => params.contains(&b';') && !params.starts_with(b"?"),
+            b'n' => params == b"0",
+            b'c' => params.starts_with(b"?") || params.starts_with(b">"),
+            _ => false,
+        };
+        return ok.then_some(2 + body + 1);
+    }
+    let rest = d.strip_prefix(b"\x1b]")?;
+    if !(rest.starts_with(b"10;") || rest.starts_with(b"11;")) {
+        return None;
+    }
+    let bel = rest.iter().position(|b| *b == 0x07).map(|p| p + 1);
+    let st = rest.windows(2).position(|w| w == b"\x1b\\").map(|p| p + 2);
+    let end = match (bel, st) {
+        (Some(a), Some(b)) => a.min(b),
+        (a, b) => a.or(b)?,
+    };
+    Some(2 + end)
+}
+
 pub async fn run(client: Client, mut pushes: UnboundedReceiver<Push>, id: String) -> Result<()> {
     client.call(Request::Subscribe).await?;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((120, 40));
@@ -93,7 +141,10 @@ pub async fn run(client: Client, mut pushes: UnboundedReceiver<Push>, id: String
                     }
                     break;
                 }
-                client.send(Request::Input { id: id.clone(), data });
+                let data = strip_replies(&data);
+                if !data.is_empty() {
+                    client.send(Request::Input { id: id.clone(), data });
+                }
             },
             _ = winch.recv() => {
                 if let Ok((cols, rows)) = crossterm::terminal::size() {
@@ -113,4 +164,15 @@ pub async fn run(client: Client, mut pushes: UnboundedReceiver<Push>, id: String
     );
     // The stdin thread is blocked in read(); exit instead of waiting for it.
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_terminals_own_answers_are_dropped() {
+        let typed = b"ls\x1b[12;40R\x1b[?62;22c-la\x1b]11;rgb:0000/0000/0000\x1b\\\r";
+        assert_eq!(super::strip_replies(typed), b"ls-la\r");
+        // Keys and plain escapes go through.
+        assert_eq!(super::strip_replies(b"\x1b[A\x1b[3~q"), b"\x1b[A\x1b[3~q");
+    }
 }

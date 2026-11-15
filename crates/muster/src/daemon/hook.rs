@@ -58,7 +58,7 @@ pub fn shell_command(input: &Value) -> Option<String> {
         .map(String::from)
         .collect();
     if let Some(script) = muster_core::policy::shell_script(&argv) {
-        return Some(script.to_string());
+        return Some(script);
     }
     match argv.as_slice() {
         [] => None,
@@ -149,13 +149,29 @@ async fn pre_tool(
         .to_string();
     let input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
 
+    // Read the command first, off the async threads; a parser panic asks
+    // rather than taking the hook down (the agent would wait minutes).
+    let command = shell_command(&input);
+    let c = match &command {
+        Some(cmd) => {
+            let (cmd2, pol) = (cmd.clone(), d.cfg.policy.clone());
+            Some(
+                tokio::task::spawn_blocking(move || policy::classify(&cmd2, &pol))
+                    .await
+                    .unwrap_or_else(|_| policy::Classification {
+                        tier: Tier::Mutating,
+                        decision: Decision::Ask,
+                        reason: "couldn't read this command".into(),
+                    }),
+            )
+        }
+        None => None,
+    };
+
     // 1. Snapshot *before* the tool runs, so "revert to here" undoes this step.
     // A read-only command has no step to undo, and agents run a lot of them;
     // each snapshot walks the whole worktree, which adds up in a big repo.
-    let command = shell_command(&input);
-    let read_only = command.as_deref().is_some_and(|c| {
-        policy::tier_of(c, &d.cfg.policy.read_only_programs).0 == muster_core::proto::Tier::ReadOnly
-    });
+    let read_only = c.as_ref().is_some_and(|c| c.tier == Tier::ReadOnly);
     if let Some(t) = task.as_ref().filter(|_| !read_only) {
         if d.cfg.hooks.snapshot_before.iter().any(|x| x == &tool) {
             d.snapshot(t, format!("before {}", summarize_tool(&tool, &input)))
@@ -163,20 +179,10 @@ async fn pre_tool(
         }
     }
 
-    let Some(command) = command else {
+    // 2. Policy.
+    let (Some(command), Some(c)) = (command, c) else {
         return none();
     };
-
-    // 2. Policy. Off the async threads, and a parser panic asks rather than
-    // taking the hook down (which would leave the agent waiting minutes).
-    let (cmd2, pol) = (command.clone(), d.cfg.policy.clone());
-    let c = tokio::task::spawn_blocking(move || policy::classify(&cmd2, &pol))
-        .await
-        .unwrap_or_else(|_| policy::Classification {
-            tier: Tier::Mutating,
-            decision: Decision::Ask,
-            reason: "couldn't read this command".into(),
-        });
     let task_id = task.as_ref().map(|t| t.id.clone());
     let log = |outcome: &str| {
         d.audit.log(serde_json::json!({

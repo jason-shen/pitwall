@@ -86,6 +86,12 @@ impl Daemon {
         if let Some(t) = tasks.get(id) {
             return Ok(t.clone());
         }
+        // `fix` that wasn't restored mustn't turn into the live `fix-2`.
+        if self.unrestored.lock().unwrap().iter().any(|s| s.id == id) {
+            return Err(anyhow!(
+                "{id} wasn't restored (its folder or agent is missing)"
+            ));
+        }
         let matches: Vec<_> = tasks.iter().filter(|(k, _)| k.starts_with(id)).collect();
         match matches.len() {
             1 => Ok(matches[0].1.clone()),
@@ -232,8 +238,11 @@ impl Daemon {
             if st.status != status && !matches!(st.status, TaskStatus::Exited { .. }) {
                 // Quiet after a prompt or after you typed: a turn ended.
                 // Quiet from the start is just an agent at its prompt.
+                // An agent with hooks says itself when a turn ends (Stop);
+                // for those, only that counts.
                 let first_turn = status == TaskStatus::Idle
                     && !st.had_turn
+                    && t.agent_cfg.hooks.is_none()
                     && (t.prompt.is_some() || st.had_input);
                 st.had_turn |= first_turn;
                 st.status = status;
@@ -350,7 +359,13 @@ impl Daemon {
     }
 
     pub async fn remove_task(self: &Arc<Self>, id: &str, prune: bool) -> Result<()> {
-        let (id, place) = match self.task(id) {
+        let kept_exactly = self.unrestored.lock().unwrap().iter().any(|s| s.id == id);
+        let found = if kept_exactly {
+            Err(anyhow!("not live"))
+        } else {
+            self.task(id)
+        };
+        let (id, place) = match found {
             Ok(t) => {
                 t.kill();
                 self.watchers.lock().unwrap().remove(&t.id);

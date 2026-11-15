@@ -188,7 +188,9 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
         Request::Input { id, data } => {
             let t = d.task(&id)?;
             t.state.lock().unwrap().had_input = true;
-            t.write(&data)?;
+            // A program that isn't reading its input would block this write;
+            // that shouldn't hold up a runtime thread.
+            tokio::task::spawn_blocking(move || t.write(&data)).await??;
             Response::Ok
         }
         Request::Prompt { id, text, from } => {

@@ -441,7 +441,7 @@ impl Keymap {
     }
 
     fn default_chords(id: &str) -> Vec<Chord> {
-        defaults(id, Some("alt"))
+        defaults(id, Some("ctrl+alt"))
             .into_iter()
             .filter_map(Chord::parse)
             .collect()

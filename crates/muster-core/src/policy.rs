@@ -42,6 +42,14 @@ impl Drop for Level {
 }
 
 pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
+    // Nobody types a command this long; picking it apart isn't worth the wait.
+    if cmd.len() > 64 * 1024 {
+        return Classification {
+            tier: Tier::Mutating,
+            decision: Decision::Ask,
+            reason: "too long to check".into(),
+        };
+    }
     let Some(_level) = Level::enter() else {
         return Classification {
             tier: Tier::Mutating,
@@ -83,7 +91,18 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
     // `bash -c '…'` is judged by the script it runs, not by `bash`.
     if let [seg] = lexed.segments.as_slice() {
         if let Some(script) = shell_script(&seg.words).filter(|_| lexed.subs.is_empty()) {
-            let c = classify(script, cfg);
+            let c = classify(&script, cfg);
+            // `bash -c 'x' > ~/.zshrc` writes the file whatever x is.
+            if writes_files(seg) {
+                return Classification {
+                    tier: tier.max(c.tier),
+                    decision: stricter(c.decision, by_tier(tier)),
+                    reason: format!(
+                        "runs a script and writes to `{}`",
+                        seg.writes.first().map(String::as_str).unwrap_or("a file")
+                    ),
+                };
+            }
             return Classification {
                 reason: format!("runs a script: {}", c.reason),
                 ..c
@@ -91,7 +110,8 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
         }
     }
     if lexed.segments.len() <= 1 && lexed.subs.is_empty() {
-        return match rule_for(&norm) {
+        let writes = lexed.segments.first().is_some_and(writes_files);
+        return match rule_for(&norm).filter(|r| !(writes && r.decision == Decision::Allow)) {
             Some(r) => Classification {
                 tier,
                 decision: r.decision,
@@ -111,8 +131,13 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
     let mut prev: Option<String> = None;
     for seg in &lexed.segments {
         let (t, _, prog) = seg_tier(seg, prev.as_deref(), &cfg.read_only_programs);
-        let d = match (shell_script(&seg.words), rule_for(&seg.words.join(" "))) {
-            (Some(script), _) => classify(script, cfg).decision,
+        let rule = rule_for(&seg.words.join(" "))
+            .filter(|r| !(writes_files(seg) && r.decision == Decision::Allow));
+        let d = match (shell_script(&seg.words), rule) {
+            (Some(script), _) if writes_files(seg) => {
+                stricter(classify(&script, cfg).decision, by_tier(t))
+            }
+            (Some(script), _) => classify(&script, cfg).decision,
             (None, Some(r)) => r.decision,
             (None, None) => by_tier(t),
         };
@@ -132,6 +157,17 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
         decision,
         reason: why,
     }
+}
+
+/// The part sends output into a file (`> ~/.zshrc`). An allow rule like
+/// `cargo test*` is about running the tests, not about where that goes.
+fn writes_files(seg: &Seg) -> bool {
+    seg.writes.iter().any(|t| {
+        !matches!(
+            t.as_str(),
+            "/dev/null" | "/dev/stdout" | "/dev/stderr" | "/dev/tty"
+        )
+    })
 }
 
 /// The deny rule a command runs into, if any. Each part is tried as written
@@ -165,10 +201,10 @@ fn deny_rule<'a>(
         .segments
         .iter()
         .filter_map(|s| shell_script(&s.words))
-        .chain(lexed.subs.iter().map(String::as_str));
+        .chain(lexed.subs.iter().cloned());
     for inner in nested {
         let n = inner.split_whitespace().collect::<Vec<_>>().join(" ");
-        if let Some(r) = deny_rule(&n, &lex(inner), cfg, depth + 1) {
+        if let Some(r) = deny_rule(&n, &lex(&inner), cfg, depth + 1) {
             return Some(r);
         }
     }
@@ -179,20 +215,10 @@ fn deny_rule<'a>(
 /// `command`, `nohup`, `time`, `exec`, and git's own `-C dir` / `-c k=v`
 /// options before its subcommand.
 fn unwrapped(words: &[String]) -> Vec<String> {
-    let mut w: &[String] = words;
-    while let Some((first, rest)) = w.split_first() {
-        let assignment = first.contains('=')
-            && first.split('=').next().is_some_and(|k| {
-                !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            });
-        let wrapper =
-            ["env", "sudo", "command", "nohup", "time", "exec"].contains(&basename(first));
-        if assignment || wrapper {
-            w = rest;
-        } else {
-            break;
-        }
-    }
+    // The same peeling as for tiers (assignments, sudo, env and its -S, …),
+    // then git's own options before its subcommand.
+    let peeled = strip_wrappers(words);
+    let w: &[String] = &peeled;
     let mut out: Vec<String> = vec![];
     let mut it = w.iter().peekable();
     if let Some(first) = it.next() {
@@ -220,8 +246,8 @@ fn unwrapped(words: &[String]) -> Vec<String> {
 }
 
 /// The script in `bash -c '…'` (or sh, zsh, with -lc, --norc and friends).
-pub fn shell_script(words: &[String]) -> Option<&str> {
-    let words = &words[words.len() - unwrapped(words).len()..];
+pub fn shell_script(words: &[String]) -> Option<String> {
+    let words = unwrapped(words);
     let (sh, rest) = words.split_first()?;
     if !["sh", "bash", "zsh", "dash", "ksh", "fish"].contains(&basename(sh)) {
         return None;
@@ -230,7 +256,7 @@ pub fn shell_script(words: &[String]) -> Option<&str> {
     let mut it = rest.iter().skip_while(|w| w.starts_with("--"));
     let flag = it.next()?;
     let c = flag.starts_with('-') && !flag.starts_with("--") && flag.contains('c');
-    c.then(|| it.next().map(String::as_str)).flatten()
+    c.then(|| it.next().cloned()).flatten()
 }
 
 fn stricter(a: Decision, b: Decision) -> Decision {
@@ -311,21 +337,24 @@ fn lex(s: &str) -> Lexed {
     let mut cur = Seg::default();
     let mut word = String::new();
     let mut has_word = false;
+    // The word had quotes in it: a quoted heredoc delimiter keeps the body
+    // literal, an unquoted one lets bash run `$(…)` in it.
+    let mut word_quoted = false;
     // Some(true) = next word is a write target, Some(false) = read target / heredoc delimiter
     let mut redirect: Option<bool> = None;
     let mut heredoc_next = false;
     // (delimiter, from `<<-` so leading tabs are stripped)
-    let mut heredocs: Vec<(String, bool)> = Vec::new();
+    let mut heredocs: Vec<(String, bool, bool)> = Vec::new();
     let mut heredoc_dash = false;
     let mut next_piped = false;
     let mut i = 0;
 
     macro_rules! finish_word {
-        () => {
+        () => {{
             if has_word {
                 let w = std::mem::take(&mut word);
                 if heredoc_next {
-                    heredocs.push((w, heredoc_dash));
+                    heredocs.push((w, heredoc_dash, word_quoted));
                     heredoc_next = false;
                     heredoc_dash = false;
                 } else {
@@ -337,7 +366,8 @@ fn lex(s: &str) -> Lexed {
                 }
                 has_word = false;
             }
-        };
+            word_quoted = false;
+        }};
     }
     macro_rules! finish_seg {
         ($piped_after:expr) => {
@@ -372,8 +402,10 @@ fn lex(s: &str) -> Lexed {
                     i += 1;
                 }
                 has_word = true;
+                word_quoted = true;
             }
             '"' => {
+                word_quoted = true;
                 i += 1;
                 while i < n && c[i] != '"' {
                     if c[i] == '\\' && i + 1 < n {
@@ -429,7 +461,7 @@ fn lex(s: &str) -> Lexed {
                 finish_seg!(false);
                 // Skip heredoc bodies. The body ends at a line that is exactly
                 // the delimiter (after leading tabs, for `<<-`), as bash has it.
-                for (delim, dash) in std::mem::take(&mut heredocs) {
+                for (delim, dash, quoted) in std::mem::take(&mut heredocs) {
                     if i >= n {
                         break;
                     }
@@ -440,6 +472,28 @@ fn lex(s: &str) -> Lexed {
                             i += 1;
                         }
                         let line: String = c[start..i].iter().collect();
+                        // An unquoted body still runs its substitutions.
+                        if !quoted && line != delim {
+                            let mut k = start;
+                            while k < i {
+                                if c[k] == '$' && k + 1 < i && c[k + 1] == '(' {
+                                    let (inner, end) = balanced(&c, k + 1);
+                                    if !inner.starts_with('(') {
+                                        out.subs.push(inner);
+                                    }
+                                    k = end.max(k + 1);
+                                } else if c[k] == '`' {
+                                    let mut j = k + 1;
+                                    while j < i && c[j] != '`' {
+                                        j += 1;
+                                    }
+                                    out.subs.push(c[k + 1..j.min(i)].iter().collect());
+                                    k = j + 1;
+                                } else {
+                                    k += 1;
+                                }
+                            }
+                        }
                         let line = if dash {
                             line.trim_start_matches('\t')
                         } else {
@@ -891,13 +945,20 @@ fn strip_wrappers(words: &[String]) -> Vec<String> {
         wrapped_by = Some(wrapper.clone());
         i += 1;
         while i < n && words[i].starts_with('-') {
-            // `env -S 'cmd args'` runs the string as a command line.
-            if wrapper == "env" && matches!(words[i].as_str(), "-S" | "--split-string") {
-                let mut out: Vec<String> = words
-                    .get(i + 1)
-                    .map(|s| s.split_whitespace().map(String::from).collect())
-                    .unwrap_or_default();
-                out.extend(words.iter().skip(i + 2).cloned());
+            // `env -S 'cmd args'` runs the string as a command line, however
+            // the value is attached: -S x, -Sx, --split-string=x.
+            let split = if wrapper != "env" {
+                None
+            } else if matches!(words[i].as_str(), "-S" | "--split-string") {
+                Some((words.get(i + 1).cloned().unwrap_or_default(), i + 2))
+            } else if let Some(v) = words[i].strip_prefix("--split-string=") {
+                Some((v.to_string(), i + 1))
+            } else {
+                words[i].strip_prefix("-S").map(|v| (v.to_string(), i + 1))
+            };
+            if let Some((value, next)) = split {
+                let mut out: Vec<String> = value.split_whitespace().map(String::from).collect();
+                out.extend(words.iter().skip(next).cloned());
                 return if out.is_empty() {
                     vec![wrapper]
                 } else {
@@ -920,11 +981,65 @@ fn strip_wrappers(words: &[String]) -> Vec<String> {
     }
 }
 
+/// sed's scripts (the `-e` values, else the first operand), whether it edits
+/// in place, and whether a script comes from a file.
+fn sed_args(a: &[&str]) -> (Vec<String>, bool, bool) {
+    let (mut scripts, mut in_place, mut from_file) = (vec![], false, false);
+    let mut operands = vec![];
+    let mut it = a.iter();
+    while let Some(t) = it.next() {
+        if let Some(v) = t.strip_prefix("--expression=") {
+            scripts.push(v.to_string());
+        } else if *t == "-e" || *t == "--expression" {
+            scripts.extend(it.next().map(|v| v.to_string()));
+        } else if *t == "-f" || *t == "--file" || t.starts_with("--file=") {
+            from_file = true;
+            if !t.contains('=') {
+                it.next();
+            }
+        } else if t.starts_with("--in-place") {
+            in_place = true;
+        } else if t.starts_with("--") {
+            // Other long options take no script.
+        } else if let Some(flags) = t.strip_prefix('-').filter(|f| !f.is_empty()) {
+            // A cluster like -ni, or -e with its script attached (-e'1e id').
+            for (k, ch) in flags.char_indices() {
+                match ch {
+                    'i' => {
+                        in_place = true;
+                        break;
+                    }
+                    'e' => {
+                        let rest = &flags[k + 1..];
+                        if rest.is_empty() {
+                            scripts.extend(it.next().map(|v| v.to_string()));
+                        } else {
+                            scripts.push(rest.to_string());
+                        }
+                        break;
+                    }
+                    'f' => {
+                        from_file = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            operands.push(t.to_string());
+        }
+    }
+    if scripts.is_empty() {
+        scripts.extend(operands.into_iter().next());
+    }
+    (scripts, in_place, from_file)
+}
+
 /// A sed script with an `e` (run a command) or `w` (write a file) in it,
 /// as a command or as an `s///` flag. Errs on the side of yes.
 fn sed_runs_or_writes(script: &str) -> bool {
-    script.split(['\n', ';']).any(|cmd| {
-        let cmd = cmd.trim_start_matches(|c: char| c.is_ascii_digit() || " ,$!".contains(c));
+    script.split(['\n', ';', '{', '}']).any(|cmd| {
+        let cmd = strip_sed_address(cmd.trim_start());
         if cmd.starts_with(['e', 'w', 'W']) {
             return true;
         }
@@ -942,6 +1057,58 @@ fn sed_runs_or_writes(script: &str) -> bool {
                 .take_while(|c| !c.is_whitespace())
                 .any(|c| c == 'e' || c == 'w')
     })
+}
+
+/// A sed command without its address: `12`, `$`, `/re/`, `\%re%`, `1~2`,
+/// `addr,+3`, `!`.
+fn strip_sed_address(mut s: &str) -> &str {
+    loop {
+        s = s.trim_start();
+        let before = s.len();
+        s = s.trim_start_matches(|c: char| c.is_ascii_digit() || ",$!~+".contains(c));
+        let delim = if let Some(r) = s.strip_prefix('/') {
+            Some(('/', r))
+        } else if let Some(r) = s.strip_prefix('\\') {
+            r.chars().next().map(|d| (d, &r[d.len_utf8()..]))
+        } else {
+            None
+        };
+        if let Some((d, rest)) = delim {
+            // The regex runs to the next unescaped delimiter.
+            let mut esc = false;
+            let mut end = None;
+            for (k, ch) in rest.char_indices() {
+                if esc {
+                    esc = false;
+                } else if ch == '\\' {
+                    esc = true;
+                } else if ch == d {
+                    end = Some(k + d.len_utf8());
+                    break;
+                }
+            }
+            s = &rest[end.unwrap_or(rest.len())..];
+            // Flags after an address regex: I, M.
+            s = s.trim_start_matches(['I', 'M']);
+        }
+        if s.len() == before {
+            return s;
+        }
+    }
+}
+
+/// The operands, leaving out options and the values of `value_flags`.
+fn operands<'a>(args: &[&'a str], value_flags: &[&str]) -> Vec<&'a str> {
+    let mut out = vec![];
+    let mut it = args.iter();
+    while let Some(t) = it.next() {
+        if value_flags.contains(t) {
+            it.next();
+        } else if !t.starts_with('-') || *t == "-" {
+            out.push(*t);
+        }
+    }
+    out
 }
 
 fn short_has(args: &[&str], flag: char) -> bool {
@@ -1047,13 +1214,12 @@ fn prog_tier(p: &str, a: &[&str], extra: &[String]) -> (Tier, String) {
             }
         }
         "sed" | "gsed" => {
-            if short_has(a, 'i') || has(a, &["--in-place"]) {
+            let (scripts, in_place, from_file) = sed_args(a);
+            if in_place {
                 mutating("`sed -i` edits files")
-            } else if a
-                .iter()
-                .filter(|t| !t.starts_with('-'))
-                .any(|t| sed_runs_or_writes(t))
-            {
+            } else if from_file {
+                mutating("sed script from a file")
+            } else if scripts.iter().any(|t| sed_runs_or_writes(t)) {
                 mutating("sed script runs a command or writes a file")
             } else {
                 ro("sed (stdout only)")
@@ -1080,16 +1246,47 @@ fn prog_tier(p: &str, a: &[&str], extra: &[String]) -> (Tier, String) {
         {
             mutating("`fd -x` runs commands")
         }
-        "rg" if a.iter().any(|t| t.starts_with("--pre")) => mutating("`rg --pre` runs a program"),
-        "uniq" if a.iter().filter(|t| !t.starts_with('-')).count() >= 2 => {
+        "rg" if a.iter().any(|t| *t == "--pre" || t.starts_with("--pre=")) => {
+            mutating("`rg --pre` runs a program")
+        }
+        "uniq"
+            if operands(
+                a,
+                &[
+                    "-f",
+                    "-s",
+                    "-w",
+                    "--skip-fields",
+                    "--skip-chars",
+                    "--check-chars",
+                ],
+            )
+            .len()
+                >= 2 =>
+        {
             mutating("`uniq` writes its output file")
         }
         "yq" if short_has(a, 'i') || has(a, &["--inplace"]) => mutating("`yq -i` edits files"),
+        // `date MMDDhhmm` or `-s` sets the clock; `-d yesterday`, `-r file`
+        // and BSD `-j -f fmt str` only print.
         "date"
-            if short_has(a, 's')
-                || a.iter().any(|t| {
-                    t.starts_with("--set") || (!t.starts_with('-') && !t.starts_with('+'))
-                }) =>
+            if !a.contains(&"-j")
+                && (a.iter().any(|t| *t == "-s" || t.starts_with("--set"))
+                    || operands(
+                        a,
+                        &[
+                            "-d",
+                            "-r",
+                            "-f",
+                            "-v",
+                            "-z",
+                            "--date",
+                            "--reference",
+                            "--file",
+                        ],
+                    )
+                    .iter()
+                    .any(|t| !t.starts_with('+'))) =>
         {
             mutating("sets the clock")
         }
@@ -1113,7 +1310,14 @@ fn prog_tier(p: &str, a: &[&str], extra: &[String]) -> (Tier, String) {
         "hostnamectl" if first_pos(a, &[]).is_some_and(|x| x.1.starts_with("set-")) => {
             mutating("changes the host's name")
         }
-        "sort" if has(a, &["-o", "--output"]) => mutating("`sort -o` writes a file"),
+        "sort"
+            if a.iter().any(|t| {
+                t.starts_with("--output")
+                    || (t.starts_with('-') && !t.starts_with("--") && t.contains('o'))
+            }) =>
+        {
+            mutating("`sort -o` writes a file")
+        }
         "tee" => {
             if a.iter().all(|t| t.starts_with('-') || *t == "/dev/null") {
                 ro("tee to stdout")
@@ -1365,12 +1569,44 @@ fn git_tier(a: &[&str]) -> (Tier, String) {
     else {
         return ro("git");
     };
-    // `git -c core.pager='…' log` runs whatever the config names.
-    if a[..i]
-        .iter()
-        .any(|t| *t == "-c" || t.starts_with("--config-env"))
-    {
-        return mutating("`git -c` can make git run programs");
+    // `git -c core.pager='…' log` runs whatever the config names. Keys that
+    // only change looks (color.ui) are fine.
+    let runs_program = |kv: &str| {
+        let k = kv.split('=').next().unwrap_or("").to_ascii_lowercase();
+        k.starts_with("alias.")
+            || k.ends_with(".cmd")
+            || [
+                "command",
+                "program",
+                "pager",
+                "editor",
+                "hook",
+                "helper",
+                "textconv",
+                "external",
+                "fsmonitor",
+                "askpass",
+                "filter.",
+                "proxy",
+            ]
+            .iter()
+            .any(|w| k.contains(w))
+    };
+    let mut j = 0;
+    while j < i {
+        if a[j] == "-c" {
+            if a.get(j + 1).is_none_or(|kv| runs_program(kv)) {
+                return mutating("`git -c` sets something that runs a program");
+            }
+            j += 1;
+        } else if a[j].starts_with("--config-env") {
+            return mutating("`git --config-env` can make git run programs");
+        }
+        j += 1;
+    }
+    // log/diff/show --output=file write that file.
+    if a[i + 1..].iter().any(|t| t.starts_with("--output")) {
+        return mutating(format!("`git {sub} --output` writes a file"));
     }
     let r = &a[i + 1..];
     match sub {
@@ -1673,6 +1909,70 @@ mod tests {
         assert_eq!(d("cargo test --all"), Decision::Allow);
         assert_eq!(d("/usr/bin/env bash -c 'git push --force'"), Decision::Deny);
         assert_eq!(d("bash --norc -c 'git push --force'"), Decision::Deny);
+    }
+
+    #[test]
+    fn second_round_of_tricks_and_false_alarms() {
+        let cfg = crate::config::Config::default().policy;
+        let t = |c: &str| classify(c, &cfg).tier;
+        let d = |c: &str| classify(c, &cfg).decision;
+        for c in [
+            "sh -c 'echo hi' >> ~/.zshrc",
+            "bash -c ls > ~/.bashrc",
+            "sed '/x/e rm -rf ~' f",
+            "sed -n '/x/w /etc/passwd' f",
+            "sed '1~2e touch x' f",
+            "sed '{e id' f",
+            "sed --expression='1e id' f",
+            "sed -e'1e id' f",
+            "cat <<EOF\n$(touch x)\nEOF",
+            "env -S'touch x'",
+            "env --split-string='touch x'",
+            "sort -uo out f",
+            "git log --output=x",
+            "git -c core.pager=less log",
+            "date 0101120026",
+        ] {
+            assert_ne!(t(c), Tier::ReadOnly, "{c}");
+        }
+        assert_eq!(d("cat <<EOF\n$(rm -rf ~)\nEOF"), Decision::Deny);
+        assert_eq!(d("env -S'git push --force'"), Decision::Deny);
+        for c in [
+            "cat <<'EOF'\n$(rm -rf ~)\nEOF",
+            "sed -n '1,20p' errors.log",
+            "sed 's/a/b/' web/index.html",
+            "sed -n 5p f",
+            "date -d yesterday",
+            "date --date '1 day ago' +%F",
+            "date -r file",
+            "date -j -f %Y%m%d 20260101 +%s",
+            "date +%s",
+            "rg --pretty foo",
+            "uniq -f 1 f",
+            "uniq -c f",
+            "git -c color.ui=always log",
+            "sort -u f",
+        ] {
+            assert_eq!(t(c), Tier::ReadOnly, "{c}");
+        }
+    }
+
+    #[test]
+    fn allow_rules_dont_cover_writing_files() {
+        let cfg = crate::config::Config::default().policy;
+        let d = |c: &str| classify(c, &cfg).decision;
+        for c in [
+            "cargo test > ~/.zshrc",
+            "cargo test >> ~/.ssh/authorized_keys",
+            "npm test > ~/.bashrc",
+            "go test 2>~/.profile",
+            "ls && cargo test > ~/.zshrc",
+        ] {
+            assert_ne!(d(c), Decision::Allow, "{c}");
+        }
+        assert_eq!(d("cargo test 2>/dev/null"), Decision::Allow);
+        assert_eq!(d("cargo test 2>&1"), Decision::Allow);
+        assert_eq!(d(&"x".repeat(100_000)), Decision::Ask);
     }
 
     #[test]

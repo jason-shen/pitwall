@@ -108,6 +108,10 @@ pub struct Task {
     pub typing: tokio::sync::Mutex<()>,
     pub out_tx: broadcast::Sender<Vec<u8>>,
     writer: Mutex<Box<dyn Write + Send>>,
+    /// Answers to the terminal's queries, written by a thread of their own:
+    /// writing them from the reader would stall it (and so the program)
+    /// when a program asks without reading. Bounded; extras are dropped.
+    replies: std::sync::mpsc::SyncSender<Vec<u8>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pub snaps: Option<Store>,
@@ -702,6 +706,7 @@ impl Task {
         };
 
         let (out_tx, _) = broadcast::channel(1024);
+        let (replies, replies_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(32);
         let task = Arc::new(Task {
             id: id.clone(),
             name: req.name.clone(),
@@ -736,10 +741,26 @@ impl Task {
             typing: tokio::sync::Mutex::new(()),
             out_tx,
             writer: Mutex::new(writer),
+            replies,
             master: Mutex::new(pair.master),
             killer: Mutex::new(killer),
             snaps,
         });
+
+        // Weak, so the task can go; its sender going ends this thread.
+        let weak = Arc::downgrade(&task);
+        std::thread::Builder::new()
+            .name(format!("replies-{id}"))
+            .spawn(move || {
+                for r in replies_rx {
+                    match weak.upgrade() {
+                        Some(t) => {
+                            let _ = t.write(&r);
+                        }
+                        None => break,
+                    }
+                }
+            })?;
 
         // Baseline snapshot before the agent touches anything.
         if let Some(s) = &task.snaps {
@@ -767,7 +788,7 @@ impl Task {
                                 std::mem::take(&mut term.callbacks_mut().replies)
                             };
                             if !replies.is_empty() {
-                                let _ = t.write(&replies);
+                                let _ = t.replies.try_send(replies);
                             }
                             let mut st = t.state.lock().unwrap();
                             st.last_output = Instant::now();

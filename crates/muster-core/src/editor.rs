@@ -48,7 +48,11 @@ pub struct Editor {
     pub stale: bool,
     /// ⌘S was pressed once on a stale buffer; the next one overwrites.
     overwrite_ok: bool,
+    /// A binary file: never edited.
     pub readonly: bool,
+    /// Locked for now (a brief while Finish with AI writes it); kept across
+    /// reloads, unlike `readonly`, which a reload works out afresh.
+    pub locked: bool,
     mtime: Option<SystemTime>,
     undo: Vec<UndoState>,
     redo: Vec<UndoState>,
@@ -166,6 +170,7 @@ impl Editor {
             stale: false,
             overwrite_ok: false,
             readonly: binary,
+            locked: false,
             mtime: mtime(path),
             undo: vec![],
             redo: vec![],
@@ -191,7 +196,7 @@ impl Editor {
     }
 
     pub fn save(&mut self) -> Result<()> {
-        if self.readonly {
+        if self.frozen() {
             anyhow::bail!("{} is read-only right now", self.name());
         }
         // Someone else (an agent) wrote it since: saving now would throw
@@ -248,7 +253,7 @@ impl Editor {
             fresh.last_search = self.last_search.take();
             // Whoever locked it (a brief being written into) still wants it
             // locked; a fresh open only knows about binary files.
-            fresh.readonly |= self.readonly;
+            fresh.locked = self.locked;
             // What was on screen before an agent rewrote the file is one ⌘Z
             // away; briefs aren't in git, so this is the only copy.
             fresh.undo = std::mem::take(&mut self.undo);
@@ -343,7 +348,7 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.anchor = None;
@@ -362,7 +367,7 @@ impl Editor {
     }
 
     pub fn redo(&mut self) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.anchor = None;
@@ -548,7 +553,7 @@ impl Editor {
     // ── editing ─────────────────────────────────────────────────────────
 
     pub fn insert_char(&mut self, ch: char) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.delete_selection();
@@ -561,7 +566,7 @@ impl Editor {
     }
 
     pub fn insert_str(&mut self, s: &str) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.delete_selection();
@@ -601,7 +606,7 @@ impl Editor {
     }
 
     pub fn newline(&mut self) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.delete_selection();
@@ -638,6 +643,11 @@ impl Editor {
             .insert(self.cy, format!("{new_indent}{trimmed_rest}"));
         self.want_col = None;
         self.touched();
+    }
+
+    /// No edits right now: a binary file, or one that's locked.
+    pub fn frozen(&self) -> bool {
+        self.readonly || self.locked
     }
 
     // ── selection ───────────────────────────────────────────────────────
@@ -686,7 +696,7 @@ impl Editor {
             self.anchor = None;
             return false;
         };
-        if self.readonly {
+        if self.frozen() {
             return false;
         }
         self.checkpoint(6);
@@ -712,7 +722,7 @@ impl Editor {
     /// Indent, or with `out` dedent, every line the selection touches (or
     /// just this one), keeping the selection on the same text.
     pub fn indent_lines(&mut self, out: bool) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         let (y0, y1) = match self.selection() {
@@ -801,7 +811,7 @@ impl Editor {
     /// Tick or untick the task on this line, making it a task first if it
     /// isn't one.
     pub fn toggle_task(&mut self) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.anchor = None;
@@ -833,7 +843,7 @@ impl Editor {
     /// it's wrapped already. With no word there, insert the pair and put the
     /// cursor between.
     pub fn wrap_word(&mut self, mark: &str) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.anchor = None;
@@ -871,7 +881,7 @@ impl Editor {
     }
 
     pub fn backspace(&mut self) {
-        if self.readonly || self.delete_selection() {
+        if self.frozen() || self.delete_selection() {
             return;
         }
         if self.cx == 0 && self.cy == 0 {
@@ -908,7 +918,7 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
-        if self.readonly || self.delete_selection() {
+        if self.frozen() || self.delete_selection() {
             return;
         }
         self.checkpoint(3);
@@ -925,7 +935,7 @@ impl Editor {
     }
 
     pub fn delete_line(&mut self) {
-        if self.readonly {
+        if self.frozen() {
             return;
         }
         self.anchor = None;
@@ -1040,15 +1050,15 @@ mod tests {
     #[test]
     fn a_locked_buffer_stays_locked_through_reloads_and_undo() {
         let mut e = md("my locked brief text");
-        e.readonly = true;
+        e.locked = true;
         std::fs::write(&e.path, "the agent's").unwrap();
         e.reload();
-        assert!(e.readonly, "a reload unlocked it");
+        assert!(e.locked, "a reload unlocked it");
         e.insert_char('x');
         e.undo();
         assert_eq!(e.lines, ["the agent's"]);
         assert!(!e.dirty);
-        e.readonly = false;
+        e.locked = false;
         e.undo();
         assert_eq!(e.lines, ["my locked brief text"]);
     }
@@ -1075,6 +1085,17 @@ mod tests {
         );
         e.save().unwrap();
         assert!(std::fs::read_to_string(&e.path).unwrap().starts_with('x'));
+    }
+
+    #[test]
+    fn a_binary_file_rewritten_as_text_can_be_edited() {
+        let mut e = md("placeholder for a binary");
+        std::fs::write(&e.path, b"\0\x01binary").unwrap();
+        e.reload();
+        assert!(e.readonly);
+        std::fs::write(&e.path, "text now").unwrap();
+        e.reload();
+        assert!(!e.frozen());
     }
 
     #[test]
