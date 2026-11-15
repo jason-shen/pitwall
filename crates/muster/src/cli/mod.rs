@@ -454,8 +454,11 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
             println!("sent to {id}");
         }
         Cmd::Brief { action, step, id } => {
-            let Some(id) = id.or_else(|| std::env::var("MUSTER_TASK_ID").ok().filter(|s| !s.is_empty()))
-            else {
+            let Some(id) = id.or_else(|| {
+                std::env::var("MUSTER_TASK_ID")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            }) else {
                 bail!("run this inside an agent, or name one with --id");
             };
             let step = match (action.as_deref(), step) {

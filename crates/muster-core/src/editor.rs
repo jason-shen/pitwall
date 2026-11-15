@@ -46,6 +46,8 @@ pub struct Editor {
     pub dirty: bool,
     /// File changed on disk while we had unsaved edits.
     pub stale: bool,
+    /// ⌘S was pressed once on a stale buffer; the next one overwrites.
+    overwrite_ok: bool,
     pub readonly: bool,
     mtime: Option<SystemTime>,
     undo: Vec<UndoState>,
@@ -162,6 +164,7 @@ impl Editor {
             scroll_x: 0,
             dirty: false,
             stale: false,
+            overwrite_ok: false,
             readonly: binary,
             mtime: mtime(path),
             undo: vec![],
@@ -189,7 +192,16 @@ impl Editor {
 
     pub fn save(&mut self) -> Result<()> {
         if self.readonly {
-            anyhow::bail!("file is read-only (binary)");
+            anyhow::bail!("{} is read-only right now", self.name());
+        }
+        // Someone else (an agent) wrote it since: saving now would throw
+        // their version away, so the first ⌘S only warns.
+        if self.stale && !self.overwrite_ok {
+            self.overwrite_ok = true;
+            anyhow::bail!(
+                "{} changed on disk: ⌘S again to overwrite it with yours, ⌘R to load theirs",
+                self.name()
+            );
         }
         let nl = if self.crlf { "\r\n" } else { "\n" };
         let mut s = self.lines.join(nl);
@@ -197,6 +209,7 @@ impl Editor {
         std::fs::write(&self.path, s)?;
         self.dirty = false;
         self.stale = false;
+        self.overwrite_ok = false;
         self.mtime = mtime(&self.path);
         Ok(())
     }
@@ -632,7 +645,10 @@ impl Editor {
     /// The selected range, start first, when anything is selected.
     pub fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
         let a = self.anchor?;
-        let a = (a.0.min(self.lines.len() - 1), a.1.min(self.line_len(a.0.min(self.lines.len() - 1))));
+        let a = (
+            a.0.min(self.lines.len() - 1),
+            a.1.min(self.line_len(a.0.min(self.lines.len() - 1))),
+        );
         let c = (self.cy, self.cx);
         match a.cmp(&c) {
             std::cmp::Ordering::Equal => None,
@@ -644,7 +660,11 @@ impl Editor {
     pub fn selected_text(&self) -> Option<String> {
         let ((y0, x0), (y1, x1)) = self.selection()?;
         let part = |y: usize, from: usize, to: usize| -> String {
-            self.lines[y].chars().skip(from).take(to.saturating_sub(from)).collect()
+            self.lines[y]
+                .chars()
+                .skip(from)
+                .take(to.saturating_sub(from))
+                .collect()
         };
         if y0 == y1 {
             return Some(part(y0, x0, x1));
@@ -712,7 +732,10 @@ impl Editor {
                 let n = if l.starts_with('\t') {
                     1
                 } else {
-                    l.chars().take(self.tab_width).take_while(|c| *c == ' ').count()
+                    l.chars()
+                        .take(self.tab_width)
+                        .take_while(|c| *c == ' ')
+                        .count()
                 };
                 self.lines[y].drain(..n);
                 -(n as isize)
@@ -793,7 +816,10 @@ impl Editor {
                 return;
             }
             Some(l) => (l.marker_end, "[ ] "),
-            None => (line.len() - line.trim_start_matches([' ', '\t']).len(), "- [ ] "),
+            None => (
+                line.len() - line.trim_start_matches([' ', '\t']).len(),
+                "- [ ] ",
+            ),
         };
         line.insert_str(at, insert);
         if self.cx >= line[..at].chars().count() {
@@ -954,11 +980,10 @@ mod tests {
     use super::*;
 
     fn md(text: &str) -> Editor {
-        let p = std::env::temp_dir().join(format!(
-            "muster-md-{}-{}.md",
-            std::process::id(),
-            text.len()
-        ));
+        // A file of its own per call: tests run in parallel.
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!("muster-md-{}-{n}.md", std::process::id()));
         std::fs::write(&p, text).unwrap();
         Editor::open(&p, 4).unwrap()
     }
@@ -1026,6 +1051,30 @@ mod tests {
         e.readonly = false;
         e.undo();
         assert_eq!(e.lines, ["my locked brief text"]);
+    }
+
+    #[test]
+    fn saving_over_someone_elses_change_takes_two_tries() {
+        let mut e = md("stale save test text");
+        e.insert_char('x');
+        std::fs::write(&e.path, "the agent wrote this").unwrap();
+        // A different mtime, as a real write later on would have.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&e.path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(!e.check_disk());
+        assert!(e.stale);
+        assert!(e.save().is_err());
+        assert_eq!(
+            std::fs::read_to_string(&e.path).unwrap(),
+            "the agent wrote this"
+        );
+        e.save().unwrap();
+        assert!(std::fs::read_to_string(&e.path).unwrap().starts_with('x'));
     }
 
     #[test]

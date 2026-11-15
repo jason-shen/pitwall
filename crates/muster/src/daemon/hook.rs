@@ -51,17 +51,23 @@ pub fn shell_command(input: &Value) -> Option<String> {
     if let Some(s) = v.as_str() {
         return Some(s.to_string());
     }
-    let argv: Vec<&str> = v.as_array()?.iter().filter_map(Value::as_str).collect();
-    let shells = ["bash", "sh", "zsh", "/bin/bash", "/bin/sh", "/bin/zsh"];
+    let argv: Vec<String> = v
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(String::from)
+        .collect();
+    if let Some(script) = muster_core::policy::shell_script(&argv) {
+        return Some(script.to_string());
+    }
     match argv.as_slice() {
-        [sh, flag, script, ..] if shells.contains(sh) && flag.ends_with('c') && flag.starts_with('-') => {
-            Some(script.to_string())
-        }
         [] => None,
         _ => Some(
             argv.iter()
                 .map(|a| {
-                    if a.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c)) {
+                    if a.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c))
+                    {
                         a.to_string()
                     } else {
                         format!("'{}'", a.replace('\'', "'\\''"))
@@ -161,8 +167,16 @@ async fn pre_tool(
         return none();
     };
 
-    // 2. Policy.
-    let c = policy::classify(&command, &d.cfg.policy);
+    // 2. Policy. Off the async threads, and a parser panic asks rather than
+    // taking the hook down (which would leave the agent waiting minutes).
+    let (cmd2, pol) = (command.clone(), d.cfg.policy.clone());
+    let c = tokio::task::spawn_blocking(move || policy::classify(&cmd2, &pol))
+        .await
+        .unwrap_or_else(|_| policy::Classification {
+            tier: Tier::Mutating,
+            decision: Decision::Ask,
+            reason: "couldn't read this command".into(),
+        });
     let task_id = task.as_ref().map(|t| t.id.clone());
     let log = |outcome: &str| {
         d.audit.log(serde_json::json!({
@@ -248,9 +262,22 @@ mod tests {
         use serde_json::json;
         let c = |v| super::shell_command(&v);
         assert_eq!(c(json!({"command": "ls -la"})).as_deref(), Some("ls -la"));
-        assert_eq!(c(json!({"command": ["bash", "-lc", "rm -rf x && ls"]})).as_deref(), Some("rm -rf x && ls"));
-        assert_eq!(c(json!({"cmd": "git status"})).as_deref(), Some("git status"));
-        assert_eq!(c(json!({"command": ["git", "commit", "-m", "a b"]})).as_deref(), Some("git commit -m 'a b'"));
+        assert_eq!(
+            c(json!({"command": ["bash", "-lc", "rm -rf x && ls"]})).as_deref(),
+            Some("rm -rf x && ls")
+        );
+        assert_eq!(
+            c(json!({"command": ["/bin/bash", "--norc", "-c", "rm -rf ~"]})).as_deref(),
+            Some("rm -rf ~")
+        );
+        assert_eq!(
+            c(json!({"cmd": "git status"})).as_deref(),
+            Some("git status")
+        );
+        assert_eq!(
+            c(json!({"command": ["git", "commit", "-m", "a b"]})).as_deref(),
+            Some("git commit -m 'a b'")
+        );
         assert_eq!(c(json!({"file_path": "a.rs"})), None);
     }
 }

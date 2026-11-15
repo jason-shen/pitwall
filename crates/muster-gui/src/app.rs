@@ -227,6 +227,39 @@ pub struct DiffView {
 /// kept in step by the Output pushes.
 pub struct TermState {
     pub view: crate::termview::TerminalView,
+    /// Output held back inside a synchronized update (mode 2026), drawn in
+    /// one go when the program ends it.
+    held: Vec<u8>,
+    held_since: Option<Instant>,
+}
+
+/// Programs that mark their redraws (Claude Code, Codex) say where one starts
+/// and ends; drawing halfway through tears. A program that never ends one
+/// is drawn anyway after this long.
+const SYNC_LIMIT: Duration = Duration::from_millis(120);
+
+impl TermState {
+    /// Take output in, holding it while a synchronized update is open.
+    fn take(&mut self, data: &[u8]) {
+        self.held.extend_from_slice(data);
+        let last = |pat: &[u8]| self.held.windows(pat.len()).rposition(|w| w == pat);
+        let open = match (last(b"\x1b[?2026h"), last(b"\x1b[?2026l")) {
+            (Some(b), Some(e)) => b > e,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        let since = *self.held_since.get_or_insert_with(Instant::now);
+        if !open || since.elapsed() > SYNC_LIMIT {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if !self.held.is_empty() {
+            let _ = crate::termview::feed(&self.view.parser, &std::mem::take(&mut self.held));
+        }
+        self.held_since = None;
+    }
 }
 
 impl TermState {
@@ -239,6 +272,8 @@ impl TermState {
                 cols,
                 rows,
             ),
+            held: vec![],
+            held_since: None,
         }
     }
 }
@@ -410,6 +445,9 @@ pub struct App {
     /// How each Markdown file is shown, and its scroll sync.
     pub md_mode: HashMap<PathBuf, MdMode>,
     pub md_sync: HashMap<PathBuf, MdSync>,
+    /// A Markdown file read from disk for the preview, with its mtime, so it
+    /// isn't read again every frame.
+    pub md_disk: HashMap<PathBuf, (Option<std::time::SystemTime>, String)>,
     /// The headless claude filling in each brief.
     pub brief_runs: HashMap<PathBuf, crate::briefs::Run>,
     briefs_cache: std::cell::RefCell<HashMap<String, BriefList>>,
@@ -552,6 +590,7 @@ impl App {
             rename_in_tab: false,
             md_mode: HashMap::new(),
             md_sync: HashMap::new(),
+            md_disk: HashMap::new(),
             brief_runs: HashMap::new(),
             briefs_cache: Default::default(),
             repo_cache: Default::default(),
@@ -1369,7 +1408,22 @@ impl App {
     // ── event pump (called every frame) ─────────────────────────────────
 
     pub fn pump(&mut self) {
+        // A flood of output (`cat` of a big log, `yes`) is taken a slice at a
+        // time so frames keep coming and Ctrl+C gets drawn; the rest waits in
+        // the channel for the next frame.
+        let budget = Instant::now();
         while let Ok(ev) = self.rx.try_recv() {
+            if budget.elapsed() > Duration::from_millis(12) {
+                self.on_event(ev);
+                self.ctx.request_repaint();
+                break;
+            }
+            self.on_event(ev);
+        }
+    }
+
+    fn on_event(&mut self, ev: Ev) {
+        {
             match ev {
                 Ev::Connected {
                     client,
@@ -1547,6 +1601,11 @@ impl App {
         self.watch_config();
         self.save_layout();
         self.drain_notifications();
+        for t in self.terms.values_mut() {
+            if t.held_since.is_some_and(|s| s.elapsed() > SYNC_LIMIT) {
+                t.flush();
+            }
+        }
         if self.last_stats.elapsed() > Duration::from_secs(8) {
             self.refresh_diffstats();
         }
@@ -1646,7 +1705,11 @@ impl App {
                 let parser = crate::termview::new_parser(rows, cols, 10_000);
                 crate::termview::feed(&parser, &data);
                 match self.terms.get_mut(&id) {
-                    Some(t) => t.view.parser = parser,
+                    Some(t) => {
+                        t.held.clear();
+                        t.held_since = None;
+                        t.view.replace_parser(parser);
+                    }
                     None => {
                         self.terms
                             .insert(id.clone(), TermState::new(&id, rows, cols));
@@ -1656,13 +1719,12 @@ impl App {
             }
             Push::Output { id, data } => {
                 if let Some(t) = self.terms.get_mut(&id) {
-                    // Answers to cursor-position and device queries; the daemon
-                    // keeps no emulator that could give them.
-                    let replies = crate::termview::feed(&t.view.parser, &data);
-                    if !replies.is_empty() {
-                        if let Some(c) = &self.client {
-                            c.send(Request::Input { id, data: replies });
-                        }
+                    // The daemon answers the terminal's queries (cursor
+                    // position, device attributes) for every task, shown or
+                    // not; answering here as well would send each twice.
+                    t.take(&data);
+                    if t.held_since.is_some() {
+                        self.ctx.request_repaint_after(SYNC_LIMIT);
                     }
                 }
             }
@@ -2023,7 +2085,10 @@ impl App {
             return;
         };
         let Some(agent) = self.cfg.agents.get("claude") else {
-            return self.notify("Finish with AI runs claude: add [agents.claude] to config.toml", true);
+            return self.notify(
+                "Finish with AI runs claude: add [agents.claude] to config.toml",
+                true,
+            );
         };
         let (tx, ctx, p) = (self.tx.clone(), self.ctx.clone(), path.to_path_buf());
         let send = move |u| {
@@ -2083,7 +2148,10 @@ impl App {
         }
         match result {
             Some(Ok(())) => self.notify("brief filled in", false),
-            Some(Err(e)) => self.notify(format!("couldn't finish the brief: {e}; it's as you left it"), true),
+            Some(Err(e)) => self.notify(
+                format!("couldn't finish the brief: {e}; it's as you left it"),
+                true,
+            ),
             None => self.notify("stopped; the brief is as you left it", false),
         }
     }
@@ -2556,7 +2624,10 @@ impl App {
             return self.notify("select an agent with its own branch", true);
         };
         let (Some(branch), Some(root)) = (t.branch.clone(), t.repo.clone()) else {
-            return self.notify("this agent works in place: there's no branch to merge", true);
+            return self.notify(
+                "this agent works in place: there's no branch to merge",
+                true,
+            );
         };
         let root = PathBuf::from(root);
         let here = git::current_branch(&root);
@@ -2582,7 +2653,10 @@ impl App {
                 "\n\n• Commit its {pending} uncommitted change(s) on {branch} with this message"
             ));
         }
-        text.push_str(&format!("\n• Merge {branch} into {target} in {}", root.display()));
+        text.push_str(&format!(
+            "\n• Merge {branch} into {target} in {}",
+            root.display()
+        ));
         if here.as_deref() != Some(target.as_str()) {
             text.push_str(&format!(
                 "\n\nYour checkout is on {}, not {target}. Check out {target} first.",
@@ -2605,7 +2679,10 @@ impl App {
     /// hunk stages don't fight over the index lock.
     pub fn git_op(&mut self, f: impl FnOnce(&Path) -> anyhow::Result<String> + Send + 'static) {
         let dir = self.ctx_dir();
-        self.in_background(move || f(&dir).map_err(|e| format!("{e:#}")), Reply::GitDone);
+        self.in_background(
+            move || f(&dir).map_err(|e| format!("{e:#}")),
+            Reply::GitDone,
+        );
     }
 
     fn in_background<T: Send + 'static>(
@@ -2706,7 +2783,10 @@ impl App {
                 self.notify(format!("accepting {id}…"), false);
                 let id2 = id.clone();
                 self.in_background(
-                    move || git::accept(&root, &worktree, &branch, &target, &message).map_err(|e| format!("{e:#}")),
+                    move || {
+                        git::accept(&root, &worktree, &branch, &target, &message)
+                            .map_err(|e| format!("{e:#}"))
+                    },
                     move |result| Reply::Accepted { id: id2, result },
                 );
             }
@@ -2817,7 +2897,12 @@ pub fn review_message(list: &[Remark]) -> String {
             Some(l) => format!("{}:{l}", r.file),
             None => r.file.clone(),
         };
-        text.push_str(&format!(" ({}) {at}, on `{}`: {}", i + 1, r.quote, r.text.trim()));
+        text.push_str(&format!(
+            " ({}) {at}, on `{}`: {}",
+            i + 1,
+            r.quote,
+            r.text.trim()
+        ));
     }
     text
 }
@@ -2930,9 +3015,31 @@ pub fn task_dir(t: &TaskInfo) -> PathBuf {
     t.live_cwd
         .as_deref()
         .filter(|_| t.agent == "shell")
+        .filter(|p| is_dir_cached(p))
         .map(PathBuf::from)
-        .filter(|p| p.is_dir())
         .unwrap_or_else(|| PathBuf::from(&t.cwd))
+}
+
+/// `is_dir`, remembered for a couple of seconds: the sidebar asks for every
+/// task on every frame.
+fn is_dir_cached(p: &str) -> bool {
+    thread_local! {
+        static SEEN: std::cell::RefCell<HashMap<String, (Instant, bool)>> = Default::default();
+    }
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some((at, v)) = seen.get(p) {
+            if at.elapsed() < Duration::from_secs(2) {
+                return *v;
+            }
+        }
+        let v = Path::new(p).is_dir();
+        if seen.len() > 512 {
+            seen.clear();
+        }
+        seen.insert(p.to_string(), (Instant::now(), v));
+        v
+    })
 }
 
 /// Blurs whatever shows through the window, like Terminal.app, iTerm2 and
@@ -3025,6 +3132,21 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_synchronized_update_is_drawn_whole() {
+        let mut t = super::TermState::new("sync", 3, 20);
+        let screen = |t: &super::TermState| t.view.parser.lock().unwrap().screen().contents();
+        t.take(b"\x1b[?2026hhalf");
+        assert_eq!(screen(&t), "", "drawn before the update ended");
+        t.take(b" done\x1b[?2026l");
+        assert_eq!(screen(&t), "half done");
+        // One that's never ended still shows, after a moment.
+        t.take(b"\x1b[?2026h more");
+        t.held_since = Some(std::time::Instant::now() - super::SYNC_LIMIT * 2);
+        t.take(b"!");
+        assert_eq!(screen(&t), "half done more!");
+    }
+
+    #[test]
     fn review_comments_go_as_one_numbered_line() {
         let r = |file: &str, line, quote: &str, text: &str| super::Remark {
             file: file.into(),
@@ -3036,7 +3158,10 @@ mod tests {
             r("src/a.rs", Some(42), "+ let x = 1;", " name it count\n"),
             r("README.md", None, "+ hi", "drop this"),
         ]);
-        assert!(m.contains("(1) src/a.rs:42, on `+ let x = 1;`: name it count"), "{m}");
+        assert!(
+            m.contains("(1) src/a.rs:42, on `+ let x = 1;`: name it count"),
+            "{m}"
+        );
         assert!(m.contains("(2) README.md, on `+ hi`: drop this"), "{m}");
     }
 

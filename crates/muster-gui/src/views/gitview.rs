@@ -419,7 +419,11 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
             .and_then(|t| app.tasks.get(&t.id))
             .and_then(|t| t.branch.as_ref())
             .is_some();
-        let id = app.tabs.get(app.cur).map(|t| t.id.clone()).unwrap_or_default();
+        let id = app
+            .tabs
+            .get(app.cur)
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
         if let Some(list) = app.remarks.get(&id).filter(|l| !l.is_empty()) {
             let all = list
                 .iter()
@@ -440,7 +444,9 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
         if has_branch
             && ui
                 .small_button("✓ accept…")
-                .on_hover_text("Commit the agent's work and merge it into the branch it came from (m)")
+                .on_hover_text(
+                    "Commit the agent's work and merge it into the branch it came from (m)",
+                )
                 .clicked()
         {
             acts.push(Action::Accept);
@@ -547,7 +553,9 @@ fn main_panel(
                 if is_agent
                     && ui
                         .small_button("💬 comment")
-                        .on_hover_text("r: a review comment on this line, sent to the agent with the others")
+                        .on_hover_text(
+                            "r: a review comment on this line, sent to the agent with the others",
+                        )
                         .clicked()
                 {
                     acts.push(Action::Remark);
@@ -590,10 +598,8 @@ fn main_panel(
     }
     let cur_h = d.parsed.lines.get(d.cursor).and_then(|l| l.hunk);
     let total = d.parsed.lines.len();
-    let commented: std::collections::HashSet<(String, Option<usize>)> = remarks
-        .iter()
-        .map(|r| (r.file.clone(), r.line))
-        .collect();
+    let commented: std::collections::HashSet<(String, Option<usize>)> =
+        remarks.iter().map(|r| (r.file.clone(), r.line)).collect();
     let mut click: Option<(usize, bool)> = None;
     sa.show_rows(ui, row_h, total, |ui, range| {
         let width = ui.available_width().max(800.0);
@@ -631,7 +637,9 @@ fn main_panel(
                 fg,
             );
             if l.kind != LineKind::FileHeader
-                && l.file.as_ref().is_some_and(|f| commented.contains(&(f.clone(), l.new_line)))
+                && l.file
+                    .as_ref()
+                    .is_some_and(|f| commented.contains(&(f.clone(), l.new_line)))
             {
                 painter.text(
                     pos2(ui.clip_rect().right() - 8.0, rect.top()),

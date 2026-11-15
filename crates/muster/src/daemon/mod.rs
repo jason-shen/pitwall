@@ -96,7 +96,16 @@ impl Daemon {
 
     pub fn list(&self) -> Vec<TaskInfo> {
         let tasks: Vec<_> = self.tasks.lock().unwrap().values().cloned().collect();
-        tasks.iter().map(|t| t.info()).collect()
+        let mut out: Vec<TaskInfo> = tasks.iter().map(|t| t.info()).collect();
+        // Listed so they can be seen and removed, not silently carried along.
+        out.extend(
+            self.unrestored
+                .lock()
+                .unwrap()
+                .iter()
+                .map(task::Saved::info),
+        );
+        out
     }
 
     pub async fn new_task(self: &Arc<Self>, req: NewTask) -> Result<TaskInfo> {
@@ -106,8 +115,13 @@ impl Daemon {
         let id = {
             let tasks = self.tasks.lock().unwrap();
             let mut starting = self.starting.lock().unwrap();
-            let kept: std::collections::HashSet<String> =
-                self.unrestored.lock().unwrap().iter().map(|s| s.id.clone()).collect();
+            let kept: std::collections::HashSet<String> = self
+                .unrestored
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|s| s.id.clone())
+                .collect();
             let base = task::slug(&req.name);
             let mut id = base.clone();
             let mut n = 2;
@@ -336,29 +350,56 @@ impl Daemon {
     }
 
     pub async fn remove_task(self: &Arc<Self>, id: &str, prune: bool) -> Result<()> {
-        let t = self.task(id)?;
-        t.kill();
-        self.watchers.lock().unwrap().remove(&t.id);
-        self.tasks.lock().unwrap().remove(&t.id);
+        let (id, place) = match self.task(id) {
+            Ok(t) => {
+                t.kill();
+                self.watchers.lock().unwrap().remove(&t.id);
+                self.tasks.lock().unwrap().remove(&t.id);
+                (t.id.clone(), t.saved().place)
+            }
+            // One that couldn't be restored: there's no process, just the entry.
+            Err(e) => {
+                let mut kept = self.unrestored.lock().unwrap();
+                let Some(i) = kept.iter().position(|s| s.id == id) else {
+                    return Err(e);
+                };
+                let s = kept.remove(i);
+                (s.id, s.place)
+            }
+        };
         self.save();
+        let mut problem = None;
         if prune {
-            if let (Some(repo), Some(branch)) = (&t.repo, &t.branch) {
-                let (repo, cwd, branch) = (repo.clone(), t.cwd.clone(), branch.clone());
-                tokio::task::spawn_blocking(move || task::remove_branch(&repo, &cwd, &branch))
-                    .await??;
+            if let (Some(repo), Some(branch)) = (place.repo, place.branch) {
+                let cwd = place.cwd;
+                let r =
+                    tokio::task::spawn_blocking(move || task::remove_branch(&repo, &cwd, &branch))
+                        .await;
+                // The task is gone either way; say what's left behind instead
+                // of stopping here with it half removed.
+                match r {
+                    Ok(Err(e)) => problem = Some(format!("{e:#}")),
+                    Err(e) => problem = Some(e.to_string()),
+                    Ok(Ok(())) => {}
+                }
             }
             // Nothing can revert to these once the task is gone, and leaving
             // them makes the next task with this name `<name>-2`.
-            let store = paths::snapshots().join(format!("{}.git", t.id));
+            let store = paths::snapshots().join(format!("{id}.git"));
             if let Err(e) = std::fs::remove_dir_all(&store) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!("couldn't remove {}: {e}", store.display());
                 }
             }
         }
-        self.audit.log(serde_json::json!({"source": "task", "event": "removed", "task": t.id, "pruned": prune}));
-        self.emit(Push::TaskRemoved { id: t.id.clone() });
-        Ok(())
+        self.audit.log(
+            serde_json::json!({"source": "task", "event": "removed", "task": id, "pruned": prune}),
+        );
+        self.emit(Push::TaskRemoved { id: id.clone() });
+        match problem {
+            Some(p) => bail!("removed {id}, but its worktree is still there: {p}"),
+            None => Ok(()),
+        }
     }
 
     /// Write the task list for the next daemon to bring back. Only on start
@@ -408,7 +449,10 @@ impl Daemon {
         for s in saved {
             let id = s.id.clone();
             if !s.place.cwd.is_dir() {
-                tracing::warn!("not restoring {id} for now: {} is gone", s.place.cwd.display());
+                tracing::warn!(
+                    "not restoring {id} for now: {} is gone",
+                    s.place.cwd.display()
+                );
                 self.unrestored.lock().unwrap().push(s);
                 self.starting.lock().unwrap().remove(&id);
                 continue;

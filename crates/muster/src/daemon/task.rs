@@ -18,16 +18,55 @@ use tokio::sync::broadcast;
 
 use super::snapshot::Store;
 
-/// Keeps the title a program gives its terminal; vt100's default callbacks
-/// drop it.
+/// Keeps the title a program gives its terminal (vt100's default callbacks
+/// drop it), and answers the terminal's queries. The daemon answers them,
+/// not a window: a program asking where its cursor is (Codex does at start)
+/// gets one answer whether or not anything is showing it.
 #[derive(Default)]
 pub struct Titles {
     pub title: Option<String>,
+    pub replies: Vec<u8>,
 }
 
 impl vt100::Callbacks for Titles {
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         self.title = Some(String::from_utf8_lossy(title).into_owned());
+    }
+
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        i1: Option<u8>,
+        _i2: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        let first = params.first().and_then(|p| p.first()).copied().unwrap_or(0);
+        match (c, i1) {
+            ('n', None) if first == 6 => {
+                let (r, col) = screen.cursor_position();
+                self.replies
+                    .extend_from_slice(format!("\x1b[{};{}R", r + 1, col + 1).as_bytes());
+            }
+            ('n', None) if first == 5 => self.replies.extend_from_slice(b"\x1b[0n"),
+            ('c', None) if first == 0 => self.replies.extend_from_slice(b"\x1b[?62;22c"),
+            ('c', Some(b'>')) => self.replies.extend_from_slice(b"\x1b[>0;10;1c"),
+            _ => {}
+        }
+    }
+
+    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        // Foreground and background colour queries, which programs use to
+        // pick a light or dark palette. muster's themes are dark.
+        match params {
+            [b"10", b"?"] => self
+                .replies
+                .extend_from_slice(b"\x1b]10;rgb:d4d4/d7d7/dddd\x1b\\"),
+            [b"11", b"?"] => self
+                .replies
+                .extend_from_slice(b"\x1b]11;rgb:1414/1616/1a1a\x1b\\"),
+            _ => {}
+        }
     }
 }
 
@@ -159,9 +198,12 @@ fn create_worktree(
     // The branch it forks from is where its work goes back to.
     let base_branch = match base {
         None => git(&root, &["symbolic-ref", "--short", "-q", "HEAD"]).ok(),
-        Some(b) => git(&root, &["rev-parse", "-q", "--verify", &format!("refs/heads/{b}")])
-            .ok()
-            .map(|_| b.to_string()),
+        Some(b) => git(
+            &root,
+            &["rev-parse", "-q", "--verify", &format!("refs/heads/{b}")],
+        )
+        .ok()
+        .map(|_| b.to_string()),
     };
     let base = base.unwrap_or("HEAD");
     let base_sha = git(&root, &["rev-parse", &format!("{base}^{{commit}}")])
@@ -191,6 +233,39 @@ pub fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
         &["worktree", "remove", "--force", &path.to_string_lossy()],
     )?;
     Ok(())
+}
+
+/// Bytes that rebuild a terminal from nothing: the scrollback (printed as
+/// lines, so it scrolls into the client's own), then the screen and its
+/// modes. A full-screen program is put back on the alternate screen, so the
+/// wheel goes to it again rather than to an empty scrollback.
+fn repaint(term: &mut vt100::Parser<Titles>, rows: u16, cols: u16) -> Vec<u8> {
+    // Reattaching after a lag shouldn't mean waiting on megabytes of history.
+    const KEEP: usize = 2000;
+    let mut data = Vec::new();
+    let alt = term.screen().alternate_screen();
+    if !alt {
+        let screen = term.screen_mut();
+        let have = screen.scrollback_len().min(KEEP);
+        for k in (1..=have).rev() {
+            screen.set_scrollback(k);
+            if let Some(row) = screen.rows_formatted(0, cols).next() {
+                data.extend_from_slice(row.as_bytes());
+            }
+            data.extend_from_slice(b"\x1b[m\r\n");
+        }
+        screen.set_scrollback(0);
+        // Push the last of them off the screen into the scrollback too.
+        if have > 0 {
+            data.extend(std::iter::repeat_n(b'\n', rows.saturating_sub(1) as usize));
+        }
+    }
+    data.extend_from_slice(b"\x1b[H\x1b[2J");
+    if alt {
+        data.extend_from_slice(b"\x1b[?1049h\x1b[H\x1b[2J");
+    }
+    data.extend_from_slice(term.screen().state_formatted().as_bytes());
+    data
 }
 
 fn agent_config(cfg: &Config, agent: &str) -> Result<AgentConfig> {
@@ -374,6 +449,36 @@ pub struct Saved {
     pub created_unix: i64,
 }
 
+impl Saved {
+    /// How a task that couldn't be restored shows in the list.
+    pub fn info(&self) -> TaskInfo {
+        TaskInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            agent: self.agent.clone(),
+            cwd: self.place.cwd.display().to_string(),
+            repo: self.place.repo.as_ref().map(|p| p.display().to_string()),
+            branch: self.place.branch.clone(),
+            base: self.place.base.clone(),
+            status: TaskStatus::Exited { code: None },
+            attention: false,
+            created_unix: self.created_unix,
+            last_activity_unix: self.created_unix,
+            snapshots: 0,
+            pending_approvals: 0,
+            preview:
+                "not restored: its folder or agent is missing (remove it, or fix that and restart)"
+                    .into(),
+            live_cwd: None,
+            fg: None,
+            choices: vec![],
+            title: None,
+            brief: self.brief.clone(),
+            base_branch: self.place.base_branch.clone(),
+        }
+    }
+}
+
 impl Task {
     pub fn spawn(id: String, req: &NewTask, cfg: &Config) -> Result<Arc<Task>> {
         let agent_cfg = agent_config(cfg, &req.agent)?;
@@ -439,7 +544,15 @@ impl Task {
         } else {
             vec![]
         };
-        let t = Self::start(saved.id, &req, cfg, agent_cfg, saved.place, &extra, saved.created_unix)?;
+        let t = Self::start(
+            saved.id,
+            &req,
+            cfg,
+            agent_cfg,
+            saved.place,
+            &extra,
+            saved.created_unix,
+        )?;
         t.state.lock().unwrap().had_turn = saved.had_turn;
         Ok(t)
     }
@@ -646,11 +759,15 @@ impl Task {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            {
+                            let replies = {
                                 let mut term = t.term.lock().unwrap();
                                 term.process(&buf[..n]);
                                 // Send under the lock so attach snapshots never miss or duplicate bytes.
                                 let _ = t.out_tx.send(buf[..n].to_vec());
+                                std::mem::take(&mut term.callbacks_mut().replies)
+                            };
+                            if !replies.is_empty() {
+                                let _ = t.write(&replies);
                             }
                             let mut st = t.state.lock().unwrap();
                             st.last_output = Instant::now();
@@ -719,12 +836,10 @@ impl Task {
 
     /// Full-screen repaint bytes plus a receiver positioned right after them.
     pub fn attach(&self) -> (u16, u16, Vec<u8>, broadcast::Receiver<Vec<u8>>) {
-        let term = self.term.lock().unwrap();
+        let mut term = self.term.lock().unwrap();
         let rx = self.out_tx.subscribe();
-        let screen = term.screen();
-        let (r, c) = screen.size();
-        let mut data = b"\x1b[H\x1b[2J".to_vec();
-        data.extend_from_slice(screen.state_formatted().as_bytes());
+        let (r, c) = term.screen().size();
+        let data = repaint(&mut term, r.get(), c.get());
         (r.get(), c.get(), data, rx)
     }
 
@@ -1021,14 +1136,61 @@ mod tests {
     }
 
     #[test]
+    fn a_repaint_brings_back_scrollback_and_the_alternate_screen() {
+        let mut daemon = vt100::Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(5).unwrap(),
+            std::num::NonZeroU16::new(20).unwrap(),
+            100,
+            super::Titles::default(),
+        );
+        for i in 0..12 {
+            daemon.process(format!("line {i}\r\n").as_bytes());
+        }
+        let mut client = vt100::Parser::new(
+            std::num::NonZeroU16::new(5).unwrap(),
+            std::num::NonZeroU16::new(20).unwrap(),
+            1000,
+        );
+        client.process(&super::repaint(&mut daemon, 5, 20));
+        assert_eq!(client.screen().contents(), daemon.screen().contents());
+        client.screen_mut().set_scrollback(usize::MAX);
+        assert!(
+            client.screen().contents().starts_with("line 0"),
+            "{}",
+            client.screen().contents()
+        );
+        assert_eq!(
+            client.screen().scrollback_len(),
+            daemon.screen().scrollback_len()
+        );
+
+        daemon.process(b"\x1b[?1049hfull screen");
+        let mut client = vt100::Parser::new(
+            std::num::NonZeroU16::new(5).unwrap(),
+            std::num::NonZeroU16::new(20).unwrap(),
+            1000,
+        );
+        client.process(&super::repaint(&mut daemon, 5, 20));
+        assert!(client.screen().alternate_screen());
+        assert!(client.screen().contents().contains("full screen"));
+        // And the daemon answers where the cursor is.
+        daemon.process(b"\x1b[6n");
+        assert_eq!(daemon.callbacks_mut().replies, b"\x1b[1;12R");
+    }
+
+    #[test]
     fn codex_hook_overrides_are_valid_toml() {
         let exe = std::path::Path::new("/Applications/It's Here/muster");
         for c in super::codex_hooks(exe) {
             let (key, value) = c.split_once('=').unwrap();
-            let doc: toml::Table = toml::from_str(&format!("v = {value}")).unwrap_or_else(|e| panic!("{c}: {e}"));
+            let doc: toml::Table =
+                toml::from_str(&format!("v = {value}")).unwrap_or_else(|e| panic!("{c}: {e}"));
             assert!(key.starts_with("hooks."), "{key}");
             let cmd = &doc["v"][0]["hooks"][0]["command"];
-            assert_eq!(cmd.as_str(), Some("'/Applications/It'\\''s Here/muster' hook claude"));
+            assert_eq!(
+                cmd.as_str(),
+                Some("'/Applications/It'\\''s Here/muster' hook claude")
+            );
         }
     }
 

@@ -80,7 +80,7 @@ Whatever is on screen sits in a **card**. ⌘⇧D splits, and you can tile as ma
 - drag a tab onto another tab, or onto a card, to tile it beside that one;
 - drag a card's title bar onto another card to swap them;
 - drag the gap between cards to resize them, double-click it to even them out;
-- ⌥H / J / K / L move between cards, ⌥⇧H / J / K / L swap, ⌥Z maximizes, ⌥W closes (rebind them in Settings → Shortcuts);
+- ⌃⌥H / J / K / L move between cards, ⌃⌥⇧H / J / K / L swap, ⌃⌥Z maximizes, ⌃⌥W closes (rebind them in Settings → Shortcuts). They're on Ctrl+Option so plain Option keys reach the programs in the terminal;
 - right-click a title bar to maximize, swap, broadcast or close.
 
 **Broadcast** (⌘⇧B) sends your typing to every terminal card at once.
@@ -171,7 +171,7 @@ Every command has a shortcut, and every shortcut can be changed: in **Settings �
 [keys]
 command_bar = ["cmd+shift+p", "cmd+p"]   # a list gives a command more than one
 new_agent = "cmd+shift+n"                # cmd is ⌘ on macOS and Ctrl elsewhere
-card_left = "alt+h"
+card_left = "ctrl+alt+h"
 clear_terminal = ""                      # no shortcut
 ```
 
@@ -196,11 +196,11 @@ Clashes are flagged in Settings, and **⌘⇧/** lists everything as it's set no
 | Font bigger / smaller / reset | ⌘= / ⌘- / ⌘0 | Ctrl+= / - / 0 |
 | Settings / all shortcuts | ⌘, / ⌘⇧/ | Ctrl+, / Ctrl+Shift+/ |
 
-**Cards:** ⌥H / J / K / L focus, ⌥⇧H / J / K / L swap, ⌥Return new terminal in its own card, ⌥W close, ⌥Z maximize.
+**Cards:** ⌃⌥H / J / K / L focus, ⌃⌥⇧H / J / K / L swap, ⌃⌥Return new terminal in its own card, ⌃⌥W close, ⌃⌥Z maximize.
 
 The keys inside a card (the terminal's, the editor's and Changes', below) are fixed.
 
-**Terminal:** ⌘C / ⌘V copy and paste (Ctrl+Shift+C / V on Linux) · ⌘F find in the scrollback · ⌘↑ / ⌘↓ previous / next command · ⌘K clear · ⌘-click a link or path · double-click a word, triple-click a line · Shift+PageUp / PageDown scroll back · mouse reporting for vim, htop and tmux (hold Shift to select instead) · right-click for copy, paste, copy the last command's output and snippets.
+**Terminal:** ⇧Return types a newline (in Claude Code and Codex, where Return sends) · Option is Meta, so Option shortcuts and ⌥B / ⌥F work, while the characters your layout types with Option (`@`, `{` …) still type (Settings → Terminal turns Meta off) · ⌥← / ⌥→ jump words · ⌘C / ⌘V copy and paste (Ctrl+Shift+C / V on Linux) · selections stay on their text as output scrolls, and dragging past the edge scrolls · ⌘F find in the scrollback · ⌘↑ / ⌘↓ previous / next command · ⌘K clear · ⌘-click a link or path · double-click a word, triple-click a line · Shift+PageUp / PageDown scroll back · mouse reporting for vim, htop and tmux (hold Shift to select instead) · right-click for copy, paste, copy the last command's output and snippets (Shift+right-click when the program takes the mouse). Programs can set the cursor shape, put text on the clipboard (OSC 52) and draw in italics; input methods for Chinese, Japanese and Korean work, and redraws a program marks as one update are drawn whole. Scrollback comes back when muster restarts. A terminal that gets narrower doesn't rewrap lines already printed.
 
 **Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `r` comment on the line · `d` discard the hunk · `m` accept (commit and merge) · undo history: `r` revert to here, `n` checkpoint.
 
@@ -280,7 +280,7 @@ crates/
 scripts/macos-app.sh
 ```
 
-`cargo test --workspace` runs 70 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
+`cargo test --workspace` runs 78 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
 
 ## Known limitations
 

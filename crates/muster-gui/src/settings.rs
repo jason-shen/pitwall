@@ -45,6 +45,10 @@ pub struct Settings {
     pub bold_is_bright: bool,
     /// Selecting text in a terminal copies it.
     pub copy_on_select: bool,
+    /// macOS: Option+key sends Esc+key (Meta), as Claude Code's Option
+    /// shortcuts and readline want. Characters a keyboard layout makes with
+    /// Option, like `@` or `{` on German and French layouts, still type.
+    pub option_meta: bool,
     /// How much of the scheme background covers the desktop in a see-through window.
     pub opacity: f32,
     /// Only read at startup; winit can't make an existing window transparent.
@@ -112,6 +116,7 @@ impl Default for Settings {
             cursor_blink: false,
             bold_is_bright: true,
             copy_on_select: false,
+            option_meta: true,
             opacity: 0.85,
             see_through: false,
             blur: 20.0,
@@ -126,7 +131,9 @@ impl Default for Settings {
             folded_projects: Default::default(),
             agents_by_recent: false,
             project_names: Default::default(),
-            keys: crate::keys::Keymap::new(None, Some("alt")).0,
+            // Ctrl+Alt: Alt+h/j/k/l, Alt+Enter and friends belong to the
+            // programs in the terminal.
+            keys: crate::keys::Keymap::new(None, Some("ctrl+alt")).0,
         }
     }
 }
@@ -224,8 +231,9 @@ impl Settings {
         s.agents_by_recent = state.agents_by_recent;
         // Until [keys] is written, the card keys follow the old setting.
         let cards = match (table.contains_key("keys"), s.tile_mod) {
-            (true, _) | (false, crate::tiling::TileMod::Alt) => Some("alt"),
-            (false, crate::tiling::TileMod::CtrlAlt) => Some("ctrl+alt"),
+            (true, _) | (false, crate::tiling::TileMod::Alt | crate::tiling::TileMod::CtrlAlt) => {
+                Some("ctrl+alt")
+            }
             (false, crate::tiling::TileMod::Off) => None,
         };
         let (keys, p) =

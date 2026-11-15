@@ -24,11 +24,22 @@ pub struct Callbacks {
     pub cwd: Option<String>,
     /// Exit statuses from OSC 133;D, oldest first.
     pub exits: Vec<i32>,
+    /// Text a program asked to put on the clipboard (OSC 52: nvim, tmux,
+    /// anything over ssh).
+    pub clipboard: Option<String>,
 }
 
 impl vt100::Callbacks for Callbacks {
     fn audible_bell(&mut self, _: &mut vt100::Screen) {
         self.bell = true;
+    }
+    fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, _ty: &[u8], data: &[u8]) {
+        // vt100 hands over the base64 as sent. A megabyte is plenty.
+        if data.len() <= 1 << 20 {
+            if let Some(t) = base64_decode(data).and_then(|b| String::from_utf8(b).ok()) {
+                self.clipboard = Some(t);
+            }
+        }
     }
     fn on_scroll(&mut self, _: vt100::capture::RowContents<'_>, alternate_screen: bool) {
         if !alternate_screen {
@@ -85,12 +96,41 @@ impl vt100::Callbacks for Callbacks {
     }
 }
 
+fn base64_decode(s: &[u8]) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for &c in s.iter().filter(|c| !matches!(c, b'=' | b'\n' | b'\r')) {
+        acc = (acc << 6) | val(c)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 pub type Parser = vt100::Parser<Callbacks>;
 
 /// Lines ever scrolled off the top of the main screen. With a row on screen it
 /// gives a line number that stays put as more output scrolls in.
 fn lines_scrolled(p: &Parser) -> u64 {
     p.callbacks().dropped + p.screen().scrollback_len() as u64
+}
+
+/// The history line shown on the screen's top row right now.
+fn top_line(p: &Parser) -> u64 {
+    lines_scrolled(p).saturating_sub(p.screen().scrollback() as u64)
 }
 pub type SharedParser = Arc<Mutex<Parser>>;
 
@@ -134,8 +174,10 @@ pub struct TerminalView {
     pub id: egui::Id,
     pub cols: u16,
     pub rows: u16,
-    sel_anchor: Option<(u16, u16)>,
-    sel_end: Option<(u16, u16)>,
+    /// Selection ends as (line in the whole history, column), so the
+    /// selection stays on its text as output scrolls in or you scroll back.
+    sel_anchor: Option<(u64, u16)>,
+    sel_end: Option<(u64, u16)>,
     wheel_acc: f32,
     mouse_down_btn: Option<u8>,
     last_mouse_cell: Option<(u16, u16)>,
@@ -147,6 +189,8 @@ pub struct TerminalView {
     /// Where each command was entered, for jumping between commands and
     /// copying one's output.
     marks: Vec<Mark>,
+    /// Text an input method is composing, shown at the cursor until committed.
+    preedit: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -176,6 +220,7 @@ impl TerminalView {
             rows,
             sel_anchor: None,
             sel_end: None,
+            preedit: String::new(),
             wheel_acc: 0.0,
             mouse_down_btn: None,
             last_mouse_cell: None,
@@ -381,12 +426,28 @@ impl TerminalView {
 
     pub fn selection_text(&self) -> Option<String> {
         let (a, b) = self.sel_range()?;
-        let p = self.parser.lock().unwrap();
-        let s = p.screen();
+        let mut p = self.parser.lock().unwrap();
+        // Lines off screen are read by scrolling the history to them and
+        // back; vt100 only hands out cells of what's in view.
+        let was = p.screen().scrollback();
+        let total = lines_scrolled(&p);
+        let rows = p.screen().size().0.get() as u64;
+        let kept = p.screen().scrollback_len() as u64;
         let mut out = String::new();
-        for r in a.0..=b.0 {
-            let c0 = if r == a.0 { a.1 } else { 0 };
-            let c1 = if r == b.0 {
+        for l in a.0..=b.0 {
+            let (back, r) = if l >= total {
+                (0, l - total)
+            } else {
+                (total - l, 0)
+            };
+            if back > kept || r >= rows {
+                continue;
+            }
+            p.screen_mut().set_scrollback(back as usize);
+            let s = p.screen();
+            let r = r as u16;
+            let c0 = if l == a.0 { a.1 } else { 0 };
+            let c1 = if l == b.0 {
                 b.1
             } else {
                 self.cols.saturating_sub(1)
@@ -405,20 +466,25 @@ impl TerminalView {
                 }
             }
             let wrapped = s.row_wrapped(r);
-            if !wrapped || r == b.0 {
-                let t = line.trim_end();
-                out.push_str(t);
+            if !wrapped || l == b.0 {
+                out.push_str(line.trim_end());
             } else {
                 out.push_str(&line);
             }
-            if r != b.0 && !wrapped {
+            if l != b.0 && !wrapped {
                 out.push('\n');
             }
         }
+        p.screen_mut().set_scrollback(was);
         Some(out)
     }
 
-    fn sel_range(&self) -> Option<((u16, u16), (u16, u16))> {
+    /// A screen cell as a position in the whole history.
+    fn line_of(&self, (r, c): (u16, u16)) -> (u64, u16) {
+        (top_line(&self.parser.lock().unwrap()) + r as u64, c)
+    }
+
+    fn sel_range(&self) -> Option<((u64, u16), (u64, u16))> {
         let (a, b) = (self.sel_anchor?, self.sel_end?);
         if a == b {
             return None;
@@ -426,7 +492,7 @@ impl TerminalView {
         Some(if a <= b { (a, b) } else { (b, a) })
     }
 
-    fn in_sel(range: Option<((u16, u16), (u16, u16))>, r: u16, c: u16) -> bool {
+    fn in_sel(range: Option<((u64, u16), (u64, u16))>, r: u64, c: u16) -> bool {
         match range {
             Some((a, b)) => (r, c) >= a && (r, c) <= b,
             None => false,
@@ -438,14 +504,25 @@ impl TerminalView {
         self.sel_end = None;
     }
 
+    /// The whole history, not just what's on screen.
     pub fn select_all(&mut self) {
-        self.sel_anchor = Some((0, 0));
-        self.sel_end = Some((self.rows.saturating_sub(1), self.cols.saturating_sub(1)));
+        let p = self.parser.lock().unwrap();
+        let first = p.callbacks().dropped;
+        let last = lines_scrolled(&p) + self.rows.saturating_sub(1) as u64;
+        drop(p);
+        self.sel_anchor = Some((first, 0));
+        self.sel_end = Some((last, self.cols.saturating_sub(1)));
     }
 
     pub fn paste_bytes(&self, text: &str) -> Vec<u8> {
         let bracketed = self.parser.lock().unwrap().screen().bracketed_paste();
-        let text = text.replace("\r\n", "\n").replace('\n', "\r");
+        // A pasted end-of-paste marker would end the paste early and run the
+        // rest as typed input.
+        let text = text
+            .replace("\x1b[201~", "")
+            .replace("\x1b[200~", "")
+            .replace("\r\n", "\n")
+            .replace('\n', "\r");
         let mut out = Vec::new();
         if bracketed {
             out.extend_from_slice(b"\x1b[200~");
@@ -455,6 +532,19 @@ impl TerminalView {
             out.extend_from_slice(b"\x1b[201~");
         }
         out
+    }
+
+    /// A new screen from the daemon: what pointed into the old one (command
+    /// marks, find matches, a selection) no longer lines up.
+    pub fn replace_parser(&mut self, parser: SharedParser) {
+        self.parser = parser;
+        self.marks.clear();
+        self.sel_anchor = None;
+        self.sel_end = None;
+        if let Some(f) = self.find.as_mut() {
+            f.matches.clear();
+            f.searched.clear();
+        }
     }
 
     pub fn clear_scrollback(&mut self) {
@@ -565,9 +655,23 @@ impl TerminalView {
         if focused && interactive {
             let events = ui.input(|i| i.events.clone());
             let mut skip_text = false;
+            // Option+key as Meta, held until we see what the layout typed:
+            // an ASCII symbol (`@`, `{`) is what the user wanted, anything
+            // else (`å`, `≥`) means Meta.
+            let mut pending_meta: Option<Vec<u8>> = None;
             for ev in events {
                 match ev {
                     Event::Text(t) => {
+                        if let Some(meta) = pending_meta.take() {
+                            let symbol = t.chars().count() == 1
+                                && t.chars()
+                                    .all(|c| c.is_ascii_graphic() && !c.is_ascii_alphanumeric());
+                            self.input_typed(
+                                &mut actions,
+                                if symbol { t.into_bytes() } else { meta },
+                            );
+                            continue;
+                        }
                         if skip_text {
                             skip_text = false;
                             continue;
@@ -575,8 +679,10 @@ impl TerminalView {
                         self.input_typed(&mut actions, t.into_bytes());
                     }
                     Event::Ime(egui::ImeEvent::Commit(t)) => {
+                        self.preedit.clear();
                         self.input_typed(&mut actions, t.into_bytes())
                     }
+                    Event::Ime(egui::ImeEvent::Preedit { text, .. }) => self.preedit = text,
                     Event::Paste(t) => {
                         if cfg!(target_os = "macos") || mods_now.shift {
                             self.back_to_live();
@@ -653,6 +759,65 @@ impl TerminalView {
                             p.screen_mut().set_scrollback((cur + delta).max(0) as usize);
                             continue;
                         }
+                        // Linux: Ctrl+Shift+C / V copy and paste (egui only
+                        // turns plain Ctrl+C / V into copy and paste events).
+                        if !cfg!(target_os = "macos") && modifiers.ctrl && modifiers.shift {
+                            if key == Key::C {
+                                if let Some(t) = self.selection_text() {
+                                    ui.ctx().copy_text(t);
+                                }
+                                continue;
+                            }
+                            if key == Key::V {
+                                if let Ok(t) =
+                                    arboard::Clipboard::new().and_then(|mut c| c.get_text())
+                                {
+                                    self.back_to_live();
+                                    actions.push(TermAction::Paste(t));
+                                }
+                                continue;
+                            }
+                        }
+                        let mac_option = cfg!(target_os = "macos")
+                            && modifiers.alt
+                            && !modifiers.ctrl
+                            && !modifiers.command;
+                        // Option+←/→ jump words, as readline and zsh read
+                        // them; full-screen programs get the arrow as is.
+                        if mac_option && !modifiers.shift && !alt_screen {
+                            match key {
+                                Key::ArrowLeft => {
+                                    self.input_typed(&mut actions, b"\x1bb".to_vec());
+                                    continue;
+                                }
+                                Key::ArrowRight => {
+                                    self.input_typed(&mut actions, b"\x1bf".to_vec());
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if mac_option {
+                            let ch = if is_letter_or_digit(key) {
+                                key.name().chars().next()
+                            } else {
+                                Some(key.symbol_or_name())
+                                    .filter(|s| s.len() == 1 && s.is_ascii())
+                                    .and_then(|s| s.chars().next())
+                            };
+                            if let Some(c) = ch {
+                                if settings.option_meta {
+                                    let c = if modifiers.shift {
+                                        c.to_ascii_uppercase()
+                                    } else {
+                                        c.to_ascii_lowercase()
+                                    };
+                                    pending_meta = Some(vec![0x1b, c as u8]);
+                                }
+                                // Off: the layout's character arrives as text.
+                                continue;
+                            }
+                        }
                         if let Some(b) = encode_key(key, modifiers, app_cursor) {
                             if modifiers.alt && !modifiers.ctrl && is_letter_or_digit(key) {
                                 skip_text = true;
@@ -662,6 +827,10 @@ impl TerminalView {
                     }
                     _ => {}
                 }
+            }
+            // Option+key with no text after it: Meta.
+            if let Some(meta) = pending_meta {
+                self.input_typed(&mut actions, meta);
             }
         }
 
@@ -714,6 +883,9 @@ impl TerminalView {
         }
 
         if mouse_reporting && interactive {
+            // Alt and Ctrl held with a click, as xterm reports them (Shift
+            // is muster's own: it bypasses the program for local selection).
+            let mb = 8 * mods_now.alt as u8 + 16 * mods_now.ctrl as u8;
             if let Some(pos) = pointer
                 .interact_pos()
                 .filter(|p| rect.contains(*p) || self.mouse_down_btn.is_some())
@@ -726,7 +898,7 @@ impl TerminalView {
                 ] {
                     if pointer.button_pressed(btn) && rect.contains(pos) {
                         self.mouse_down_btn = Some(eb);
-                        actions.push(TermAction::Input(mouse_seq(mouse_enc, eb, cell, true)));
+                        actions.push(TermAction::Input(mouse_seq(mouse_enc, eb + mb, cell, true)));
                     }
                     if pointer.button_released(btn) && self.mouse_down_btn == Some(eb) {
                         self.mouse_down_btn = None;
@@ -735,7 +907,12 @@ impl TerminalView {
                         } else {
                             3
                         };
-                        actions.push(TermAction::Input(mouse_seq(mouse_enc, code, cell, false)));
+                        actions.push(TermAction::Input(mouse_seq(
+                            mouse_enc,
+                            code + mb,
+                            cell,
+                            false,
+                        )));
                     }
                 }
                 let motion = matches!(
@@ -744,11 +921,16 @@ impl TerminalView {
                 );
                 if motion && self.last_mouse_cell != Some(cell) {
                     if let Some(b) = self.mouse_down_btn {
-                        actions.push(TermAction::Input(mouse_seq(mouse_enc, b + 32, cell, true)));
+                        actions.push(TermAction::Input(mouse_seq(
+                            mouse_enc,
+                            b + 32 + mb,
+                            cell,
+                            true,
+                        )));
                     } else if mouse_mode == vt100::MouseProtocolMode::AnyMotion
                         && rect.contains(pos)
                     {
-                        actions.push(TermAction::Input(mouse_seq(mouse_enc, 35, cell, true)));
+                        actions.push(TermAction::Input(mouse_seq(mouse_enc, 35 + mb, cell, true)));
                     }
                 }
                 self.last_mouse_cell = Some(cell);
@@ -757,14 +939,30 @@ impl TerminalView {
             // Local selection
             if resp.drag_started_by(egui::PointerButton::Primary) {
                 if let Some(p) = resp.interact_pointer_pos() {
-                    let c = cell_at(p);
+                    let c = self.line_of(cell_at(p));
                     self.sel_anchor = Some(c);
                     self.sel_end = Some(c);
                 }
             }
             if resp.dragged_by(egui::PointerButton::Primary) {
                 if let Some(p) = resp.interact_pointer_pos() {
-                    self.sel_end = Some(cell_at(p));
+                    // Dragging past the top or bottom scrolls, so a selection
+                    // can run longer than a screen.
+                    let step = if p.y < rect.top() {
+                        1
+                    } else if p.y > rect.bottom() {
+                        -1
+                    } else {
+                        0
+                    };
+                    if step != 0 {
+                        let mut g = self.parser.lock().unwrap();
+                        let at = g.screen().scrollback() as i64;
+                        g.screen_mut().set_scrollback((at + step).max(0) as usize);
+                        drop(g);
+                        ui.ctx().request_repaint();
+                    }
+                    self.sel_end = Some(self.line_of(cell_at(p)));
                 }
             }
             if resp.drag_stopped() && settings.copy_on_select {
@@ -781,9 +979,9 @@ impl TerminalView {
             }
             if resp.triple_clicked() {
                 if let Some(p) = resp.interact_pointer_pos() {
-                    let (r, _) = cell_at(p);
-                    self.sel_anchor = Some((r, 0));
-                    self.sel_end = Some((r, cols - 1));
+                    let (l, _) = self.line_of(cell_at(p));
+                    self.sel_anchor = Some((l, 0));
+                    self.sel_end = Some((l, cols - 1));
                 }
             }
         }
@@ -845,6 +1043,7 @@ impl TerminalView {
         let screen = p.screen();
         let bell = p.callbacks().bell;
         let sel = self.sel_range();
+        let top = top_line(&p);
         let scrolled = screen.scrollback() > 0;
 
         for r in 0..rows {
@@ -854,7 +1053,7 @@ impl TerminalView {
             while c < cols {
                 let Some(cell) = screen.cell(r, c) else { break };
                 let (_, bg) = cell_colors(cell, scheme, settings.bold_is_bright);
-                let bg = if Self::in_sel(sel, r, c) {
+                let bg = if Self::in_sel(sel, top + r as u64, c) {
                     scheme.selection
                 } else {
                     bg
@@ -864,7 +1063,7 @@ impl TerminalView {
                 while c < cols {
                     let Some(n) = screen.cell(r, c) else { break };
                     let (_, nbg) = cell_colors(n, scheme, settings.bold_is_bright);
-                    let nbg = if Self::in_sel(sel, r, c) {
+                    let nbg = if Self::in_sel(sel, top + r as u64, c) {
                         scheme.selection
                     } else {
                         nbg
@@ -883,7 +1082,11 @@ impl TerminalView {
             // find matches on this row
             if let Some(f) = &self.find {
                 let line = screen.scrollback_len() - screen.scrollback() + r as usize;
-                for (i, m) in f.matches.iter().enumerate().filter(|(_, m)| m.line == line) {
+                // Matches are in line order: jump to this row's instead of
+                // walking all of them for every row of every frame.
+                let from = f.matches.partition_point(|m| m.line < line);
+                let here = f.matches[from..].iter().take_while(|m| m.line == line);
+                for (i, m) in here.enumerate().map(|(k, m)| (from + k, m)) {
                     let x0 = origin.x + m.col as f32 * cw;
                     let col = if i == f.current {
                         Color32::from_rgba_unmultiplied(240, 161, 60, 200)
@@ -928,49 +1131,87 @@ impl TerminalView {
             // everything else is placed per cell so columns always line up.
             let mut run = String::new();
             let mut run_start = 0u16;
-            let mut run_style: Option<(Color32, bool, bool)> = None;
-            let flush = |run: &mut String, start: u16, style: Option<(Color32, bool, bool)>| {
-                if let Some((fg, bold, underline)) = style {
-                    if !run.trim().is_empty() {
-                        let pos = pos2(origin.x + start as f32 * cw, y + text_dy);
-                        match (&bold_font, bold) {
-                            (Some(b), true) => {
-                                painter.text(pos, Align2::LEFT_TOP, run.as_str(), b.clone(), fg);
-                            }
-                            // No bold face: thicken by drawing twice, a hair apart.
-                            (None, true) => {
-                                painter.text(pos, Align2::LEFT_TOP, run.as_str(), font.clone(), fg);
-                                painter.text(
-                                    pos + vec2(0.6, 0.0),
-                                    Align2::LEFT_TOP,
-                                    run.as_str(),
-                                    font.clone(),
-                                    fg,
+            let mut run_style: Option<(Color32, bool, bool, bool)> = None;
+            let flush =
+                |run: &mut String, start: u16, style: Option<(Color32, bool, bool, bool)>| {
+                    if let Some((fg, bold, underline, italic)) = style {
+                        if !run.trim().is_empty() {
+                            let pos = pos2(origin.x + start as f32 * cw, y + text_dy);
+                            let face = match (&bold_font, bold) {
+                                (Some(b), true) => b.clone(),
+                                _ => font.clone(),
+                            };
+                            if italic {
+                                // egui slants text laid out with `italics`; the
+                                // monospace advance stays the same.
+                                let job = egui::text::LayoutJob::single_section(
+                                    run.clone(),
+                                    egui::TextFormat {
+                                        font_id: face,
+                                        color: fg,
+                                        italics: true,
+                                        ..Default::default()
+                                    },
                                 );
-                            }
-                            _ => {
-                                painter.text(pos, Align2::LEFT_TOP, run.as_str(), font.clone(), fg);
+                                painter.galley(pos, painter.layout_job(job), fg);
+                            } else {
+                                match (&bold_font, bold) {
+                                    (Some(b), true) => {
+                                        painter.text(
+                                            pos,
+                                            Align2::LEFT_TOP,
+                                            run.as_str(),
+                                            b.clone(),
+                                            fg,
+                                        );
+                                    }
+                                    // No bold face: thicken by drawing twice, a hair apart.
+                                    (None, true) => {
+                                        painter.text(
+                                            pos,
+                                            Align2::LEFT_TOP,
+                                            run.as_str(),
+                                            font.clone(),
+                                            fg,
+                                        );
+                                        painter.text(
+                                            pos + vec2(0.6, 0.0),
+                                            Align2::LEFT_TOP,
+                                            run.as_str(),
+                                            font.clone(),
+                                            fg,
+                                        );
+                                    }
+                                    _ => {
+                                        painter.text(
+                                            pos,
+                                            Align2::LEFT_TOP,
+                                            run.as_str(),
+                                            font.clone(),
+                                            fg,
+                                        );
+                                    }
+                                }
                             }
                         }
+                        if underline {
+                            let x0 = origin.x + start as f32 * cw;
+                            let n = run.chars().count() as f32;
+                            painter.line_segment(
+                                [pos2(x0, y + ch - 1.5), pos2(x0 + n * cw, y + ch - 1.5)],
+                                Stroke::new(1.0, fg),
+                            );
+                        }
                     }
-                    if underline {
-                        let x0 = origin.x + start as f32 * cw;
-                        let n = run.chars().count() as f32;
-                        painter.line_segment(
-                            [pos2(x0, y + ch - 1.5), pos2(x0 + n * cw, y + ch - 1.5)],
-                            Stroke::new(1.0, fg),
-                        );
-                    }
-                }
-                run.clear();
-            };
+                    run.clear();
+                };
             for c in 0..cols {
                 let Some(cell) = screen.cell(r, c) else { break };
                 if cell.is_wide_continuation() {
                     continue;
                 }
                 let (fg, _) = cell_colors(cell, scheme, settings.bold_is_bright);
-                let style = (fg, cell.bold(), cell.underline());
+                let style = (fg, cell.bold(), cell.underline(), cell.italic());
                 let txt = if cell.has_contents() {
                     cell.contents()
                 } else {
@@ -1054,7 +1295,40 @@ impl TerminalView {
                 let blink_on = !settings.cursor_blink || !focused || (time * 1.6) as i64 % 2 == 0;
                 let x = origin.x + cc as f32 * cw;
                 let y = origin.y + cr as f32 * ch;
-                let cell_rect = Rect::from_min_size(pos2(x, y), vec2(cw, ch));
+                let wide = screen.cell(cr, cc).is_some_and(|c| c.is_wide());
+                let cell_rect =
+                    Rect::from_min_size(pos2(x, y), vec2(if wide { 2.0 * cw } else { cw }, ch));
+                // Lets an input method (Chinese, Japanese, Korean, dead keys)
+                // work here and put its candidate window by the cursor.
+                if focused && interactive {
+                    ui.ctx().output_mut(|o| {
+                        o.ime = Some(egui::output::IMEOutput {
+                            purpose: egui::IMEPurpose::Terminal,
+                            rect,
+                            cursor_rect: cell_rect,
+                            should_interrupt_composition: false,
+                        })
+                    });
+                }
+                if !self.preedit.is_empty() {
+                    let g = painter.layout_no_wrap(self.preedit.clone(), font.clone(), scheme.bg);
+                    let r = Rect::from_min_size(pos2(x, y), vec2(g.size().x.max(cw), ch));
+                    painter.rect_filled(r, 2.0, scheme.cursor);
+                    painter.galley(pos2(x, y + text_dy), g, scheme.bg);
+                }
+                // The shape a program asked for (nvim's bar in insert mode),
+                // else the one in Settings.
+                let shape = match screen.cursor_style() {
+                    vt100::CursorStyle::BlinkBlock | vt100::CursorStyle::SteadyBlock => {
+                        CursorStyle::Block
+                    }
+                    vt100::CursorStyle::BlinkUnderline | vt100::CursorStyle::SteadyUnderline => {
+                        CursorStyle::Underline
+                    }
+                    vt100::CursorStyle::BlinkVerticalBar
+                    | vt100::CursorStyle::SteadyVerticalBar => CursorStyle::Bar,
+                    _ => settings.cursor,
+                };
                 if !focused {
                     painter.rect_stroke(
                         cell_rect.shrink(0.5),
@@ -1062,8 +1336,8 @@ impl TerminalView {
                         Stroke::new(1.0, scheme.cursor),
                         egui::StrokeKind::Inside,
                     );
-                } else if blink_on {
-                    match settings.cursor {
+                } else if blink_on && self.preedit.is_empty() {
+                    match shape {
                         CursorStyle::Block => {
                             painter.rect_filled(cell_rect, 1.0, scheme.cursor);
                             if let Some(cell) = screen.cell(cr, cc) {
@@ -1251,8 +1525,8 @@ impl TerminalView {
             b += 1;
         }
         drop(p);
-        self.sel_anchor = Some((r, a));
-        self.sel_end = Some((r, b));
+        self.sel_anchor = Some(self.line_of((r, a)));
+        self.sel_end = Some(self.line_of((r, b)));
     }
 }
 
@@ -1414,6 +1688,9 @@ pub fn encode_key(key: Key, m: Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
         v
     };
     Some(match key {
+        // Shift+Enter is a newline in Claude Code and Codex, where a plain
+        // Return submits; Esc+CR is what they (and zsh) take as one.
+        Key::Enter if m.shift && !m.ctrl => vec![0x1b, b'\r'],
         Key::Enter => alt_prefix(vec![b'\r']),
         Key::Tab => {
             if m.shift {
@@ -1622,6 +1899,59 @@ mod tests {
         v.sel_anchor = Some((0, 0));
         v.sel_end = Some((1, 3));
         assert_eq!(v.selection_text().unwrap(), "ab中文cd\nline");
+    }
+
+    #[test]
+    fn osc52_puts_text_on_the_clipboard() {
+        let p = new_parser(3, 20, 10);
+        // "hello, clipboard" in base64.
+        feed(&p, b"\x1b]52;c;aGVsbG8sIGNsaXBib2FyZA==\x07");
+        assert_eq!(
+            p.lock()
+                .unwrap()
+                .callbacks_mut()
+                .clipboard
+                .take()
+                .as_deref(),
+            Some("hello, clipboard")
+        );
+    }
+
+    #[test]
+    fn shift_enter_is_a_newline_and_pastes_cant_break_out() {
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(Key::Enter, shift, false),
+            Some(b"\x1b\r".to_vec())
+        );
+        assert_eq!(
+            encode_key(Key::Enter, Modifiers::default(), false),
+            Some(b"\r".to_vec())
+        );
+        let p = new_parser(3, 20, 10);
+        feed(&p, b"\x1b[?2004h");
+        let v = TerminalView::new(p, egui::Id::unique("t"), 20, 3);
+        let out = v.paste_bytes("safe\x1b[201~rm -rf ~\n");
+        // The inner end marker is gone; the only one left closes the paste.
+        assert_eq!(out, b"\x1b[200~saferm -rf ~\r\x1b[201~".to_vec());
+    }
+
+    #[test]
+    fn a_selection_stays_on_its_text_as_output_scrolls() {
+        let p = new_parser(3, 20, 100);
+        feed(&p, b"keep me\r\nb\r\nc");
+        let mut v = TerminalView::new(p.clone(), egui::Id::unique("t"), 20, 3);
+        v.sel_anchor = Some(v.line_of((0, 0)));
+        v.sel_end = Some(v.line_of((0, 6)));
+        // Five more lines push "keep me" into the scrollback.
+        feed(&p, b"\r\nd\r\ne\r\nf\r\ng\r\nh");
+        assert_eq!(v.selection_text().as_deref(), Some("keep me"));
+        // And select-all reaches back into the history.
+        v.select_all();
+        assert!(v.selection_text().unwrap().starts_with("keep me\nb\nc"));
     }
 }
 

@@ -94,7 +94,9 @@ mod tests {
     #[test]
     fn ticking_changes_only_that_box() {
         let t = set(BRIEF, 2, true).unwrap();
-        assert!(t.contains("- [x] two") && t.contains("- [ ] not a step") && t.ends_with("- [ ]\n"));
+        assert!(
+            t.contains("- [x] two") && t.contains("- [ ] not a step") && t.ends_with("- [ ]\n")
+        );
         let t = set(&t, 1, false).unwrap();
         assert!(t.contains("- [ ] one"));
         assert!(set(BRIEF, 4, true).is_err() && set(BRIEF, 0, true).is_err());

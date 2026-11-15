@@ -14,7 +14,41 @@ pub struct Classification {
     pub reason: String,
 }
 
+thread_local! {
+    static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One level deeper into `$(…)` and `bash -c`, or None past the limit: a
+/// command nested that deep is asked about, not picked apart (thousands of
+/// levels would otherwise tie up the daemon).
+struct Level;
+
+impl Level {
+    fn enter() -> Option<Level> {
+        DEPTH.with(|d| {
+            if d.get() >= 24 {
+                return None;
+            }
+            d.set(d.get() + 1);
+            Some(Level)
+        })
+    }
+}
+
+impl Drop for Level {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
 pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
+    let Some(_level) = Level::enter() else {
+        return Classification {
+            tier: Tier::Mutating,
+            decision: Decision::Ask,
+            reason: "nested too deep to check".into(),
+        };
+    };
     let norm = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
     let (tier, why) = tier_of(cmd, &cfg.read_only_programs);
     // Deny rules were checked above, so the first allow or ask rule speaks.
@@ -29,7 +63,11 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
         Tier::Destructive => cfg.destructive,
     };
     let ruled = |r: &crate::config::Rule, why: &str| {
-        let note = r.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
+        let note = r
+            .note
+            .as_deref()
+            .map(|n| format!(" ({n})"))
+            .unwrap_or_default();
         format!("rule `{}`{note}; {why}", r.pattern)
     };
     // A deny rule holds wherever it matches: in any part of the line, behind
@@ -104,8 +142,11 @@ fn deny_rule<'a>(
     cfg: &'a PolicyConfig,
     depth: usize,
 ) -> Option<&'a crate::config::Rule> {
-    let denies: Vec<&crate::config::Rule> =
-        cfg.rules.iter().filter(|r| r.decision == Decision::Deny).collect();
+    let denies: Vec<&crate::config::Rule> = cfg
+        .rules
+        .iter()
+        .filter(|r| r.decision == Decision::Deny)
+        .collect();
     if denies.is_empty() || depth > 4 {
         return None;
     }
@@ -144,7 +185,9 @@ fn unwrapped(words: &[String]) -> Vec<String> {
             && first.split('=').next().is_some_and(|k| {
                 !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
             });
-        if assignment || ["env", "sudo", "command", "nohup", "time", "exec"].contains(&first.as_str()) {
+        let wrapper =
+            ["env", "sudo", "command", "nohup", "time", "exec"].contains(&basename(first));
+        if assignment || wrapper {
             w = rest;
         } else {
             break;
@@ -176,16 +219,18 @@ fn unwrapped(words: &[String]) -> Vec<String> {
     out
 }
 
-/// The script in `bash -c '…'` (or sh, zsh, with -lc and friends).
-fn shell_script(words: &[String]) -> Option<&str> {
+/// The script in `bash -c '…'` (or sh, zsh, with -lc, --norc and friends).
+pub fn shell_script(words: &[String]) -> Option<&str> {
     let words = &words[words.len() - unwrapped(words).len()..];
-    let [sh, flag, script, ..] = words else {
+    let (sh, rest) = words.split_first()?;
+    if !["sh", "bash", "zsh", "dash", "ksh", "fish"].contains(&basename(sh)) {
         return None;
-    };
-    let sh = sh.rsplit('/').next().unwrap_or(sh);
-    let shell = ["sh", "bash", "zsh", "dash", "ksh", "fish"].contains(&sh);
-    let c = flag.starts_with('-') && !flag.starts_with("--") && flag.ends_with('c');
-    (shell && c).then_some(script.as_str())
+    }
+    // Long options (--norc, --login) come before the short flags.
+    let mut it = rest.iter().skip_while(|w| w.starts_with("--"));
+    let flag = it.next()?;
+    let c = flag.starts_with('-') && !flag.starts_with("--") && flag.contains('c');
+    c.then(|| it.next().map(String::as_str)).flatten()
 }
 
 fn stricter(a: Decision, b: Decision) -> Decision {
@@ -203,6 +248,9 @@ fn stricter(a: Decision, b: Decision) -> Decision {
 
 /// Riskiest tier across all parts of the command, with a human reason.
 pub fn tier_of(cmd: &str, extra_read_only: &[String]) -> (Tier, String) {
+    let Some(_level) = Level::enter() else {
+        return mutating("nested too deep to check");
+    };
     let lower = cmd.to_lowercase();
     for kw in [
         "drop database",
@@ -266,7 +314,9 @@ fn lex(s: &str) -> Lexed {
     // Some(true) = next word is a write target, Some(false) = read target / heredoc delimiter
     let mut redirect: Option<bool> = None;
     let mut heredoc_next = false;
-    let mut heredocs: Vec<String> = Vec::new();
+    // (delimiter, from `<<-` so leading tabs are stripped)
+    let mut heredocs: Vec<(String, bool)> = Vec::new();
+    let mut heredoc_dash = false;
     let mut next_piped = false;
     let mut i = 0;
 
@@ -275,8 +325,9 @@ fn lex(s: &str) -> Lexed {
             if has_word {
                 let w = std::mem::take(&mut word);
                 if heredoc_next {
-                    heredocs.push(w.trim_start_matches('-').to_string());
+                    heredocs.push((w, heredoc_dash));
                     heredoc_next = false;
+                    heredoc_dash = false;
                 } else {
                     match redirect.take() {
                         Some(true) => cur.writes.push(w),
@@ -376,19 +427,30 @@ fn lex(s: &str) -> Lexed {
             ' ' | '\t' | '\r' => finish_word!(),
             '\n' => {
                 finish_seg!(false);
-                // skip heredoc bodies
-                for delim in std::mem::take(&mut heredocs) {
+                // Skip heredoc bodies. The body ends at a line that is exactly
+                // the delimiter (after leading tabs, for `<<-`), as bash has it.
+                for (delim, dash) in std::mem::take(&mut heredocs) {
+                    if i >= n {
+                        break;
+                    }
                     i += 1;
-                    loop {
+                    while i < n {
                         let start = i;
                         while i < n && c[i] != '\n' {
                             i += 1;
                         }
                         let line: String = c[start..i].iter().collect();
-                        if line.trim() == delim || i >= n {
+                        let line = if dash {
+                            line.trim_start_matches('\t')
+                        } else {
+                            line.as_str()
+                        };
+                        if line == delim {
                             break;
                         }
-                        i += 1;
+                        if i < n {
+                            i += 1;
+                        }
                     }
                 }
             }
@@ -453,6 +515,10 @@ fn lex(s: &str) -> Lexed {
                         redirect = Some(false);
                     } else {
                         heredoc_next = true;
+                        if i + 1 < n && c[i + 1] == '-' {
+                            i += 1;
+                            heredoc_dash = true;
+                        }
                     }
                 } else if i + 1 < n && c[i + 1] == '(' {
                     let (inner, end) = balanced(&c, i + 1);
@@ -780,6 +846,7 @@ fn is_assignment(w: &str) -> bool {
 fn strip_wrappers(words: &[String]) -> Vec<String> {
     let mut i = 0;
     let n = words.len();
+    let mut wrapped_by: Option<String> = None;
     loop {
         while i < n
             && (is_assignment(&words[i])
@@ -801,7 +868,11 @@ fn strip_wrappers(words: &[String]) -> Vec<String> {
             i += 1;
         }
         if i >= n {
-            return vec![];
+            // `sudo -s`, `env -S '…'`: the wrapper itself is what runs.
+            return match wrapped_by {
+                Some(w) => vec![w],
+                None => vec![],
+            };
         }
         let w = basename(&words[i]);
         let takes_value: &[&str] = match w {
@@ -817,8 +888,22 @@ fn strip_wrappers(words: &[String]) -> Vec<String> {
             _ => return words[i..].to_vec(),
         };
         let wrapper = w.to_string();
+        wrapped_by = Some(wrapper.clone());
         i += 1;
         while i < n && words[i].starts_with('-') {
+            // `env -S 'cmd args'` runs the string as a command line.
+            if wrapper == "env" && matches!(words[i].as_str(), "-S" | "--split-string") {
+                let mut out: Vec<String> = words
+                    .get(i + 1)
+                    .map(|s| s.split_whitespace().map(String::from).collect())
+                    .unwrap_or_default();
+                out.extend(words.iter().skip(i + 2).cloned());
+                return if out.is_empty() {
+                    vec![wrapper]
+                } else {
+                    strip_wrappers(&out)
+                };
+            }
             if takes_value.contains(&words[i].as_str()) {
                 i += 1;
             }
@@ -833,6 +918,30 @@ fn strip_wrappers(words: &[String]) -> Vec<String> {
             i += 1; // duration
         }
     }
+}
+
+/// A sed script with an `e` (run a command) or `w` (write a file) in it,
+/// as a command or as an `s///` flag. Errs on the side of yes.
+fn sed_runs_or_writes(script: &str) -> bool {
+    script.split(['\n', ';']).any(|cmd| {
+        let cmd = cmd.trim_start_matches(|c: char| c.is_ascii_digit() || " ,$!".contains(c));
+        if cmd.starts_with(['e', 'w', 'W']) {
+            return true;
+        }
+        // s/a/b/flags: the flags after the last delimiter.
+        let Some(rest) = cmd.strip_prefix('s') else {
+            return false;
+        };
+        let Some(d) = rest.chars().next() else {
+            return false;
+        };
+        let parts: Vec<&str> = rest[d.len_utf8()..].splitn(3, d).collect();
+        parts.len() == 3
+            && parts[2]
+                .chars()
+                .take_while(|c| !c.is_whitespace())
+                .any(|c| c == 'e' || c == 'w')
+    })
 }
 
 fn short_has(args: &[&str], flag: char) -> bool {
@@ -940,16 +1049,69 @@ fn prog_tier(p: &str, a: &[&str], extra: &[String]) -> (Tier, String) {
         "sed" | "gsed" => {
             if short_has(a, 'i') || has(a, &["--in-place"]) {
                 mutating("`sed -i` edits files")
+            } else if a
+                .iter()
+                .filter(|t| !t.starts_with('-'))
+                .any(|t| sed_runs_or_writes(t))
+            {
+                mutating("sed script runs a command or writes a file")
             } else {
                 ro("sed (stdout only)")
             }
         }
         "awk" | "gawk"
             if a.iter().any(|t| {
-                t.contains("system(") || t.contains("print >") || t.contains("-i inplace")
-            }) =>
+                t.contains("system(")
+                    || t.contains("print >")
+                    || t.contains("printf >")
+                    || t.contains("| \"")
+                    || t.contains("|\"")
+                    || t.contains("|&")
+                    || t.contains("\" |")
+                    || t.contains("\"|")
+                    || *t == "-iinplace"
+            }) || a.windows(2).any(|w| w[0] == "-i" && w[1] == "inplace") =>
         {
             mutating("awk script with side effects")
+        }
+        "fd" | "fdfind"
+            if a.iter()
+                .any(|t| matches!(*t, "-x" | "-X") || t.starts_with("--exec")) =>
+        {
+            mutating("`fd -x` runs commands")
+        }
+        "rg" if a.iter().any(|t| t.starts_with("--pre")) => mutating("`rg --pre` runs a program"),
+        "uniq" if a.iter().filter(|t| !t.starts_with('-')).count() >= 2 => {
+            mutating("`uniq` writes its output file")
+        }
+        "yq" if short_has(a, 'i') || has(a, &["--inplace"]) => mutating("`yq -i` edits files"),
+        "date"
+            if short_has(a, 's')
+                || a.iter().any(|t| {
+                    t.starts_with("--set") || (!t.starts_with('-') && !t.starts_with('+'))
+                }) =>
+        {
+            mutating("sets the clock")
+        }
+        "ifconfig" if a.iter().filter(|t| !t.starts_with('-')).count() > 1 => {
+            mutating("changes a network interface")
+        }
+        "route"
+            if first_pos(a, &[])
+                .is_some_and(|x| matches!(x.1, "add" | "delete" | "del" | "change" | "flush")) =>
+        {
+            mutating("changes routes")
+        }
+        "journalctl"
+            if a.iter().any(|t| {
+                t.starts_with("--vacuum")
+                    || matches!(*t, "--rotate" | "--flush" | "--sync" | "--relinquish-var")
+            }) =>
+        {
+            mutating("changes the journal")
+        }
+        "hostnamectl" if first_pos(a, &[]).is_some_and(|x| x.1.starts_with("set-")) => {
+            mutating("changes the host's name")
         }
         "sort" if has(a, &["-o", "--output"]) => mutating("`sort -o` writes a file"),
         "tee" => {
@@ -1071,6 +1233,12 @@ fn prog_tier(p: &str, a: &[&str], extra: &[String]) -> (Tier, String) {
             }
         }
         "npm" | "pnpm" | "yarn" | "bun" => match first_pos(a, &[]).map(|x| x.1) {
+            Some("config")
+                if !first_pos(&a[1..], &[])
+                    .is_some_and(|x| matches!(x.1, "get" | "list" | "ls")) =>
+            {
+                mutating(format!("{p} config change"))
+            }
             Some(
                 "ls" | "list" | "view" | "info" | "outdated" | "why" | "explain" | "search"
                 | "help" | "config",
@@ -1156,8 +1324,27 @@ fn prog_tier(p: &str, a: &[&str], extra: &[String]) -> (Tier, String) {
                 "\\l",
             ];
             let writes = [
-                "insert ", "update ", "delete ", "alter ", "create ", "grant ", "revoke ", "set ",
-                "del ", "hset", "lpush", "expire",
+                "insert ",
+                "update ",
+                "delete ",
+                "alter ",
+                "create ",
+                "grant ",
+                "revoke ",
+                "set ",
+                "del ",
+                "hset",
+                "lpush",
+                "expire",
+                "drop ",
+                "truncate ",
+                "rename ",
+                "replace ",
+                "call ",
+                "load data",
+                "flush",
+                "attach ",
+                "vacuum",
             ];
             if writes.iter().any(|w| joined.contains(w)) {
                 mutating(format!("{p} write query"))
@@ -1178,6 +1365,13 @@ fn git_tier(a: &[&str]) -> (Tier, String) {
     else {
         return ro("git");
     };
+    // `git -c core.pager='…' log` runs whatever the config names.
+    if a[..i]
+        .iter()
+        .any(|t| *t == "-c" || t.starts_with("--config-env"))
+    {
+        return mutating("`git -c` can make git run programs");
+    }
     let r = &a[i + 1..];
     match sub {
         "status" | "log" | "show" | "diff" | "rev-parse" | "describe" | "blame" | "shortlog"
@@ -1477,6 +1671,66 @@ mod tests {
         assert_ne!(d("bash -c 'rm -rf ~'"), Decision::Allow);
         assert_eq!(d("bash -c 'cargo test'"), Decision::Allow);
         assert_eq!(d("cargo test --all"), Decision::Allow);
+        assert_eq!(d("/usr/bin/env bash -c 'git push --force'"), Decision::Deny);
+        assert_eq!(d("bash --norc -c 'git push --force'"), Decision::Deny);
+    }
+
+    #[test]
+    fn tricks_that_used_to_pass_as_read_only() {
+        let cfg = crate::config::Config::default().policy;
+        let t = |c: &str| classify(c, &cfg).tier;
+        for c in [
+            "cat <<--EOF\n-EOF\nrm -rf ~\nEOF",
+            "fd . -x rm -rf {}",
+            "fd . -X rm",
+            "env -S 'rm -rf ~'",
+            "sudo -s",
+            "git -c core.pager='rm -rf ~' log",
+            "awk 'BEGIN { print \"x\" | \"sh\" }'",
+            "gawk -i inplace '{print}' f",
+            "sed -n '1e touch x' f",
+            "sed 's/a/b/w out.txt' f",
+            "rg --pre ./x foo",
+            "yq -i '.a=1' f.yaml",
+            "uniq a b",
+            "npm config set registry x",
+            "mysql -e 'drop view v; select 1'",
+            "hostnamectl set-hostname x",
+            "route delete default",
+            "ifconfig en0 down",
+            "date -s 12:00",
+            "journalctl --vacuum-time=1s",
+        ] {
+            assert_ne!(t(c), Tier::ReadOnly, "{c}");
+        }
+        // Still read-only.
+        for c in [
+            "cat <<EOF\nhello\nEOF",
+            "sed -n '1,5p' f",
+            "git log -5",
+            "npm config get registry",
+            "date +%s",
+            "fd foo",
+        ] {
+            assert_eq!(t(c), Tier::ReadOnly, "{c}");
+        }
+    }
+
+    #[test]
+    fn odd_input_doesnt_crash_or_stall() {
+        let cfg = crate::config::Config::default().policy;
+        classify("cat <<A <<B\n", &cfg);
+        classify("cat <<A\n", &cfg);
+        classify("echo 'unbalanced", &cfg);
+        classify("", &cfg);
+        let deep = format!("{}x{}", "$(".repeat(3000), ")".repeat(3000));
+        let start = std::time::Instant::now();
+        assert_eq!(classify(&deep, &cfg).decision, Decision::Ask);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

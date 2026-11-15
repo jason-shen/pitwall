@@ -383,7 +383,9 @@ pub fn finish(
     send: impl Fn(Update) + Send + 'static,
 ) -> std::io::Result<Run> {
     let text = std::fs::read_to_string(path)?;
-    let head = guide_of(&text).map(|g| format!("{g}\n\n")).unwrap_or_default();
+    let head = guide_of(&text)
+        .map(|g| format!("{g}\n\n"))
+        .unwrap_or_default();
     // The prompt goes before the flags: --tools takes a list and would
     // swallow a prompt after it. --tools only limits the built-in tools, so
     // --strict-mcp-config keeps out MCP servers that can run commands.
@@ -446,7 +448,12 @@ pub fn finish(
 /// Read claude's stream-json events. Text before a tool call is narration
 /// ("Let me look at..."), so the brief is the text since the last tool call,
 /// from its first `# ` line. Ok(false) when it ended without a result.
-fn stream(out: impl BufRead, path: &Path, head: &str, send: &dyn Fn(Update)) -> Result<bool, String> {
+fn stream(
+    out: impl BufRead,
+    path: &Path,
+    head: &str,
+    send: &dyn Fn(Update),
+) -> Result<bool, String> {
     let mut cur = String::new();
     let mut last_write: Option<Instant> = None;
     let mut writing = false;
@@ -483,7 +490,10 @@ fn stream(out: impl BufRead, path: &Path, head: &str, send: &dyn Fn(Update)) -> 
                 }
             }
             Some("assistant") => {
-                let content = v["message"]["content"].as_array().cloned().unwrap_or_default();
+                let content = v["message"]["content"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
                 for c in content.iter().filter(|c| c["type"] == "tool_use") {
                     writing = false;
                     send(Update::Status(describe(
@@ -603,7 +613,8 @@ mod tests {
         // The guide comment isn't part of what an agent is handed.
         let handed = handoff_prompt(&p, &text);
         assert!(!handed.contains("<!--") && handed.contains("**Ask:**"));
-        assert!(guide_of(&text).is_some_and(|g| g.starts_with("<!-- guide (bug)") && g.ends_with("-->")));
+        assert!(guide_of(&text)
+            .is_some_and(|g| g.starts_with("<!-- guide (bug)") && g.ends_with("-->")));
         let _ = std::fs::remove_dir_all(&root);
     }
 

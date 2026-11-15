@@ -147,7 +147,11 @@ fn inline(l: &str, mut i: usize, p: &Palette, st: &mut State, out: &mut Out) {
         } else if let Some(n) = rest.strip_prefix('`').and_then(|r| r.find('`')) {
             out.push(p.code, n + 2);
             i += n + 2;
-        } else if let Some(n) = rest.strip_prefix("**").and_then(|r| r.find("**")).filter(|n| *n > 0) {
+        } else if let Some(n) = rest
+            .strip_prefix("**")
+            .and_then(|r| r.find("**"))
+            .filter(|n| *n > 0)
+        {
             out.push(p.dim, 2);
             out.push(p.strong, n);
             out.push(p.dim, 2);
@@ -205,10 +209,18 @@ mod tests {
 
     #[test]
     fn spans_cover_every_byte_and_comments_carry_over() {
-        let lines: Vec<String> = ["<!-- guide", "still guide -->", "# Title", "```", "let x = 1;", "```", "see [docs](http://x) é"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let lines: Vec<String> = [
+            "<!-- guide",
+            "still guide -->",
+            "# Title",
+            "```",
+            "let x = 1;",
+            "```",
+            "see [docs](http://x) é",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let h = highlight(&lines, false);
         for (l, spans) in lines.iter().zip(&h) {
             assert_eq!(spans.iter().map(|s| s.1).sum::<usize>(), l.len(), "{l}");

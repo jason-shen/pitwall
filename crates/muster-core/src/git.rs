@@ -485,7 +485,10 @@ pub fn accept(
             bail!("the agent left uncommitted work; it needs a commit message");
         }
         stage_all(worktree)?;
-        out.push_str(&format!("committed {}; ", commit(worktree, message.trim())?));
+        out.push_str(&format!(
+            "committed {}; ",
+            commit(worktree, message.trim())?
+        ));
     }
     out.push_str(&merge(root, branch)?);
     Ok(out)
@@ -677,7 +680,19 @@ mod tests {
         let base = run(&d, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
         let wt = d.with_extension("wt");
         let _ = std::fs::remove_dir_all(&wt);
-        run(&d, &["worktree", "add", "-q", "-b", "muster/x", wt.to_str().unwrap(), &base]).unwrap();
+        run(
+            &d,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "muster/x",
+                wt.to_str().unwrap(),
+                &base,
+            ],
+        )
+        .unwrap();
         // One change committed by the agent, two left lying around.
         std::fs::write(wt.join("a.txt"), "changed\n").unwrap();
         run(&wt, &["commit", "-qam", "agent work"]).unwrap();
@@ -693,13 +708,26 @@ mod tests {
         std::fs::write(d.join("a.txt"), "mine\n").unwrap();
         let head = run(&wt, &["rev-parse", "HEAD"]).unwrap();
         assert!(accept(&d, &wt, "muster/x", "main", "Add b").is_err());
-        assert_eq!(run(&wt, &["rev-parse", "HEAD"]).unwrap(), head, "a refused accept committed");
+        assert_eq!(
+            run(&wt, &["rev-parse", "HEAD"]).unwrap(),
+            head,
+            "a refused accept committed"
+        );
         run(&d, &["checkout", "-q", "--", "a.txt"]).unwrap();
 
         let out = accept(&d, &wt, "muster/x", "main", "Add b").unwrap();
-        assert!(out.contains("committed") && out.contains("merged muster/x into main"), "{out}");
-        assert_eq!(std::fs::read_to_string(d.join("a.txt")).unwrap(), "changed again\n");
-        assert_eq!(std::fs::read_to_string(d.join("b.txt")).unwrap(), "new\nfile\n");
+        assert!(
+            out.contains("committed") && out.contains("merged muster/x into main"),
+            "{out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.join("a.txt")).unwrap(),
+            "changed again\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.join("b.txt")).unwrap(),
+            "new\nfile\n"
+        );
         assert!(status(&wt).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&wt);
         let _ = std::fs::remove_dir_all(&d);
@@ -711,14 +739,25 @@ mod tests {
         let base = run(&d, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
         // Two far-apart edits make two hunks; one is committed, as an agent's
         // work often is, and the other left in the working tree.
-        std::fs::write(d.join("a.txt"), "ONE\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n").unwrap();
+        std::fs::write(
+            d.join("a.txt"),
+            "ONE\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n",
+        )
+        .unwrap();
         run(&d, &["commit", "-qam", "agent"]).unwrap();
-        std::fs::write(d.join("a.txt"), "ONE\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\nFIFTEEN\n").unwrap();
+        std::fs::write(
+            d.join("a.txt"),
+            "ONE\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\nFIFTEEN\n",
+        )
+        .unwrap();
         let p = parse(&diff(&d, &DiffMode::Base(base), None).unwrap());
         assert_eq!(p.hunks.len(), 2);
         discard_hunk(&d, &p.hunks[0]).unwrap();
         let now = std::fs::read_to_string(d.join("a.txt")).unwrap();
-        assert!(now.starts_with("1\n") && now.ends_with("FIFTEEN\n"), "{now}");
+        assert!(
+            now.starts_with("1\n") && now.ends_with("FIFTEEN\n"),
+            "{now}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

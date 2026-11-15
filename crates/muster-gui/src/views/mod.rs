@@ -1402,12 +1402,17 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     let galley = ui.fonts_mut(|f| f.layout_job(line));
     p.with_clip_rect(Rect::from_min_max(text.min, pos2(right, text.max.y)))
         .galley(pos2(text.left(), top - galley.size().y / 2.0), galley, TEXT);
-    let brief = t.brief.as_ref().and_then(|b| app.brief_entry(std::path::Path::new(b)));
+    let brief = t
+        .brief
+        .as_ref()
+        .and_then(|b| app.brief_entry(std::path::Path::new(b)));
     let what = match &t.status {
         TaskStatus::Waiting { reason } => Some((reason.clone(), AMBER)),
         _ if t.pending_approvals > 0 => Some(("wants to run a command".into(), AMBER)),
         _ => match &brief {
-            Some(b) if b.steps > 0 => Some((format!("✎ {} · {}/{}", b.title, b.done, b.steps), FAINT)),
+            Some(b) if b.steps > 0 => {
+                Some((format!("✎ {} · {}/{}", b.title, b.done, b.steps), FAINT))
+            }
             Some(b) => Some((format!("✎ {}", b.title), FAINT)),
             None => t.title.clone().map(|s| (s, FAINT)),
         },
@@ -2332,7 +2337,10 @@ fn card(
         }
     } else if hb
         .small_button("◫ New card")
-        .on_hover_text(format!("Open a second card beside this one  {}", crate::keys::hint("split")))
+        .on_hover_text(format!(
+            "Open a second card beside this one  {}",
+            crate::keys::hint("split")
+        ))
         .clicked()
     {
         acts.push(Action::Split);
@@ -2482,11 +2490,11 @@ fn file_card(
         return file_editor(ui, app, side, path, body, resp, focused, acts);
     }
     let brief = crate::briefs::is_brief(path);
-    let mode =
-        app.md_mode
-            .get(path)
-            .copied()
-            .unwrap_or(if brief { MdMode::Preview } else { MdMode::Edit });
+    let mode = app.md_mode.get(path).copied().unwrap_or(if brief {
+        MdMode::Preview
+    } else {
+        MdMode::Edit
+    });
     let strip = Rect::from_min_size(body.min, vec2(body.width(), 40.0));
     let rest = Rect::from_min_max(pos2(body.left(), strip.bottom()), body.max);
     md_toolbar(ui, app, path, strip, mode, brief, acts);
@@ -2641,13 +2649,7 @@ fn md_toolbar(
 
 /// The rendered Markdown beside the editor, scrolling with it both ways.
 /// Without an editor buffer it shows the file on disk.
-fn md_preview(
-    ui: &mut Ui,
-    app: &mut App,
-    side: usize,
-    path: &std::path::Path,
-    rect: Rect,
-) {
+fn md_preview(ui: &mut Ui, app: &mut App, side: usize, path: &std::path::Path, rect: Rect) {
     let item = app
         .cards
         .get(side)
@@ -2665,7 +2667,17 @@ fn md_preview(
     });
     let text = match ed {
         Some((ti, fi)) => app.tabs[ti].files[fi].lines.join("\n"),
-        None => std::fs::read_to_string(path).unwrap_or_default(),
+        None => {
+            let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+            match app.md_disk.get(path).filter(|(m, _)| *m == mtime) {
+                Some((_, t)) => t.clone(),
+                None => {
+                    let t = std::fs::read_to_string(path).unwrap_or_default();
+                    app.md_disk.insert(path.to_path_buf(), (mtime, t.clone()));
+                    t
+                }
+            }
+        }
     };
     let synced = ed.is_some();
     let editor_top = ed
@@ -3111,64 +3123,71 @@ fn term_body(
     let mut actions = actions;
     let snippets = settings.snippets.clone();
     let mut run_snippet = None;
-    resp.context_menu(|ui| {
-        let sel = t.view.selection_text();
-        if ui
-            .add_enabled(sel.is_some(), egui::Button::new("Copy"))
-            .clicked()
-        {
-            if let Some(text) = sel {
-                ui.ctx().copy_text(text);
-            }
-            ui.close();
-        }
-        if ui.button("Paste").clicked() {
-            if let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
-                actions.push(termview::TermAction::Paste(text));
-            }
-            ui.close();
-        }
-        if ui.button("Select all").clicked() {
-            t.view.select_all();
-            ui.close();
-        }
-        let out = t.view.last_output();
-        if ui
-            .add_enabled(
-                out.is_some(),
-                egui::Button::new("Copy last command's output"),
-            )
-            .clicked()
-        {
-            if let Some(text) = out {
-                ui.ctx().copy_text(text);
-            }
-            ui.close();
-        }
-        if !snippets.is_empty() {
-            ui.menu_button("Run snippet", |ui| {
-                for (i, sn) in snippets.iter().enumerate() {
-                    if ui.button(&sn.name).on_hover_text(&sn.body).clicked() {
-                        run_snippet = Some(i);
-                        ui.close();
-                    }
+    // A program that takes the mouse (vim, htop, lazygit) gets the right
+    // click too; Shift+right-click still opens muster's menu.
+    let program_mouse = t.view.parser.lock().unwrap().screen().mouse_protocol_mode()
+        != vt100::MouseProtocolMode::None
+        && !ui.input(|i| i.modifiers.shift);
+    if !program_mouse {
+        resp.context_menu(|ui| {
+            let sel = t.view.selection_text();
+            if ui
+                .add_enabled(sel.is_some(), egui::Button::new("Copy"))
+                .clicked()
+            {
+                if let Some(text) = sel {
+                    ui.ctx().copy_text(text);
                 }
-            });
-        }
-        ui.separator();
-        if ui.button(format!("Find…   {}F", cmd_label())).clicked() {
-            t.view.open_find();
-            ui.close();
-        }
-        if ui
-            .button(format!("Clear   {}", crate::keys::hint("clear_terminal")))
-            .clicked()
-        {
-            t.view.clear_scrollback();
-            actions.push(termview::TermAction::Typed(vec![0x0c]));
-            ui.close();
-        }
-    });
+                ui.close();
+            }
+            if ui.button("Paste").clicked() {
+                if let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                    actions.push(termview::TermAction::Paste(text));
+                }
+                ui.close();
+            }
+            if ui.button("Select all").clicked() {
+                t.view.select_all();
+                ui.close();
+            }
+            let out = t.view.last_output();
+            if ui
+                .add_enabled(
+                    out.is_some(),
+                    egui::Button::new("Copy last command's output"),
+                )
+                .clicked()
+            {
+                if let Some(text) = out {
+                    ui.ctx().copy_text(text);
+                }
+                ui.close();
+            }
+            if !snippets.is_empty() {
+                ui.menu_button("Run snippet", |ui| {
+                    for (i, sn) in snippets.iter().enumerate() {
+                        if ui.button(&sn.name).on_hover_text(&sn.body).clicked() {
+                            run_snippet = Some(i);
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            ui.separator();
+            if ui.button(format!("Find…   {}F", cmd_label())).clicked() {
+                t.view.open_find();
+                ui.close();
+            }
+            if ui
+                .button(format!("Clear   {}", crate::keys::hint("clear_terminal")))
+                .clicked()
+            {
+                t.view.clear_scrollback();
+                actions.push(termview::TermAction::Typed(vec![0x0c]));
+                ui.close();
+            }
+        });
+    }
     if let Some(i) = run_snippet {
         acts.push(Action::RunSnippet(i));
     }
@@ -3266,7 +3285,10 @@ fn editor_body(
     let shift = ui.input(|i| i.modifiers.shift);
     if resp.drag_started() {
         // Where the button went down, not where the drag was noticed.
-        if let Some(pp) = ui.input(|i| i.pointer.press_origin()).filter(|p| body.contains(*p)) {
+        if let Some(pp) = ui
+            .input(|i| i.pointer.press_origin())
+            .filter(|p| body.contains(*p))
+        {
             let (row, col) = cell_at(pp);
             e.click(row, col);
             e.anchor = Some((e.cy, e.cx));
@@ -3308,7 +3330,8 @@ fn editor_body(
                 Event::Paste(s) => e.insert_str(&s),
                 // With nothing selected, copy and cut take the whole line.
                 Event::Copy => acts.push(Action::Copy(
-                    e.selected_text().unwrap_or_else(|| format!("{}\n", e.lines[e.cy])),
+                    e.selected_text()
+                        .unwrap_or_else(|| format!("{}\n", e.lines[e.cy])),
                 )),
                 Event::Cut => match e.selected_text() {
                     Some(t) => {
@@ -3553,7 +3576,7 @@ fn editor_body(
         }
     }
     if e.stale {
-        let msg = " changed on disk — Ctrl/⌘R reload (drops your edits) or save to overwrite ";
+        let msg = " changed on disk: ⌘R loads it (drops your edits), ⌘S twice keeps yours ";
         let r = Rect::from_min_size(
             pos2(body.left(), body.bottom() - 22.0),
             vec2(body.width(), 22.0),
@@ -3774,6 +3797,15 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     if let Some(c) = &app.confirm {
         let text = c.text().to_string();
         let accept = matches!(c, Confirm::Accept { .. });
+        // These throw work away. A stray Enter (typed into a terminal as the
+        // dialog popped up) mustn't answer them; ⌘↵ or a click does.
+        let careful = accept
+            || matches!(
+                c,
+                Confirm::Remove { prune: true, .. }
+                    | Confirm::Discard { .. }
+                    | Confirm::DiscardHunk { .. }
+            );
         let mut answer: Option<bool> = None;
         let m = egui::Modal::new(Id::unique("confirm")).show(ctx, |ui| {
             ui.set_width(440.0);
@@ -3790,8 +3822,13 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 // Enter types a newline in the message; ⌘↵ accepts.
-                let enter = ui.input(|i| i.key_pressed(Key::Enter) && (!accept || i.modifiers.command));
-                let yes = if accept { "Accept" } else { "Yes" };
+                let enter =
+                    ui.input(|i| i.key_pressed(Key::Enter) && (!careful || i.modifiers.command));
+                let yes = match (accept, careful) {
+                    (true, _) => "Accept  ⌘↵",
+                    (false, true) => "Yes  ⌘↵",
+                    _ => "Yes",
+                };
                 if ui.button(RichText::new(yes).strong()).clicked() || enter {
                     answer = Some(true);
                 }
@@ -4536,6 +4573,10 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 });
                 ui.checkbox(&mut s.bold_is_bright, "Draw bold text in bright colours");
                 ui.checkbox(&mut s.copy_on_select, "Copy text when you select it");
+                if cfg!(target_os = "macos") {
+                    ui.checkbox(&mut s.option_meta, "Option key sends Meta (Esc+key)")
+                        .on_hover_text("For Claude Code's Option shortcuts and readline's word keys. Characters your layout types with Option, like @ or {, still type.");
+                }
                 let sch = theme::scheme(&s.scheme);
                 Frame::new()
                     .fill(sch.bg)
@@ -4975,11 +5016,15 @@ fn apply(app: &mut App, a: Action) {
             app.confirm = Some(Confirm::Remove { id, prune, text });
         }
         Action::Accept => app.accept_prompt(),
-        Action::Stage(p) => app.git_op(move |d| git::stage_file(d, &p).map(|_| format!("staged {p}"))),
+        Action::Stage(p) => {
+            app.git_op(move |d| git::stage_file(d, &p).map(|_| format!("staged {p}")))
+        }
         Action::Unstage(p) => {
             app.git_op(move |d| git::unstage_file(d, &p).map(|_| format!("unstaged {p}")))
         }
-        Action::StageAll => app.git_op(move |d| git::stage_all(d).map(|_| "staged everything".into())),
+        Action::StageAll => {
+            app.git_op(move |d| git::stage_all(d).map(|_| "staged everything".into()))
+        }
         Action::UnstageAll => {
             app.git_op(move |d| git::unstage_file(d, ".").map(|_| "unstaged everything".into()))
         }

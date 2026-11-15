@@ -59,11 +59,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("show_changes", "Views", "Changes (again to go back)"),
     cmd("show_files", "Views", "Files (again to go back)"),
     cmd("undo_history", "Views", "Undo history"),
-    cmd(
-        "markdown_view",
-        "Views",
-        "Markdown: edit or preview",
-    ),
+    cmd("markdown_view", "Views", "Markdown: edit or preview"),
     cmd(
         "broadcast",
         "Views",

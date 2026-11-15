@@ -120,8 +120,11 @@ read_only_programs = []
 mode = "queue"
 # How long a queued approval waits before falling back to the agent's prompt.
 timeout_secs = 540
-# Let read-only Bash commands through without Claude asking.
-auto_allow_read_only = true
+# Let commands muster judges read-only through without Claude asking. Off:
+# muster's judgement is a static reading of the shell, and a misreading would
+# run a command silently. With it off, muster only denies and queues, and
+# says "allow" only for your own allow rules; Claude's prompt decides the rest.
+auto_allow_read_only = false
 # Tools that trigger a snapshot right before they run.
 snapshot_before = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"]
 

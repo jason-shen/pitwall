@@ -197,7 +197,10 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
                 anyhow::bail!("{} is you", t.id);
             }
             // The Return would pick an option on a prompt it's waiting on.
-            if matches!(t.info().status, muster_core::proto::TaskStatus::Waiting { .. }) {
+            if matches!(
+                t.info().status,
+                muster_core::proto::TaskStatus::Waiting { .. }
+            ) {
                 anyhow::bail!("{} is waiting on a prompt; answer that first", t.id);
             }
             let line = muster_core::agents::message_line(from.as_deref(), &text);
@@ -207,6 +210,17 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             // A Return in the same write reads as part of a paste to TUIs
             // like Claude Code, which then don't submit it.
             tokio::time::sleep(Duration::from_millis(150)).await;
+            // A permission prompt that came up in the meantime would take the
+            // Return as "yes". Leave the text typed and say so instead.
+            let info = t.info();
+            if matches!(info.status, muster_core::proto::TaskStatus::Waiting { .. })
+                || info.pending_approvals > 0
+            {
+                anyhow::bail!(
+                    "{} started waiting on a prompt; the message is typed but not sent",
+                    t.id
+                );
+            }
             t.write(b"\r")?;
             d.audit.log(serde_json::json!({
                 "source": "agent", "event": "message", "from": from, "to": t.id, "text": text,
@@ -219,6 +233,10 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             Response::Ok
         }
         Request::Brief { id, step, done } => {
+            // Two ticks at once would each read the old file and one would
+            // be lost; they take turns.
+            static BRIEFS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _turn = BRIEFS.lock().unwrap_or_else(|e| e.into_inner());
             let t = d.task(&id)?;
             let Some(path) = t.brief.clone() else {
                 anyhow::bail!("{} wasn't handed a brief", t.id);
@@ -228,7 +246,8 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             let text = std::fs::read_to_string(&path)?;
             let text = match step {
                 Some(n) => {
-                    let new = muster_core::brief::set(&text, n, done).map_err(anyhow::Error::msg)?;
+                    let new =
+                        muster_core::brief::set(&text, n, done).map_err(anyhow::Error::msg)?;
                     let tmp = format!("{path}.tmp");
                     std::fs::write(&tmp, &new)?;
                     std::fs::rename(&tmp, &path)?;
