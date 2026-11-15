@@ -233,6 +233,9 @@ impl Editor {
             fresh.cx = cx.min(fresh.lines[fresh.cy].chars().count());
             fresh.scroll_y = sy.min(fresh.lines.len().saturating_sub(1));
             fresh.last_search = self.last_search.take();
+            // Whoever locked it (a brief being written into) still wants it
+            // locked; a fresh open only knows about binary files.
+            fresh.readonly |= self.readonly;
             // What was on screen before an agent rewrote the file is one ⌘Z
             // away; briefs aren't in git, so this is the only copy.
             fresh.undo = std::mem::take(&mut self.undo);
@@ -327,6 +330,9 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
+        if self.readonly {
+            return;
+        }
         self.anchor = None;
         if let Some(s) = self.undo.pop() {
             self.redo.push(UndoState {
@@ -343,6 +349,9 @@ impl Editor {
     }
 
     pub fn redo(&mut self) {
+        if self.readonly {
+            return;
+        }
         self.anchor = None;
         if let Some(s) = self.redo.pop() {
             self.undo.push(UndoState {
@@ -421,6 +430,7 @@ impl Editor {
     }
 
     pub fn goto(&mut self, line: usize) {
+        self.anchor = None;
         self.cy = line.saturating_sub(1).min(self.lines.len() - 1);
         self.cx = 0;
         self.want_col = None;
@@ -436,7 +446,10 @@ impl Editor {
     pub fn scroll(&mut self, delta: isize) {
         let max = self.lines.len().saturating_sub(1) as isize;
         self.scroll_y = (self.scroll_y as isize + delta).clamp(0, max) as usize;
+        // Scrolling drags the cursor along when it would leave the screen;
+        // a selection mustn't silently grow with it.
         if self.cy < self.scroll_y {
+            self.anchor = None;
             self.cy = self.scroll_y;
             self.clamp();
         }
@@ -909,6 +922,7 @@ impl Editor {
             return false;
         }
         self.last_search = Some(q.to_string());
+        self.anchor = None;
         let needle = q.to_lowercase();
         let n = self.lines.len();
         for step in 0..=n {
@@ -996,6 +1010,34 @@ mod tests {
         assert_eq!(e.lines, ["ta", "gamma"]);
         e.select_all();
         assert_eq!(e.selected_text().as_deref(), Some("ta\ngamma"));
+    }
+
+    #[test]
+    fn a_locked_buffer_stays_locked_through_reloads_and_undo() {
+        let mut e = md("my locked brief text");
+        e.readonly = true;
+        std::fs::write(&e.path, "the agent's").unwrap();
+        e.reload();
+        assert!(e.readonly, "a reload unlocked it");
+        e.insert_char('x');
+        e.undo();
+        assert_eq!(e.lines, ["the agent's"]);
+        assert!(!e.dirty);
+        e.readonly = false;
+        e.undo();
+        assert_eq!(e.lines, ["my locked brief text"]);
+    }
+
+    #[test]
+    fn moving_away_drops_the_selection() {
+        let mut e = md("one two\nthree");
+        e.anchor = Some((0, 0));
+        e.cx = 3;
+        e.find_next("three");
+        assert_eq!((e.anchor, e.cy), (None, 1));
+        e.anchor = Some((1, 0));
+        e.goto(1);
+        assert_eq!(e.anchor, None);
     }
 
     #[test]

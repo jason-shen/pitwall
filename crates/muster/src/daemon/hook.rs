@@ -86,6 +86,7 @@ pub async fn handle(d: &Arc<Daemon>, req: HookRequest) -> HookReply {
     match event {
         "Stop" => {
             if let Some(t) = &task {
+                d.turn_ended(t);
                 d.set_status(t, TaskStatus::Idle);
                 if d.cfg.snapshots.auto {
                     d.snapshot(t, "turn ended".into()).await;

@@ -443,6 +443,8 @@ pub struct App {
     /// AGENTS list; polled in the background.
     pub diffstats: HashMap<String, (usize, usize, usize)>,
     last_stats: Instant,
+    /// A diffstat pass is still running; slow repos mustn't stack them up.
+    stats_running: bool,
     /// Gap between git polls; grows when a repo is slow to scan.
     git_every: Duration,
     pub sidebar: bool,
@@ -575,6 +577,7 @@ impl App {
             last_git: Instant::now() - Duration::from_secs(60),
             diffstats: HashMap::new(),
             last_stats: Instant::now() - Duration::from_secs(60),
+            stats_running: false,
             git_every: Duration::from_millis(1500),
             sidebar: true,
             saved_settings: settings.clone(),
@@ -1864,6 +1867,7 @@ impl App {
                 self.reload_main();
             }
             Reply::Diffstats(v) => {
+                self.stats_running = false;
                 self.diffstats = v.into_iter().collect();
             }
             Reply::RemarksSent(id, r) => match r {
@@ -1877,6 +1881,9 @@ impl App {
                 self.refresh_git_now();
                 self.reload_main();
                 match result {
+                    // Don't replace a question that's already open; Remove
+                    // is in the agent's menu for later.
+                    Ok(m) if self.confirm.is_some() => self.notify(m, false),
                     Ok(m) => {
                         self.notify(m, false);
                         self.confirm = Some(Confirm::Remove {
@@ -2049,10 +2056,16 @@ impl App {
             Update::Done(r) => Some(r),
             Update::Stopped => None,
         };
-        let recorded = self
-            .brief_runs
-            .remove(&path)
-            .is_some_and(|r| r.recorded);
+        let run = self.brief_runs.remove(&path);
+        let recorded = run.as_ref().is_some_and(|r| r.recorded);
+        // Stopped or failed halfway: the file holds a partial brief. Put the
+        // one you wrote back; briefs aren't in git to recover it from.
+        let mut restored = None;
+        if !matches!(result, Some(Ok(()))) {
+            if let Some(r) = &run {
+                restored = Some(crate::briefs::put(&path, &r.original));
+            }
+        }
         // Take the last write now, or the next tick reports it as an outside change.
         for e in self.tabs.iter_mut().flat_map(|t| t.files.iter_mut()) {
             if e.path == path {
@@ -2062,10 +2075,16 @@ impl App {
                 }
             }
         }
+        if let Some(Err(e)) = restored {
+            return self.notify(
+                format!("couldn't put the brief back as it was ({e}); ⌘Z in its editor has it"),
+                true,
+            );
+        }
         match result {
             Some(Ok(())) => self.notify("brief filled in", false),
-            Some(Err(e)) => self.notify(format!("couldn't finish the brief: {e}"), true),
-            None => self.notify("stopped filling in the brief", false),
+            Some(Err(e)) => self.notify(format!("couldn't finish the brief: {e}; it's as you left it"), true),
+            None => self.notify("stopped; the brief is as you left it", false),
         }
     }
 
@@ -2483,6 +2502,9 @@ impl App {
     /// What every agent with a worktree has changed since it started, so
     /// finished agents can be told apart without opening each one.
     fn refresh_diffstats(&mut self) {
+        if self.stats_running {
+            return;
+        }
         self.last_stats = Instant::now();
         let jobs: Vec<(String, PathBuf, String)> = self
             .tasks
@@ -2494,6 +2516,7 @@ impl App {
             self.diffstats.clear();
             return;
         }
+        self.stats_running = true;
         let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
         std::thread::spawn(move || {
             let v = jobs

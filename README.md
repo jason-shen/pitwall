@@ -119,7 +119,7 @@ A brief is a short Markdown doc you write before handing work to an agent. **+ B
 
 The cursor lands on the **Ask:** line, where you say what you want in your own words. Fill in as much as you know, then:
 
-- **✦ Finish with AI** runs `claude -p` in the background with read-only tools (Read, Grep, Glob). It reads the code and fills in the rest, following the guide comment at the top of the template. Its reply streams straight into the brief, so you watch it write in the preview; the toolbar shows what it's reading meanwhile, with **Stop** to cancel. It can't ask you anything mid-run, so choices that change what gets built come back as options and a recommendation under Choices (or Open questions).
+- **✦ Finish with AI** runs `claude -p` in the background with read-only tools (Read, Grep, Glob). It reads the code and fills in the rest, following the guide comment at the top of the template. Its reply streams straight into the brief, so you watch it write in the preview; the toolbar shows what it's reading meanwhile, with **Stop** to cancel. The brief is locked while it writes; if you stop it or it fails, the brief goes back to exactly what you had. It can't ask you anything mid-run, so choices that change what gets built come back as options and a recommendation under Choices (or Open questions).
 - **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it with `muster brief tick <n>` (the daemon writes the brief, so this works for sandboxed agents too, and it's allowed without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
 
 Briefs are listed under their project and saved in `.muster/briefs/` in the project, which is git-ignored by default (delete `.muster/.gitignore` to commit them).
@@ -132,7 +132,7 @@ Markdown is always edited in the built-in editor, the way inkterm does it, with 
 
 ### Approvals and undo
 
-muster hooks into Claude Code for that session only, through `--settings`. Codex can be hooked the same way: set `hooks = "codex"` under `[agents.codex]` (it's off until you've tried it, since an older Codex that rejects the hook config won't start). Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
+muster hooks into Claude Code for that session only, through `--settings`. Codex can be hooked the same way: set `hooks = "codex"` under `[agents.codex]` (it's off until you've tried it, since an older Codex that rejects the hook config won't start). Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. Deny rules hold anywhere in the line, including behind `FOO=1`, `sudo` or `git -C dir`, and inside `bash -c '…'`, which is judged by the script it runs. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
 
 Finish with AI and agents rewriting an open file don't cost you your text: the version before is one ⌘Z away in the editor.
 
@@ -280,11 +280,11 @@ crates/
 scripts/macos-app.sh
 ```
 
-`cargo test --workspace` runs 67 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
+`cargo test --workspace` runs 70 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
 
 ## Known limitations
 
-- Terminals survive the app closing. When the daemon stops (`muster stop`, a reboot) their processes end; the next daemon starts them again in the same folders, and agents that had finished a turn resume their session (`resume_args` in each agent's config). A shell comes back as a fresh shell.
+- Terminals survive the app closing. When the daemon stops (`muster stop`, a reboot) their processes end; the next daemon starts them again in the same folders, with the same command (an editor card comes back as its editor), and agents that had finished a turn resume their session (`resume_args` in each agent's config); one that never got going starts over with its task. A shell comes back as a fresh shell. A task that can't start again (its folder is on a drive that isn't mounted, say) is kept for the next start rather than forgotten.
 - The approval bar works with Claude Code. Other agents' own prompts show as *waiting* and are answered in their tab.
 - The built-in editor has no multi-cursor. With nothing selected, copy and cut take the whole line.
 - Card sizes reset when the app restarts.

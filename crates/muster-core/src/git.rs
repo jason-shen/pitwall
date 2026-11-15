@@ -447,6 +447,20 @@ pub fn commit(dir: &Path, message: &str) -> Result<String> {
     Ok(format!("{}{}", out.trim(), head.trim()))
 }
 
+fn ensure_clean(repo_root: &Path, target: &str) -> Result<()> {
+    let dirty = run(
+        repo_root,
+        &["status", "--porcelain", "--untracked-files=no"],
+    )?;
+    if !dirty.trim().is_empty() {
+        bail!(
+            "{} has uncommitted changes on {target}; commit or stash them first",
+            repo_root.display()
+        );
+    }
+    Ok(())
+}
+
 /// Bring an agent's work home: commit what it left uncommitted in its
 /// worktree, then merge its branch into `target` in the main checkout.
 pub fn accept(
@@ -462,6 +476,9 @@ pub fn accept(
             root.display()
         );
     }
+    // Everything that can refuse the merge is checked before committing, so
+    // a refusal doesn't leave a commit behind in the agent's branch.
+    ensure_clean(root, target)?;
     let mut out = String::new();
     if worktree.is_dir() && !status(worktree)?.is_empty() {
         if message.trim().is_empty() {
@@ -504,16 +521,7 @@ pub fn shortstat(dir: &Path, base: &str) -> Result<(usize, usize, usize)> {
 /// Merge `branch` into whatever is checked out in `repo_root`.
 pub fn merge(repo_root: &Path, branch: &str) -> Result<String> {
     let target = current_branch(repo_root).unwrap_or_else(|| "HEAD".into());
-    let dirty = run(
-        repo_root,
-        &["status", "--porcelain", "--untracked-files=no"],
-    )?;
-    if !dirty.trim().is_empty() {
-        bail!(
-            "{} has uncommitted changes on {target}; commit or stash them first",
-            repo_root.display()
-        );
-    }
+    ensure_clean(repo_root, &target)?;
     match run(
         repo_root,
         &[
@@ -681,6 +689,12 @@ mod tests {
         assert!(accept(&d, &wt, "muster/x", "release", "msg").is_err());
         // Uncommitted work needs a message.
         assert!(accept(&d, &wt, "muster/x", "main", "  ").is_err());
+        // A dirty main checkout refuses before anything is committed.
+        std::fs::write(d.join("a.txt"), "mine\n").unwrap();
+        let head = run(&wt, &["rev-parse", "HEAD"]).unwrap();
+        assert!(accept(&d, &wt, "muster/x", "main", "Add b").is_err());
+        assert_eq!(run(&wt, &["rev-parse", "HEAD"]).unwrap(), head, "a refused accept committed");
+        run(&d, &["checkout", "-q", "--", "a.txt"]).unwrap();
 
         let out = accept(&d, &wt, "muster/x", "main", "Add b").unwrap();
         assert!(out.contains("committed") && out.contains("merged muster/x into main"), "{out}");

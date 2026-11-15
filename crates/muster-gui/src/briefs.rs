@@ -361,6 +361,8 @@ pub struct Run {
     pub status: String,
     /// The text from before the run is on the undo stack.
     pub recorded: bool,
+    /// The brief as it was, put back if the run stops or fails halfway.
+    pub original: String,
     child: Arc<Mutex<Child>>,
     stopped: Arc<AtomicBool>,
 }
@@ -410,6 +412,7 @@ pub fn finish(
     let run = Run {
         status: "starting".into(),
         recorded: false,
+        original: text.clone(),
         child: child.clone(),
         stopped: stopped.clone(),
     };
@@ -535,8 +538,13 @@ fn guide_of(text: &str) -> Option<&str> {
 
 /// Written whole and renamed over, so the editor never reloads half a file.
 fn write(path: &Path, head: &str, body: &str) -> std::io::Result<()> {
+    put(path, &format!("{head}{body}\n"))
+}
+
+/// Written whole and renamed over, so a reader never sees half a file.
+pub fn put(path: &Path, text: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, format!("{head}{body}\n"))?;
+    std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)
 }
 

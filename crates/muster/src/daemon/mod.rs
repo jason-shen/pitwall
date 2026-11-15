@@ -48,6 +48,9 @@ pub struct Daemon {
     /// Saving waits for restore, or a task started meanwhile would write a
     /// list that's missing the ones not back yet.
     restoring: std::sync::atomic::AtomicBool,
+    /// Saved tasks that couldn't start again (folder gone, agent missing).
+    /// Kept in tasks.json so one bad start doesn't forget them.
+    unrestored: Mutex<Vec<task::Saved>>,
 }
 
 impl Daemon {
@@ -65,6 +68,7 @@ impl Daemon {
             snap_tx,
             starting: Default::default(),
             restoring: std::sync::atomic::AtomicBool::new(true),
+            unrestored: Mutex::new(vec![]),
         }
     }
 
@@ -102,11 +106,14 @@ impl Daemon {
         let id = {
             let tasks = self.tasks.lock().unwrap();
             let mut starting = self.starting.lock().unwrap();
+            let kept: std::collections::HashSet<String> =
+                self.unrestored.lock().unwrap().iter().map(|s| s.id.clone()).collect();
             let base = task::slug(&req.name);
             let mut id = base.clone();
             let mut n = 2;
             while tasks.contains_key(&id)
                 || starting.contains(&id)
+                || kept.contains(&id)
                 || paths::snapshots().join(format!("{id}.git")).exists()
             {
                 id = format!("{base}-{n}");
@@ -209,7 +216,11 @@ impl Daemon {
         let (changed, first_turn) = {
             let mut st = t.state.lock().unwrap();
             if st.status != status && !matches!(st.status, TaskStatus::Exited { .. }) {
-                let first_turn = status == TaskStatus::Idle && !st.had_turn;
+                // Quiet after a prompt or after you typed: a turn ended.
+                // Quiet from the start is just an agent at its prompt.
+                let first_turn = status == TaskStatus::Idle
+                    && !st.had_turn
+                    && (t.prompt.is_some() || st.had_input);
                 st.had_turn |= first_turn;
                 st.status = status;
                 st.status_since = Instant::now();
@@ -223,6 +234,19 @@ impl Daemon {
         }
         // From now on a restart resumes its session instead of starting over.
         if first_turn {
+            self.save();
+        }
+    }
+
+    /// Claude's Stop hook: a turn really did end, whatever started it.
+    pub fn turn_ended(&self, t: &Task) {
+        let first = {
+            let mut st = t.state.lock().unwrap();
+            let first = !st.had_turn;
+            st.had_turn = true;
+            first
+        };
+        if first {
             self.save();
         }
     }
@@ -344,13 +368,14 @@ impl Daemon {
         if self.restoring.load(Ordering::SeqCst) {
             return;
         }
-        let saved: Vec<task::Saved> = self
+        let mut saved: Vec<task::Saved> = self
             .tasks
             .lock()
             .unwrap()
             .values()
             .map(|t| t.saved())
             .collect();
+        saved.extend(self.unrestored.lock().unwrap().iter().cloned());
         let path = paths::home().join("tasks.json");
         let tmp = path.with_extension("json.tmp");
         let res = serde_json::to_vec_pretty(&saved)
@@ -362,8 +387,9 @@ impl Daemon {
         }
     }
 
-    /// Start again the tasks the last daemon had, each in its own folder.
-    async fn restore(self: &Arc<Self>) {
+    /// The tasks the last daemon had, with their ids held back so nothing
+    /// started meanwhile can take one. Called before the socket opens.
+    fn load_saved(&self) -> Vec<task::Saved> {
         let path = paths::home().join("tasks.json");
         let saved: Vec<task::Saved> = match std::fs::read(&path) {
             Err(_) => vec![],
@@ -372,13 +398,23 @@ impl Daemon {
                 vec![]
             }),
         };
+        let mut starting = self.starting.lock().unwrap();
+        starting.extend(saved.iter().map(|s| s.id.clone()));
+        saved
+    }
+
+    /// Start again the tasks the last daemon had, each in its own folder.
+    async fn restore(self: &Arc<Self>, saved: Vec<task::Saved>) {
         for s in saved {
             let id = s.id.clone();
             if !s.place.cwd.is_dir() {
-                tracing::warn!("not restoring {id}: {} is gone", s.place.cwd.display());
+                tracing::warn!("not restoring {id} for now: {} is gone", s.place.cwd.display());
+                self.unrestored.lock().unwrap().push(s);
+                self.starting.lock().unwrap().remove(&id);
                 continue;
             }
             let cfg = self.cfg.clone();
+            let keep = s.clone();
             match tokio::task::spawn_blocking(move || Task::resume(s, &cfg)).await {
                 Ok(Ok(t)) => {
                     if self.cfg.snapshots.auto && t.snaps.is_some() {
@@ -387,12 +423,19 @@ impl Daemon {
                         }
                     }
                     tracing::info!("restored {id}");
-                    self.tasks.lock().unwrap().insert(id, t.clone());
+                    self.tasks.lock().unwrap().insert(id.clone(), t.clone());
                     self.emit_task(&t);
                 }
-                Ok(Err(e)) => tracing::warn!("couldn't restore {id}: {e:#}"),
-                Err(e) => tracing::warn!("couldn't restore {id}: {e}"),
+                Ok(Err(e)) => {
+                    tracing::warn!("couldn't restore {id}, keeping it for next time: {e:#}");
+                    self.unrestored.lock().unwrap().push(keep);
+                }
+                Err(e) => {
+                    tracing::warn!("couldn't restore {id}, keeping it for next time: {e}");
+                    self.unrestored.lock().unwrap().push(keep);
+                }
             }
+            self.starting.lock().unwrap().remove(&id);
         }
         self.restoring.store(false, Ordering::SeqCst);
         self.save();
@@ -553,7 +596,8 @@ pub async fn run() -> Result<()> {
     tokio::spawn(ticker(d.clone()));
     {
         let d = d.clone();
-        tokio::spawn(async move { d.restore().await });
+        let saved = d.load_saved();
+        tokio::spawn(async move { d.restore(saved).await });
     }
     tokio::spawn(snapshot_worker(d.clone(), snap_rx));
 

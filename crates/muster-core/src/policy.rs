@@ -17,7 +17,12 @@ pub struct Classification {
 pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
     let norm = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
     let (tier, why) = tier_of(cmd, &cfg.read_only_programs);
-    let rule_for = |text: &str| cfg.rules.iter().find(|r| wildcard(&r.pattern, text));
+    // Deny rules were checked above, so the first allow or ask rule speaks.
+    let rule_for = |text: &str| {
+        cfg.rules
+            .iter()
+            .find(|r| r.decision != Decision::Deny && wildcard(&r.pattern, text))
+    };
     let by_tier = |t: Tier| match t {
         Tier::ReadOnly => cfg.read_only,
         Tier::Mutating => cfg.mutating,
@@ -27,19 +32,26 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
         let note = r.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
         format!("rule `{}`{note}; {why}", r.pattern)
     };
-    // A deny rule holds wherever it matches in the line.
-    if let Some(r) = cfg
-        .rules
-        .iter()
-        .find(|r| r.decision == Decision::Deny && wildcard(&r.pattern, &norm))
-    {
+    // A deny rule holds wherever it matches: in any part of the line, behind
+    // `FOO=1`, `sudo` or `git -C dir`, or inside `bash -c '…'`.
+    let lexed = lex(cmd);
+    if let Some(r) = deny_rule(&norm, &lexed, cfg, 0) {
         return Classification {
             tier,
             decision: Decision::Deny,
             reason: ruled(r, &why),
         };
     }
-    let lexed = lex(cmd);
+    // `bash -c '…'` is judged by the script it runs, not by `bash`.
+    if let [seg] = lexed.segments.as_slice() {
+        if let Some(script) = shell_script(&seg.words).filter(|_| lexed.subs.is_empty()) {
+            let c = classify(script, cfg);
+            return Classification {
+                reason: format!("runs a script: {}", c.reason),
+                ..c
+            };
+        }
+    }
     if lexed.segments.len() <= 1 && lexed.subs.is_empty() {
         return match rule_for(&norm) {
             Some(r) => Classification {
@@ -61,9 +73,10 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
     let mut prev: Option<String> = None;
     for seg in &lexed.segments {
         let (t, _, prog) = seg_tier(seg, prev.as_deref(), &cfg.read_only_programs);
-        let d = match rule_for(&seg.words.join(" ")) {
-            Some(r) => r.decision,
-            None => by_tier(t),
+        let d = match (shell_script(&seg.words), rule_for(&seg.words.join(" "))) {
+            (Some(script), _) => classify(script, cfg).decision,
+            (None, Some(r)) => r.decision,
+            (None, None) => by_tier(t),
         };
         decision = stricter(decision, d);
         prev = prog;
@@ -71,6 +84,7 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
     for sub in &lexed.subs {
         decision = stricter(decision, classify(sub, cfg).decision);
     }
+
     // Keywords like `drop table` are found across the whole line, not per part.
     if tier == Tier::Destructive && why.starts_with("contains") {
         decision = stricter(decision, cfg.destructive);
@@ -80,6 +94,98 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
         decision,
         reason: why,
     }
+}
+
+/// The deny rule a command runs into, if any. Each part is tried as written
+/// and with its wrappers peeled off; scripts and substitutions recursively.
+fn deny_rule<'a>(
+    norm: &str,
+    lexed: &Lexed,
+    cfg: &'a PolicyConfig,
+    depth: usize,
+) -> Option<&'a crate::config::Rule> {
+    let denies: Vec<&crate::config::Rule> =
+        cfg.rules.iter().filter(|r| r.decision == Decision::Deny).collect();
+    if denies.is_empty() || depth > 4 {
+        return None;
+    }
+    let mut texts = vec![norm.to_string()];
+    for seg in &lexed.segments {
+        texts.push(seg.words.join(" "));
+        texts.push(unwrapped(&seg.words).join(" "));
+    }
+    if let Some(r) = texts
+        .iter()
+        .find_map(|t| denies.iter().find(|r| wildcard(&r.pattern, t)))
+    {
+        return Some(r);
+    }
+    let nested = lexed
+        .segments
+        .iter()
+        .filter_map(|s| shell_script(&s.words))
+        .chain(lexed.subs.iter().map(String::as_str));
+    for inner in nested {
+        let n = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some(r) = deny_rule(&n, &lex(inner), cfg, depth + 1) {
+            return Some(r);
+        }
+    }
+    None
+}
+
+/// The command without what's wrapped around it: `FOO=1`, `env`, `sudo`,
+/// `command`, `nohup`, `time`, `exec`, and git's own `-C dir` / `-c k=v`
+/// options before its subcommand.
+fn unwrapped(words: &[String]) -> Vec<String> {
+    let mut w: &[String] = words;
+    while let Some((first, rest)) = w.split_first() {
+        let assignment = first.contains('=')
+            && first.split('=').next().is_some_and(|k| {
+                !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+        if assignment || ["env", "sudo", "command", "nohup", "time", "exec"].contains(&first.as_str()) {
+            w = rest;
+        } else {
+            break;
+        }
+    }
+    let mut out: Vec<String> = vec![];
+    let mut it = w.iter().peekable();
+    if let Some(first) = it.next() {
+        out.push(first.clone());
+        if first == "git" {
+            while let Some(a) = it.peek() {
+                match a.as_str() {
+                    "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+                        it.next();
+                        it.next();
+                    }
+                    s if s.starts_with("--git-dir=") || s.starts_with("--work-tree=") => {
+                        it.next();
+                    }
+                    "--no-pager" | "-P" | "--no-optional-locks" | "--bare" => {
+                        it.next();
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+    out.extend(it.cloned());
+    out
+}
+
+/// The script in `bash -c '…'` (or sh, zsh, with -lc and friends).
+fn shell_script(words: &[String]) -> Option<&str> {
+    let words = &words[words.len() - unwrapped(words).len()..];
+    let [sh, flag, script, ..] = words else {
+        return None;
+    };
+    let sh = sh.rsplit('/').next().unwrap_or(sh);
+    let shell = ["sh", "bash", "zsh", "dash", "ksh", "fish"].contains(&sh);
+    let c = flag.starts_with('-') && !flag.starts_with("--") && flag.ends_with('c');
+    (shell && c).then_some(script.as_str())
 }
 
 fn stricter(a: Decision, b: Decision) -> Decision {
@@ -1351,6 +1457,26 @@ mod tests {
         assert_ne!(d("cargo test $(rm -rf ~)"), Decision::Allow);
         assert_eq!(d("cargo test && cargo clippy"), Decision::Allow);
         assert_eq!(d("ls && git push origin main --force"), Decision::Deny);
+    }
+
+    #[test]
+    fn deny_rules_see_through_wrappers_and_scripts() {
+        let cfg = crate::config::Config::default().policy;
+        let d = |c: &str| classify(c, &cfg).decision;
+        for c in [
+            "FOO=1 git push --force",
+            "git -C . push --force",
+            "sudo git -c core.x=1 push origin --force",
+            "bash -c 'git push --force'",
+            "/bin/sh -lc \"cd x && git push origin main --force\"",
+            "cd . && git push --force",
+            "cargo test && git push --force",
+        ] {
+            assert_eq!(d(c), Decision::Deny, "{c}");
+        }
+        assert_ne!(d("bash -c 'rm -rf ~'"), Decision::Allow);
+        assert_eq!(d("bash -c 'cargo test'"), Decision::Allow);
+        assert_eq!(d("cargo test --all"), Decision::Allow);
     }
 
     #[test]

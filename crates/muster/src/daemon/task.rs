@@ -40,6 +40,9 @@ pub struct TaskState {
     pub status_since: Instant,
     /// It has finished a turn, so the agent has a session to resume.
     pub had_turn: bool,
+    /// Someone typed into it or messaged it. With no prompt and no input,
+    /// going quiet isn't a turn: it's just sitting at its prompt.
+    pub had_input: bool,
 }
 
 pub struct Task {
@@ -55,6 +58,8 @@ pub struct Task {
     pub brief: Option<String>,
     /// The task it was started with, for starting it again if it never got going.
     pub prompt: Option<String>,
+    /// Its own arguments (an editor card's `-c "exec nvim …"`), kept for a restart.
+    pub args: Vec<String>,
     pub created_unix: i64,
     pid: Option<u32>,
     pub state: Mutex<TaskState>,
@@ -351,7 +356,7 @@ pub struct Place {
 
 /// What the daemon keeps of a task in tasks.json, to bring it back after a
 /// restart.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Saved {
     pub id: String,
     pub name: String,
@@ -362,6 +367,8 @@ pub struct Saved {
     pub brief: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
     #[serde(default)]
     pub had_turn: bool,
     pub created_unix: i64,
@@ -424,6 +431,7 @@ impl Task {
             agent: saved.agent,
             brief: saved.brief,
             prompt: if resume { None } else { saved.prompt },
+            args: saved.args,
             ..Default::default()
         };
         let extra = if resume {
@@ -450,6 +458,7 @@ impl Task {
             },
             brief: self.brief.clone(),
             prompt: self.prompt.clone(),
+            args: self.args.clone(),
             had_turn: self.state.lock().unwrap().had_turn,
             created_unix: self.created_unix,
         }
@@ -514,8 +523,9 @@ impl Task {
         cmd.cwd(&cwd);
         // CommandBuilder starts from the daemon's environment, so the other
         // terminal's variables have to be removed, not just left uncopied.
-        for (k, v) in std::env::vars() {
-            if other_terminal_var(&k) {
+        // vars_os: one variable that isn't UTF-8 would make vars() panic.
+        for (k, v) in std::env::vars_os() {
+            if k.to_str().is_some_and(other_terminal_var) {
                 cmd.env_remove(&k);
             } else {
                 cmd.env(k, v);
@@ -591,6 +601,7 @@ impl Task {
             base_branch,
             brief: req.brief.clone(),
             prompt: req.prompt.clone(),
+            args: req.args.clone(),
             created_unix,
             pid,
             state: Mutex::new(TaskState {
@@ -601,6 +612,7 @@ impl Task {
                 snap_count: 0,
                 status_since: Instant::now(),
                 had_turn: false,
+                had_input: false,
             }),
             term: Mutex::new(vt100::Parser::new_with_callbacks(
                 nz(rows, 40),
