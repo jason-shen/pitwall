@@ -1,6 +1,7 @@
 //! Shared types for muster: wire protocol, config, command policy, paths.
 
 pub mod agents;
+pub mod brief;
 pub mod client;
 pub mod config;
 pub mod editor;

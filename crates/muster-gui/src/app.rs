@@ -331,6 +331,11 @@ pub enum Confirm {
         prune: bool,
         text: String,
     },
+    DiscardHunk {
+        dir: PathBuf,
+        hunk: git::Hunk,
+        text: String,
+    },
     Discard {
         dir: PathBuf,
         change: Change,
@@ -352,6 +357,7 @@ impl Confirm {
             | Confirm::Revert { text, .. }
             | Confirm::Remove { text, .. }
             | Confirm::Discard { text, .. }
+            | Confirm::DiscardHunk { text, .. }
             | Confirm::CloseDirty { text, .. }
             | Confirm::RestartDaemon { text } => text,
         }
@@ -2208,15 +2214,6 @@ impl App {
         let repo = git::root(&dir).map(|p| p.display().to_string());
         let (rows, cols) = self.pane_grid();
         let shell = agent == "shell";
-        // The brief lives in the main checkout, outside the agent's worktree;
-        // this lets Claude tick its steps without asking. `=` keeps the
-        // variadic flag from swallowing the prompt after it.
-        let mut args = vec![];
-        if let Some(d) = brief.as_ref().and_then(|b| b.parent()) {
-            if self.cfg.agents.get(&agent).and_then(|a| a.hooks.as_deref()) == Some("claude") {
-                args.push(format!("--add-dir={}", d.display()));
-            }
-        }
         let req = NewTask {
             name,
             agent,
@@ -2224,7 +2221,7 @@ impl App {
             cwd: Some(dir.display().to_string()),
             repo,
             base: None,
-            args,
+            args: vec![],
             prompt,
             rows,
             cols,
@@ -2704,6 +2701,9 @@ impl App {
                     },
                 );
             }
+            Confirm::DiscardHunk { dir, hunk, .. } => self.git_op(move |_| {
+                git::discard_hunk(&dir, &hunk).map(|_| format!("discarded a hunk of {}", hunk.file))
+            }),
             Confirm::Discard { dir, change, .. } => self.git_op(move |_| {
                 git::discard_file(&dir, &change).map(|_| format!("discarded {}", change.path))
             }),

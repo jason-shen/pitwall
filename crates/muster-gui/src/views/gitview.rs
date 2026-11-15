@@ -524,6 +524,17 @@ fn main_panel(
             }
             _ => {}
         }
+        // Against the base the new side is the working tree too, so one of
+        // the agent's hunks can be thrown away on its own.
+        if let (Some(DiffMode::Unstaged | DiffMode::Base(_)), Some(h)) = (&mode, &cur_hunk) {
+            if ui
+                .small_button("discard hunk")
+                .on_hover_text("d: undo this hunk in the working tree")
+                .clicked()
+            {
+                acts.push(Action::DiscardHunk(h.clone()));
+            }
+        }
         if let Some(l) = &cur_line {
             if let Some(f) = &l.file {
                 if ui
@@ -850,6 +861,11 @@ fn main_key(app: &mut App, key: Key, m: egui::Modifiers, acts: &mut Vec<Action>)
             }
         }
         Key::R => acts.push(Action::Remark),
+        Key::D => {
+            if let (Some(DiffMode::Unstaged | DiffMode::Base(_)), Some(h)) = (mode, hunk) {
+                acts.push(Action::DiscardHunk(h));
+            }
+        }
         Key::E | Key::Enter => {
             if let Some(l) = line {
                 if let Some(f) = l.file {

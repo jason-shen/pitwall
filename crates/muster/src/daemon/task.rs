@@ -167,6 +167,16 @@ fn create_worktree(
     Ok((root, path, branch, base_sha, base_branch))
 }
 
+/// Remove a task's worktree, and its branch if that's merged. `-d` refuses
+/// an unmerged branch, so work that never made it back isn't lost.
+pub fn remove_branch(repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    remove_worktree(repo, path)?;
+    if let Err(e) = git(repo, &["branch", "-d", branch]) {
+        tracing::info!("kept {branch}: {e:#}");
+    }
+    Ok(())
+}
+
 pub fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
     git(
         repo,
@@ -825,6 +835,14 @@ fn other_terminal_var(k: &str) -> bool {
         "TERMINAL_EMULATOR",
         "COLUMNS",
         "LINES",
+        // A Claude Code session muster was started from. Its agents would
+        // count as that session's children, and Claude doesn't save a
+        // child's transcript, so `--continue` finds nothing after a restart.
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_CHILD_SESSION",
     ];
     const PREFIX: &[&str] = &[
         "TMUX_",
@@ -835,6 +853,8 @@ fn other_terminal_var(k: &str) -> bool {
         "ALACRITTY_",
         "KONSOLE_",
         "VSCODE_",
+        "CLAUDE_CODE_SESSION",
+        "CLAUDE_CODE_MESSAGING_",
     ];
     EXACT.contains(&k) || PREFIX.iter().any(|p| k.starts_with(p))
 }
@@ -970,6 +990,9 @@ mod tests {
             "ITERM_SESSION_ID",
             "KITTY_WINDOW_ID",
             "VSCODE_GIT_IPC_HANDLE",
+            "CLAUDECODE",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
         ] {
             assert!(super::other_terminal_var(k), "{k}");
         }
@@ -978,6 +1001,8 @@ mod tests {
             "HOME",
             "TERM",
             "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CONFIG_DIR",
             "LANG",
             "SSH_AUTH_SOCK",
         ] {

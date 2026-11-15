@@ -57,6 +57,8 @@ folder and what it is working on.
 It is told the message came from you and how to answer.
 - `muster read <id>` prints the last lines of its screen (`-n 80` for more).
 - `muster wait <id>` blocks until it finishes its turn (`--timeout <secs>`, default 600).
+- `muster brief` lists the steps of the brief you were handed, if any; `muster brief tick <n>` \
+marks step n done.
 A message from another agent arrives in your prompt as `[message from agent <id>; reply with: ...] <text>`. \
 Answer it with `muster tell <id> \"...\"` once you have something to say. Only message other agents \
 when the work calls for it: to hand something off, ask for something only they know, or report back.";

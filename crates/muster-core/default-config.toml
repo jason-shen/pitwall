@@ -102,6 +102,7 @@ rules = [
   { pattern = "muster wait *", decision = "allow" },
   { pattern = "muster tell *", decision = "allow" },
   { pattern = "muster guide*", decision = "allow" },
+  { pattern = "muster brief*", decision = "allow" },
 ]
 # Extra program names to treat as read-only.
 read_only_programs = []

@@ -356,9 +356,17 @@ pub fn parse(text: &str) -> ParsedDiff {
 }
 
 fn apply_cached(dir: &Path, patch: &str, reverse: bool) -> Result<()> {
+    apply(dir, patch, reverse, true)
+}
+
+fn apply(dir: &Path, patch: &str, reverse: bool, cached: bool) -> Result<()> {
     let root = root(dir).unwrap_or_else(|| dir.to_path_buf());
     let mut c = git(&root);
-    c.args(["apply", "--cached", "--recount", "--whitespace=nowarn"]);
+    c.arg("apply");
+    if cached {
+        c.arg("--cached");
+    }
+    c.args(["--recount", "--whitespace=nowarn"]);
     if reverse {
         c.arg("-R");
     }
@@ -386,6 +394,12 @@ pub fn stage_hunk(dir: &Path, h: &Hunk) -> Result<()> {
 
 pub fn unstage_hunk(dir: &Path, h: &Hunk) -> Result<()> {
     apply_cached(dir, &h.patch(), true)
+}
+
+/// Undo one hunk in the working tree. The hunk has to be from a diff whose
+/// new side is the working tree (unstaged, or against the agent's base).
+pub fn discard_hunk(dir: &Path, h: &Hunk) -> Result<()> {
+    apply(dir, &h.patch(), true, false)
 }
 
 impl Hunk {
@@ -593,6 +607,23 @@ mod tests {
         run(&d, &["add", "."]).unwrap();
         run(&d, &["commit", "-qm", "init"]).unwrap();
         d
+    }
+
+    #[test]
+    fn one_hunk_against_the_base_can_be_thrown_away() {
+        let d = repo();
+        let base = run(&d, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        // Two far-apart edits make two hunks; one is committed, as an agent's
+        // work often is, and the other left in the working tree.
+        std::fs::write(d.join("a.txt"), "ONE\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n").unwrap();
+        run(&d, &["commit", "-qam", "agent"]).unwrap();
+        std::fs::write(d.join("a.txt"), "ONE\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\nFIFTEEN\n").unwrap();
+        let p = parse(&diff(&d, &DiffMode::Base(base), None).unwrap());
+        assert_eq!(p.hunks.len(), 2);
+        discard_hunk(&d, &p.hunks[0]).unwrap();
+        let now = std::fs::read_to_string(d.join("a.txt")).unwrap();
+        assert!(now.starts_with("1\n") && now.ends_with("FIFTEEN\n"), "{now}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Tests run in parallel in one process, and two of them can read the

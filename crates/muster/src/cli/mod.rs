@@ -453,6 +453,26 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
                 .await?;
             println!("sent to {id}");
         }
+        Cmd::Brief { action, step, id } => {
+            let Some(id) = id.or_else(|| std::env::var("MUSTER_TASK_ID").ok().filter(|s| !s.is_empty()))
+            else {
+                bail!("run this inside an agent, or name one with --id");
+            };
+            let step = match (action.as_deref(), step) {
+                (None, _) => None,
+                (Some(_), Some(n)) => Some(n),
+                (Some(a), None) => bail!("which step? muster brief {a} <number>"),
+            };
+            let req = Request::Brief {
+                id,
+                step,
+                done: action.as_deref() == Some("tick"),
+            };
+            let Response::Text(t) = client.call(req).await? else {
+                bail!("unexpected reply")
+            };
+            println!("{t}");
+        }
         Cmd::Read { id, lines } => {
             let Response::Text(t) = client.call(Request::Read { id, lines }).await? else {
                 bail!("unexpected reply")
@@ -481,7 +501,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
             println!(
                 "removed {id}{}",
                 if prune {
-                    " and its worktree (branch kept)"
+                    ", its worktree and snapshots (and its branch, if merged)"
                 } else {
                     ""
                 }

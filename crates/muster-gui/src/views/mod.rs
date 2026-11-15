@@ -59,6 +59,7 @@ enum Action {
     FinishBrief(PathBuf),
     StopBrief(PathBuf),
     Remark,
+    DiscardHunk(muster_core::git::Hunk),
     SendRemarks(String),
     ClearRemarks(String),
     HandOffBrief(PathBuf),
@@ -2514,8 +2515,9 @@ fn md_toolbar(
     );
     // A narrow card keeps the buttons and drops the words around them.
     let compact = strip.width() < 760.0;
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let (icon, name) = match brief.then(|| crate::briefs::template_of(&text)).flatten() {
+    // From the cached brief list: this runs every frame.
+    let entry = brief.then(|| app.brief_entry(path)).flatten();
+    let (icon, name) = match entry.as_ref().and_then(|e| e.template) {
         Some(t) => (t.icon, format!("{} brief", t.name)),
         None if brief => ("✎", "Brief".to_string()),
         None => ("¶", "Markdown".to_string()),
@@ -2554,7 +2556,7 @@ fn md_toolbar(
                 acts.push(Action::OpenBeside(t.id.clone()));
             }
             let (state, color) = state_label(t);
-            let (done, all) = crate::briefs::progress(&text);
+            let (done, all) = entry.as_ref().map_or((0, 0), |e| (e.done, e.steps));
             let steps = if all > 0 {
                 format!(" · {done}/{all} steps")
             } else {
@@ -4841,6 +4843,17 @@ fn apply(app: &mut App, a: Action) {
         Action::FinishBrief(p) => app.finish_brief(&p),
         Action::StopBrief(p) => app.stop_brief(&p),
         Action::Remark => app.start_remark(),
+        Action::DiscardHunk(h) => {
+            let text = format!(
+                "Throw away this hunk of {}?\n\nIt's undone in the working tree. The agent's snapshots still have it.",
+                h.file
+            );
+            app.confirm = Some(Confirm::DiscardHunk {
+                dir: app.ctx_dir(),
+                hunk: h,
+                text,
+            });
+        }
         Action::SendRemarks(id) => app.send_remarks(&id),
         Action::ClearRemarks(id) => {
             app.remarks.remove(&id);

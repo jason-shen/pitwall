@@ -81,6 +81,16 @@ enum Cmd {
     /// Message an agent: typed into its prompt and submitted. From inside an
     /// agent, it's told who sent it and how to reply.
     Tell { id: String, text: Vec<String> },
+    /// The brief this agent was handed: its steps, numbered.
+    /// `muster brief tick 2` marks step 2 done; `untick` undoes it.
+    Brief {
+        #[arg(value_parser = ["tick", "untick"])]
+        action: Option<String>,
+        step: Option<usize>,
+        /// The task (default: the agent this runs in).
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Print the last lines of a task's screen.
     Read {
         id: String,
@@ -99,7 +109,7 @@ enum Cmd {
 
     /// Kill a task's process (keeps worktree and snapshots).
     Kill { id: String },
-    /// Remove a task. --prune also deletes its worktree (the branch is kept).
+    /// Remove a task. --prune also deletes its worktree and snapshots, and its branch if it's merged.
     Rm {
         id: String,
         #[arg(long)]

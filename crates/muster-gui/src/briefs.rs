@@ -241,30 +241,13 @@ pub struct Entry {
     /// Steps ticked and steps in all.
     pub done: usize,
     pub steps: usize,
+    pub template: Option<&'static Template>,
 }
 
-/// Ticked and total checkboxes, leaving out the template's empty `- [ ]`
-/// placeholders and anything in the guide comment.
+/// Ticked and total steps.
 pub fn progress(text: &str) -> (usize, usize) {
-    let (mut done, mut all) = (0, 0);
-    for l in strip_comments(text).lines() {
-        let l = l.trim_start();
-        let Some(rest) = l.strip_prefix("- [").or_else(|| l.strip_prefix("* [")) else {
-            continue;
-        };
-        let mut c = rest.chars();
-        let (Some(mark), Some(']')) = (c.next(), c.next()) else {
-            continue;
-        };
-        if c.as_str().trim().is_empty() {
-            continue;
-        }
-        all += 1;
-        if mark == 'x' || mark == 'X' {
-            done += 1;
-        }
-    }
-    (done, all)
+    let s = muster_core::brief::steps(text);
+    (s.iter().filter(|s| s.done).count(), s.len())
 }
 
 /// A project's briefs in the order they were written, so the list doesn't
@@ -273,7 +256,7 @@ pub fn list(root: &Path) -> Vec<Entry> {
     let Ok(rd) = std::fs::read_dir(dir(root)) else {
         return vec![];
     };
-    let mut v: Vec<(std::time::SystemTime, PathBuf, String, usize, usize)> = rd
+    let mut v: Vec<(std::time::SystemTime, Entry)> = rd
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "md"))
@@ -286,18 +269,18 @@ pub fn list(root: &Path) -> Vec<Entry> {
             let text = std::fs::read_to_string(&p).unwrap_or_default();
             let title = title_of(&p, &text);
             let (done, steps) = progress(&text);
-            (born, p, title, done, steps)
+            let entry = Entry {
+                path: p,
+                title,
+                done,
+                steps,
+                template: template_of(&text),
+            };
+            (born, entry)
         })
         .collect();
-    v.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-    v.into_iter()
-        .map(|(_, path, title, done, steps)| Entry {
-            path,
-            title,
-            done,
-            steps,
-        })
-        .collect()
+    v.sort_by(|a, b| (a.0, &a.1.path).cmp(&(b.0, &b.1.path)));
+    v.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Write a new brief from a template and return its path. The briefs folder
@@ -583,8 +566,8 @@ pub fn handoff_prompt(path: &Path, text: &str) -> String {
     format!(
         "Build what this brief describes. It's saved at {path}. Work through its steps in order \
          and keep to its scope; if something in it turns out to be wrong, say so before changing \
-         course. As you finish each step, tick its box in that file (`- [ ]` to `- [x]`), and \
-         change nothing else there: that's how I follow along.\n\n---\n\n{brief}",
+         course. As you finish each step, run `muster brief tick <n>` with its number \
+         (`muster brief` lists them): that's how I follow along.\n\n---\n\n{brief}",
         path = path.display(),
         brief = strip_comments(text)
     )

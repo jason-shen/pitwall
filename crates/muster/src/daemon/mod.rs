@@ -318,11 +318,17 @@ impl Daemon {
         self.tasks.lock().unwrap().remove(&t.id);
         self.save();
         if prune {
-            if let Some(repo) = &t.repo {
-                if t.branch.is_some() {
-                    let (repo, cwd) = (repo.clone(), t.cwd.clone());
-                    tokio::task::spawn_blocking(move || task::remove_worktree(&repo, &cwd))
-                        .await??;
+            if let (Some(repo), Some(branch)) = (&t.repo, &t.branch) {
+                let (repo, cwd, branch) = (repo.clone(), t.cwd.clone(), branch.clone());
+                tokio::task::spawn_blocking(move || task::remove_branch(&repo, &cwd, &branch))
+                    .await??;
+            }
+            // Nothing can revert to these once the task is gone, and leaving
+            // them makes the next task with this name `<name>-2`.
+            let store = paths::snapshots().join(format!("{}.git", t.id));
+            if let Err(e) = std::fs::remove_dir_all(&store) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("couldn't remove {}: {e}", store.display());
                 }
             }
         }

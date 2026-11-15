@@ -215,6 +215,26 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             });
             Response::Ok
         }
+        Request::Brief { id, step, done } => {
+            let t = d.task(&id)?;
+            let Some(path) = t.brief.clone() else {
+                anyhow::bail!("{} wasn't handed a brief", t.id);
+            };
+            // The daemon writes it, not the agent: the brief is outside the
+            // agent's worktree, where a sandboxed agent can't write.
+            let text = std::fs::read_to_string(&path)?;
+            let text = match step {
+                Some(n) => {
+                    let new = muster_core::brief::set(&text, n, done).map_err(anyhow::Error::msg)?;
+                    let tmp = format!("{path}.tmp");
+                    std::fs::write(&tmp, &new)?;
+                    std::fs::rename(&tmp, &path)?;
+                    new
+                }
+                None => text,
+            };
+            Response::Text(muster_core::brief::listing(&text))
+        }
         Request::Read { id, lines } => {
             Response::Text(d.task(&id)?.tail_text(lines.clamp(1, 500)).join("\n"))
         }

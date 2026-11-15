@@ -89,7 +89,7 @@ Whatever is on screen sits in a **card**. ⌘⇧D splits, and you can tile as ma
 
 lazygit's layout and keys for the project's repo: Status, Changed files, Branches, Commits and (for agents) the undo history, with the diff beside them. Stage and unstage whole files or single hunks, discard, commit, check out a branch, and double-click a diff line to open the file there. An agent with its own worktree has its own Changes, with **vs base** (everything the agent did on its branch).
 
-Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch it forked from. Your checkout has to be on that branch. Afterwards muster offers to remove the agent, its worktree and branch. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
+Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch it forked from. Your checkout has to be on that branch. Afterwards muster offers to remove the agent, its worktree, its snapshots and (now that it's merged) its branch. To throw away part of what it did first, **discard hunk** (`d`) undoes one hunk in its worktree, in vs base as well as in Unstaged. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
 
 ### Files and editors
 
@@ -120,7 +120,7 @@ A brief is a short Markdown doc you write before handing work to an agent. **+ B
 The cursor lands on the **Ask:** line, where you say what you want in your own words. Fill in as much as you know, then:
 
 - **✦ Finish with AI** runs `claude -p` in the background with read-only tools (Read, Grep, Glob). It reads the code and fills in the rest, following the guide comment at the top of the template. Its reply streams straight into the brief, so you watch it write in the preview; the toolbar shows what it's reading meanwhile, with **Stop** to cancel. It can't ask you anything mid-run, so choices that change what gets built come back as options and a recommendation under Choices (or Open questions).
-- **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it (a Claude agent gets `--add-dir` for the briefs folder so it can, without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
+- **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it with `muster brief tick <n>` (the daemon writes the brief, so this works for sandboxed agents too, and it's allowed without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
 
 Briefs are listed under their project and saved in `.muster/briefs/` in the project, which is git-ignored by default (delete `.muster/.gitignore` to commit them).
 
@@ -151,6 +151,8 @@ muster agents                          # every agent and terminal: status, folde
 muster tell reviewer "check the login fix, then tell me"
 muster wait reviewer                   # block until its turn ends
 muster read reviewer -n 60             # the end of its screen
+muster brief                           # the steps of the brief you were handed
+muster brief tick 2                    # mark step 2 done (untick to undo)
 ```
 
 `muster tell` types the message into the other agent's prompt and submits it, marked with who it's from and how to answer:
@@ -200,7 +202,7 @@ The keys inside a card (the terminal's, the editor's and Changes', below) are fi
 
 **Terminal:** ⌘C / ⌘V copy and paste (Ctrl+Shift+C / V on Linux) · ⌘F find in the scrollback · ⌘↑ / ⌘↓ previous / next command · ⌘K clear · ⌘-click a link or path · double-click a word, triple-click a line · Shift+PageUp / PageDown scroll back · mouse reporting for vim, htop and tmux (hold Shift to select instead) · right-click for copy, paste, copy the last command's output and snippets.
 
-**Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `r` comment on the line · `m` accept (commit and merge) · undo history: `r` revert to here, `n` checkpoint.
+**Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `r` comment on the line · `d` discard the hunk · `m` accept (commit and merge) · undo history: `r` revert to here, `n` checkpoint.
 
 **Built-in editor:** ⌘S save · ⌘Z / ⌘⇧Z undo, redo · ⌘F find, ⌘G next · ⌘L go to line · ⌘K delete line · ⌘R reload from disk.
 
@@ -278,7 +280,7 @@ crates/
 scripts/macos-app.sh
 ```
 
-`cargo test --workspace` runs 57 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor and its Markdown keys, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs, Markdown scroll sync, shortcuts and secret redaction.
+`cargo test --workspace` runs 60 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor and its Markdown keys, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
 
 ## Known limitations
 

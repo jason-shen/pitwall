@@ -290,6 +290,13 @@ pub enum Request {
         text: String,
         from: Option<String>,
     },
+    /// The steps of the brief a task was handed, ticking or unticking
+    /// `step` (from 1) first when given. Answers with the list.
+    Brief {
+        id: String,
+        step: Option<usize>,
+        done: bool,
+    },
     /// The last `lines` non-blank lines of a task's screen.
     Read {
         id: String,
