@@ -48,6 +48,10 @@ pub struct AgentConfig {
     pub hooks: Option<String>,
     #[serde(default = "yes")]
     pub attention_on_idle: bool,
+    /// Arguments that pick up the last session when the daemon restarts the
+    /// agent in its worktree (`--continue` for claude). Empty: start fresh.
+    #[serde(default)]
+    pub resume_args: Vec<String>,
 }
 
 fn default_prompt_mode() -> String {
@@ -151,8 +155,11 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load `~/.muster/config.toml` (if present) merged over the defaults.
+    /// Load `~/.config/muster/config.toml` (if present) merged over the
+    /// defaults. Sections it doesn't know, like the app's `[app]` and
+    /// `[keys]`, are left alone.
     pub fn load() -> Result<Config> {
+        crate::paths::migrate_config();
         Self::load_from(&crate::paths::config())
     }
 

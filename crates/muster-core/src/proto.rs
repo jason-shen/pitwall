@@ -95,6 +95,12 @@ pub struct TaskInfo {
     /// to what the session is about, as herdr shows under each agent.
     #[serde(default)]
     pub title: Option<String>,
+    /// The brief it was handed, if it was started from one.
+    #[serde(default)]
+    pub brief: Option<String>,
+    /// The branch its worktree forked from, which is where Accept merges it.
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -169,6 +175,9 @@ pub struct NewTask {
     pub prompt: Option<String>,
     pub rows: u16,
     pub cols: u16,
+    /// The brief this agent is building, so the two stay linked.
+    #[serde(default)]
+    pub brief: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

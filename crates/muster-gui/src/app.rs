@@ -78,6 +78,7 @@ pub struct CmdBar {
 pub enum NewKind {
     Agent,
     Project,
+    Brief,
 }
 
 /// The popup that names a new agent or project before it's created.
@@ -91,6 +92,42 @@ pub struct NewForm {
     pub worktree: bool,
     pub dir: String,
     pub focus_set: bool,
+    /// A brief's template, an index into `briefs::TEMPLATES`.
+    pub template: usize,
+    /// The brief this agent is handed, linked to it once it starts.
+    pub brief: Option<PathBuf>,
+}
+
+/// A review comment on one line of an agent's diff, waiting to be sent.
+#[derive(Clone)]
+pub struct Remark {
+    pub file: String,
+    pub line: Option<usize>,
+    /// The diff line it's about, as shown.
+    pub quote: String,
+    pub text: String,
+}
+
+/// A project's briefs as last read, and when.
+type BriefList = (Instant, Vec<crate::briefs::Entry>);
+
+/// How a Markdown file's card shows it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MdMode {
+    Edit,
+    /// The editor with the rendered page beside it.
+    Preview,
+}
+
+/// Keeps the editor and the preview beside it scrolled to the same place:
+/// where each one was last frame, and where the preview's blocks landed.
+#[derive(Default)]
+pub struct MdSync {
+    pub editor_top: usize,
+    pub preview_y: f32,
+    pub anchors: crate::markdown::Anchors,
+    /// The preview's scroll to apply next frame, when the editor moved.
+    pub scroll_to: Option<f32>,
 }
 
 /// A task name the way the daemon turns it into an id and branch.
@@ -219,6 +256,14 @@ pub enum Reply {
     },
     Created(TaskInfo, bool),
     Notice(String, bool),
+    Brief(PathBuf, crate::briefs::Update),
+    /// A git command run off the UI thread finished.
+    GitDone(Result<String, String>),
+    Accepted {
+        id: String,
+        result: Result<String, String>,
+    },
+    RemarksSent(String, Result<usize, String>),
 }
 
 pub struct GitData {
@@ -265,9 +310,15 @@ impl Marks {
 }
 
 pub enum Confirm {
-    Merge {
+    /// Commit what the agent left in its worktree, merge its branch into the
+    /// one it forked from, then offer to remove it.
+    Accept {
+        id: String,
         root: PathBuf,
+        worktree: PathBuf,
         branch: String,
+        target: String,
+        message: String,
         text: String,
     },
     Revert {
@@ -297,7 +348,7 @@ pub enum Confirm {
 impl Confirm {
     pub fn text(&self) -> &str {
         match self {
-            Confirm::Merge { text, .. }
+            Confirm::Accept { text, .. }
             | Confirm::Revert { text, .. }
             | Confirm::Remove { text, .. }
             | Confirm::Discard { text, .. }
@@ -349,6 +400,13 @@ pub struct App {
     pub new_form: Option<NewForm>,
     /// Task being renamed in the sidebar, and the text typed so far.
     pub renaming: Option<(String, String)>,
+    /// How each Markdown file is shown, and its scroll sync.
+    pub md_mode: HashMap<PathBuf, MdMode>,
+    pub md_sync: HashMap<PathBuf, MdSync>,
+    /// The headless claude filling in each brief.
+    pub brief_runs: HashMap<PathBuf, crate::briefs::Run>,
+    briefs_cache: std::cell::RefCell<HashMap<String, BriefList>>,
+    repo_cache: std::cell::RefCell<HashMap<String, bool>>,
     /// The terminal last put in a card, for a project's Changes or Files to
     /// go back to.
     pub last_term: Option<String>,
@@ -379,6 +437,13 @@ pub struct App {
     pub sidebar: bool,
     pub settings: Settings,
     saved_settings: Settings,
+    /// config.toml as last read or written, to notice when it's edited by hand.
+    config_seen: Option<std::time::SystemTime>,
+    config_checked: Instant,
+    /// Mistakes found in config.toml at startup, shown once the window's up.
+    config_problems: Vec<String>,
+    /// Settings → Shortcuts is waiting for keys for this command.
+    pub capturing: Option<&'static str>,
     pub settings_ui: Option<SettingsUi>,
     fonts: FontSet,
     applied_font: Option<(Option<TermFont>, u16, u16)>,
@@ -390,6 +455,11 @@ pub struct App {
     /// The commit message popup is open.
     pub committing: bool,
     pub confirm: Option<Confirm>,
+    /// Review comments per agent, sent back to it together.
+    pub remarks: HashMap<String, Vec<Remark>>,
+    /// The comment being written: its agent and the line it's on.
+    pub remarking: Option<(String, Remark)>,
+    git_lock: std::sync::Arc<std::sync::Mutex<()>>,
     pub notice: Option<(String, Instant, bool)>,
     /// Keyboard goes to the active pane (vs. a text field / sidebar).
     pub focus_pane: bool,
@@ -418,6 +488,7 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         workspace: PathBuf,
         settings: Settings,
+        config_problems: Vec<String>,
         transparent: bool,
     ) -> App {
         let ctx = cc.egui_ctx.clone();
@@ -466,6 +537,11 @@ impl App {
             active: 0,
             project: None,
             rename_in_tab: false,
+            md_mode: HashMap::new(),
+            md_sync: HashMap::new(),
+            brief_runs: HashMap::new(),
+            briefs_cache: Default::default(),
+            repo_cache: Default::default(),
             last_term: None,
             col_w: vec![],
             row_w: vec![],
@@ -489,6 +565,10 @@ impl App {
             git_every: Duration::from_millis(1500),
             sidebar: true,
             saved_settings: settings.clone(),
+            config_seen: config_mtime(),
+            config_checked: Instant::now(),
+            config_problems,
+            capturing: None,
             settings,
             settings_ui: None,
             fonts,
@@ -499,6 +579,9 @@ impl App {
             commit_msg: String::new(),
             committing: false,
             confirm: None,
+            git_lock: Default::default(),
+            remarks: HashMap::new(),
+            remarking: None,
             notice: None,
             focus_pane: true,
             find: None,
@@ -1345,21 +1428,22 @@ impl App {
             if !self.item_exists(id) {
                 continue;
             }
-            let builtin = !matches!(
-                crate::editors::resolve(&self.settings.editor),
-                crate::editors::Kind::Terminal(_)
-            );
+            let setting = self.settings.editor.clone();
             let tab_width = self.cfg.tui.tab_width;
             let it = self.item_mut(id);
             it.expanded = il.expanded;
             it.opened = il.opened.iter().filter(|p| p.is_file()).cloned().collect();
-            if builtin {
-                it.files = it
-                    .opened
-                    .iter()
-                    .filter_map(|p| Editor::open(p, tab_width).ok())
-                    .collect();
-            }
+            it.files = it
+                .opened
+                .iter()
+                .filter(|p| {
+                    !matches!(
+                        crate::editors::for_file(&setting, p),
+                        crate::editors::Kind::Terminal(_)
+                    )
+                })
+                .filter_map(|p| Editor::open(p, tab_width).ok())
+                .collect();
         }
         self.cards = cards;
         self.saved_layout = Some(l);
@@ -1444,6 +1528,7 @@ impl App {
 
     fn tick(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        self.watch_config();
         self.save_layout();
         self.drain_notifications();
         if self.frame.is_multiple_of(20) {
@@ -1462,8 +1547,18 @@ impl App {
         let theme = self.cfg.tui.theme.clone();
         let mut reloaded = vec![];
         for e in self.tabs.iter_mut().flat_map(|t| t.files.iter_mut()) {
-            if e.check_disk() {
-                reloaded.push(e.name());
+            // A brief being filled in reloads several times a second: one
+            // undo step back to what you wrote, no notice each time, and no
+            // typing into it meanwhile.
+            match self.brief_runs.get_mut(&e.path) {
+                Some(run) => {
+                    e.readonly = true;
+                    if e.check_disk_with(!run.recorded) {
+                        run.recorded = true;
+                    }
+                }
+                None if e.check_disk() => reloaded.push(e.name()),
+                None => {}
             }
             e.rehighlight_if_due(&theme);
         }
@@ -1718,7 +1813,7 @@ impl App {
                 if let Some(p) = self.pending_parent.take().filter(|_| shell) {
                     self.parent_of.insert(id.clone(), p);
                 }
-                if self.open_in_new_card && shell {
+                if self.open_in_new_card {
                     self.open_in_new_card = false;
                     self.open_beside(&id);
                 } else {
@@ -1742,6 +1837,41 @@ impl App {
                 }
             }
             Reply::Notice(m, e) => self.notify(m, e),
+            Reply::Brief(path, u) => self.on_brief(path, u),
+            Reply::GitDone(r) => {
+                match r {
+                    Ok(m) if !m.is_empty() => self.notify(m, false),
+                    Ok(_) => {}
+                    Err(e) => self.notify(e, true),
+                }
+                self.refresh_git_now();
+                self.reload_main();
+            }
+            Reply::RemarksSent(id, r) => match r {
+                Ok(n) => {
+                    self.remarks.remove(&id);
+                    self.notify(format!("sent {n} comment(s) to {id}"), false);
+                }
+                Err(e) => self.notify(format!("couldn't send the comments: {e}"), true),
+            },
+            Reply::Accepted { id, result } => {
+                self.refresh_git_now();
+                self.reload_main();
+                match result {
+                    Ok(m) => {
+                        self.notify(m, false);
+                        self.confirm = Some(Confirm::Remove {
+                            text: format!(
+                                "{id} is merged. Remove it, its worktree and branch?\n\n\
+                                 Its snapshots go too."
+                            ),
+                            id,
+                            prune: true,
+                        });
+                    }
+                    Err(e) => self.notify(e, true),
+                }
+            }
         }
     }
 
@@ -1776,6 +1906,8 @@ impl App {
             worktree: self.settings.worktree,
             dir: self.project_dir().display().to_string(),
             focus_set: false,
+            template: 0,
+            brief: None,
         });
     }
 
@@ -1790,7 +1922,164 @@ impl App {
             worktree: self.settings.worktree,
             dir: String::new(),
             focus_set: false,
+            template: 0,
+            brief: None,
         });
+    }
+
+    pub fn open_new_brief(&mut self) {
+        self.bar = None;
+        self.new_form = Some(NewForm {
+            kind: NewKind::Brief,
+            name: String::new(),
+            name_edited: false,
+            task: String::new(),
+            agent: self.settings.default_agent.clone(),
+            worktree: self.settings.worktree,
+            dir: self.project.clone().unwrap_or_default(),
+            focus_set: false,
+            template: 0,
+            brief: None,
+        });
+    }
+
+    /// Open a brief (or any project file) under its project's own item.
+    pub fn open_brief(&mut self, path: &Path) {
+        let Some(root) = path.ancestors().nth(3).map(|p| p.display().to_string()) else {
+            return;
+        };
+        if self.project.as_deref() != Some(root.as_str()) {
+            self.project = Some(root.clone());
+            self.cards.truncate(1);
+            self.active = 0;
+            self.zoom = false;
+        }
+        self.md_mode
+            .entry(path.to_path_buf())
+            .or_insert(MdMode::Preview);
+        self.open_path(project_item(&root), path.to_path_buf(), None);
+    }
+
+    /// Whether a folder is in a git repo, asked once per folder: the New
+    /// agent form wants to know every frame while it's open.
+    pub fn is_repo_cached(&self, dir: &str) -> bool {
+        let mut c = self.repo_cache.borrow_mut();
+        if let Some(v) = c.get(dir) {
+            return *v;
+        }
+        let v = git::root(&muster_core::paths::expand(dir)).is_some();
+        c.insert(dir.to_string(), v);
+        v
+    }
+
+    /// A brief's entry from the cached list: title and progress.
+    pub fn brief_entry(&self, path: &Path) -> Option<crate::briefs::Entry> {
+        let root = path.ancestors().nth(3)?.display().to_string();
+        self.briefs(&root).into_iter().find(|e| e.path == path)
+    }
+
+    /// The agent handed this brief, newest first if it went to more than one.
+    pub fn brief_agent(&self, path: &Path) -> Option<&TaskInfo> {
+        let p = path.display().to_string();
+        self.tasks
+            .values()
+            .filter(|t| t.brief.as_deref() == Some(p.as_str()))
+            .max_by_key(|t| t.created_unix)
+    }
+
+    /// claude fills in the rest of a brief headless, writing into the file
+    /// as its reply streams in.
+    pub fn finish_brief(&mut self, path: &Path) {
+        if self.brief_runs.contains_key(path) {
+            return;
+        }
+        let Some(root) = path.ancestors().nth(3).map(Path::to_path_buf) else {
+            return;
+        };
+        let Some(agent) = self.cfg.agents.get("claude") else {
+            return self.notify("Finish with AI runs claude: add [agents.claude] to config.toml", true);
+        };
+        let (tx, ctx, p) = (self.tx.clone(), self.ctx.clone(), path.to_path_buf());
+        let send = move |u| {
+            let _ = tx.send(Ev::Reply(Reply::Brief(p.clone(), u)));
+            ctx.request_repaint();
+        };
+        match crate::briefs::finish(agent, &root, path, send) {
+            Ok(run) => {
+                self.brief_runs.insert(path.to_path_buf(), run);
+            }
+            Err(e) => self.notify(format!("couldn't start {}: {e}", agent.command), true),
+        }
+    }
+
+    pub fn stop_brief(&mut self, path: &Path) {
+        if let Some(r) = self.brief_runs.get(path) {
+            r.stop();
+        }
+    }
+
+    fn on_brief(&mut self, path: PathBuf, u: crate::briefs::Update) {
+        use crate::briefs::Update;
+        let result = match u {
+            Update::Status(s) => {
+                if let Some(r) = self.brief_runs.get_mut(&path) {
+                    r.status = s;
+                }
+                return;
+            }
+            Update::Done(r) => Some(r),
+            Update::Stopped => None,
+        };
+        let recorded = self
+            .brief_runs
+            .remove(&path)
+            .is_some_and(|r| r.recorded);
+        // Take the last write now, or the next tick reports it as an outside change.
+        for e in self.tabs.iter_mut().flat_map(|t| t.files.iter_mut()) {
+            if e.path == path {
+                e.readonly = false;
+                if !e.dirty {
+                    e.reload_with(!recorded);
+                }
+            }
+        }
+        match result {
+            Some(Ok(())) => self.notify("brief filled in", false),
+            Some(Err(e)) => self.notify(format!("couldn't finish the brief: {e}"), true),
+            None => self.notify("stopped filling in the brief", false),
+        }
+    }
+
+    /// The New agent form, filled in from a brief: its title as the name,
+    /// the brief as the task, the project as the folder.
+    pub fn hand_off_brief(&mut self, path: &Path) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => return self.notify(format!("couldn't read the brief: {e}"), true),
+        };
+        let title = crate::briefs::title_of(path, &text);
+        self.open_new_agent(&crate::briefs::handoff_prompt(path, &text));
+        if let Some(f) = self.new_form.as_mut() {
+            f.name = slugify(&title);
+            f.name_edited = true;
+            f.brief = Some(path.to_path_buf());
+            if let Some(root) = path.ancestors().nth(3) {
+                f.dir = root.display().to_string();
+            }
+        }
+    }
+
+    /// A project's briefs, read from disk at most every couple of seconds.
+    pub fn briefs(&self, root: &str) -> Vec<crate::briefs::Entry> {
+        let mut cache = self.briefs_cache.borrow_mut();
+        if let Some((at, v)) = cache.get(root) {
+            if at.elapsed() < Duration::from_secs(2) {
+                return v.clone();
+            }
+        }
+        let v = crate::briefs::list(Path::new(root));
+        cache.insert(root.to_string(), (std::time::Instant::now(), v.clone()));
+        v
     }
 
     /// Why the form can't be submitted yet, if it can't.
@@ -1805,6 +2094,15 @@ impl App {
                     Some(format!("{id} is already taken"))
                 } else if !muster_core::paths::expand(f.dir.trim()).is_dir() {
                     Some("That folder doesn't exist".into())
+                } else {
+                    None
+                }
+            }
+            NewKind::Brief => {
+                if f.name.trim().is_empty() {
+                    Some("Give it a title".into())
+                } else if f.dir.is_empty() {
+                    Some("Open a project first".into())
                 } else {
                     None
                 }
@@ -1833,9 +2131,31 @@ impl App {
         let dir = muster_core::paths::expand(f.dir.trim());
         let dir = dir.canonicalize().unwrap_or(dir);
         match f.kind {
+            NewKind::Brief => {
+                let t =
+                    &crate::briefs::TEMPLATES[f.template.min(crate::briefs::TEMPLATES.len() - 1)];
+                match crate::briefs::create(&dir, &f.name, t) {
+                    Ok(p) => {
+                        self.briefs_cache.borrow_mut().remove(&f.dir);
+                        self.open_brief(&p);
+                        // Ready to type the request.
+                        for it in self.tabs.iter_mut() {
+                            for e in it.files.iter_mut().filter(|e| e.path == p) {
+                                if let Some(i) =
+                                    e.lines.iter().position(|l| l.starts_with("**Ask:**"))
+                                {
+                                    e.cy = i;
+                                    e.cx = e.lines[i].chars().count();
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => self.notify(format!("couldn't write the brief: {e}"), true),
+                }
+            }
             NewKind::Agent => {
                 let task = Some(f.task.trim().to_string()).filter(|t| !t.is_empty());
-                self.create_task(f.agent, slugify(&f.name), task, f.worktree, dir);
+                self.create_task_with(f.agent, slugify(&f.name), task, f.worktree, dir, f.brief);
             }
             NewKind::Project => {
                 let root = git::root(&dir).unwrap_or(dir.clone());
@@ -1873,9 +2193,30 @@ impl App {
         worktree: bool,
         dir: PathBuf,
     ) {
+        self.create_task_with(agent, name, prompt, worktree, dir, None)
+    }
+
+    pub fn create_task_with(
+        &mut self,
+        agent: String,
+        name: String,
+        prompt: Option<String>,
+        worktree: bool,
+        dir: PathBuf,
+        brief: Option<PathBuf>,
+    ) {
         let repo = git::root(&dir).map(|p| p.display().to_string());
         let (rows, cols) = self.pane_grid();
         let shell = agent == "shell";
+        // The brief lives in the main checkout, outside the agent's worktree;
+        // this lets Claude tick its steps without asking. `=` keeps the
+        // variadic flag from swallowing the prompt after it.
+        let mut args = vec![];
+        if let Some(d) = brief.as_ref().and_then(|b| b.parent()) {
+            if self.cfg.agents.get(&agent).and_then(|a| a.hooks.as_deref()) == Some("claude") {
+                args.push(format!("--add-dir={}", d.display()));
+            }
+        }
         let req = NewTask {
             name,
             agent,
@@ -1883,10 +2224,11 @@ impl App {
             cwd: Some(dir.display().to_string()),
             repo,
             base: None,
-            args: vec![],
+            args,
             prompt,
             rows,
             cols,
+            brief: brief.map(|b| b.display().to_string()),
         };
         self.call(Request::NewTask(req), move |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t, shell)),
@@ -1949,6 +2291,15 @@ impl App {
         let Some(item) = self.target().map(|t| self.changes_item(&t.item)) else {
             return;
         };
+        self.open_path(item, path, line);
+    }
+
+    /// Open `path` under `item` in whichever editor the settings pick.
+    pub fn open_path(&mut self, item: String, path: PathBuf, line: Option<usize>) {
+        let rel = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         {
             let it = self.item_mut(&item);
             if !it.opened.contains(&path) {
@@ -1960,7 +2311,7 @@ impl App {
             item,
             child: Child::File(path.clone()),
         });
-        match crate::editors::resolve(&self.settings.editor) {
+        match crate::editors::for_file(&self.settings.editor, &path) {
             crate::editors::Kind::Terminal(cmd) => {
                 return self.open_in_terminal_editor(&cmd, &path, line.unwrap_or(1));
             }
@@ -2041,6 +2392,7 @@ impl App {
             prompt: None,
             rows,
             cols,
+            brief: None,
         };
         self.call(Request::NewTask(req), move |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t, true)),
@@ -2091,7 +2443,61 @@ impl App {
         }
     }
 
-    pub fn merge_prompt(&mut self) {
+    /// Start a comment on the line under the diff cursor.
+    pub fn start_remark(&mut self) {
+        let Some(it) = self.tabs.get(self.cur) else {
+            return;
+        };
+        if !self.tasks.get(&it.id).is_some_and(|t| t.agent != "shell") {
+            return self.notify("comments go to an agent; open an agent's Changes", true);
+        }
+        let d = &it.git.diff;
+        let Some(l) = d.parsed.lines.get(d.cursor) else {
+            return;
+        };
+        let Some(file) = l.file.clone() else {
+            return self.notify("put the cursor on a line of the diff", true);
+        };
+        let quote: String = l.text.trim().chars().take(100).collect();
+        self.remarking = Some((
+            it.id.clone(),
+            Remark {
+                file,
+                line: l.new_line,
+                quote,
+                text: String::new(),
+            },
+        ));
+    }
+
+    /// Every comment for this agent, typed into its prompt as one message.
+    pub fn send_remarks(&mut self, id: &str) {
+        let Some(list) = self.remarks.get(id).filter(|l| !l.is_empty()) else {
+            return;
+        };
+        let n = list.len();
+        let mut text = String::from(
+            "Review comments on your changes. Address each one, then tell me what you changed:",
+        );
+        for (i, r) in list.iter().enumerate() {
+            let at = match r.line {
+                Some(l) => format!("{}:{l}", r.file),
+                None => r.file.clone(),
+            };
+            text.push_str(&format!(" ({}) {at}, on `{}`: {}", i + 1, r.quote, r.text.trim()));
+        }
+        let id2 = id.to_string();
+        self.call(
+            Request::Prompt {
+                id: id.to_string(),
+                text,
+                from: None,
+            },
+            move |r| Some(Reply::RemarksSent(id2, r.map(|_| n))),
+        );
+    }
+
+    pub fn accept_prompt(&mut self) {
         let Some(t) = self
             .ctx_task
             .as_ref()
@@ -2101,26 +2507,72 @@ impl App {
             return self.notify("select an agent with its own branch", true);
         };
         let (Some(branch), Some(root)) = (t.branch.clone(), t.repo.clone()) else {
-            return self.notify("this task runs in place (no branch to merge)", true);
+            return self.notify("this agent works in place: there's no branch to merge", true);
         };
         let root = PathBuf::from(root);
-        let target = git::current_branch(&root).unwrap_or_else(|| "HEAD".into());
-        let mut text = format!("Merge {branch} into {target} in {}?", root.display());
-        if !self.changes.is_empty() {
-            text.push_str(&format!("\n\n{} uncommitted change(s) in the agent's worktree are not included. Commit them first.", self.changes.len()));
+        let here = git::current_branch(&root);
+        // Older daemons don't say; then it's whatever the main checkout is on.
+        let target = t
+            .base_branch
+            .clone()
+            .or_else(|| here.clone())
+            .unwrap_or_else(|| "HEAD".into());
+        let message = t
+            .brief
+            .as_ref()
+            .map(|b| {
+                let b = Path::new(b);
+                crate::briefs::title_of(b, &std::fs::read_to_string(b).unwrap_or_default())
+            })
+            .or_else(|| t.title.clone())
+            .unwrap_or_else(|| t.name.clone());
+        let mut text = format!("Accept {}?", t.id);
+        let pending = self.changes.len();
+        if pending > 0 {
+            text.push_str(&format!(
+                "\n\n• Commit its {pending} uncommitted change(s) on {branch} with this message"
+            ));
         }
-        self.confirm = Some(Confirm::Merge { root, branch, text });
+        text.push_str(&format!("\n• Merge {branch} into {target} in {}", root.display()));
+        if here.as_deref() != Some(target.as_str()) {
+            text.push_str(&format!(
+                "\n\nYour checkout is on {}, not {target}. Check out {target} first.",
+                here.as_deref().unwrap_or("a detached HEAD")
+            ));
+        }
+        self.confirm = Some(Confirm::Accept {
+            id: t.id.clone(),
+            root,
+            worktree: PathBuf::from(&t.cwd),
+            branch,
+            target,
+            message,
+            text,
+        });
     }
 
-    pub fn git_op(&mut self, f: impl FnOnce(&Path) -> anyhow::Result<String>) {
+    /// Run a git command off the UI thread: a commit's hooks or a big
+    /// checkout would freeze the window. One at a time, in order, so quick
+    /// hunk stages don't fight over the index lock.
+    pub fn git_op(&mut self, f: impl FnOnce(&Path) -> anyhow::Result<String> + Send + 'static) {
         let dir = self.ctx_dir();
-        match f(&dir) {
-            Ok(msg) if !msg.is_empty() => self.notify(msg, false),
-            Ok(_) => {}
-            Err(e) => self.notify(format!("{e:#}"), true),
-        }
-        self.refresh_git_now();
-        self.reload_main();
+        self.in_background(move || f(&dir).map_err(|e| format!("{e:#}")), Reply::GitDone);
+    }
+
+    fn in_background<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+        reply: impl FnOnce(T) -> Reply + Send + 'static,
+    ) {
+        let (tx, ctx, lock) = (self.tx.clone(), self.ctx.clone(), self.git_lock.clone());
+        std::thread::spawn(move || {
+            let out = {
+                let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
+                work()
+            };
+            let _ = tx.send(Ev::Reply(reply(out)));
+            ctx.request_repaint();
+        });
     }
 
     pub fn decide(&mut self, id: u64, allow: bool) {
@@ -2135,11 +2587,16 @@ impl App {
             .approvals
             .values()
             .find(|a| matches!(&a.source, ApprovalSource::Task { task_id, .. } if Some(task_id) == ctx.as_ref()))
-            .or_else(|| self.approvals.values().next())
             .map(|a| a.id);
+        // Only the agent on screen: the shortcut mustn't answer for a command
+        // you haven't seen.
         match pick {
             Some(id) => self.decide(id, allow),
-            None => self.notify("no pending approvals", false),
+            None if self.approvals.is_empty() => self.notify("no pending approvals", false),
+            None => self.notify(
+                "this agent has nothing to approve; ⌘⇧A goes to the one waiting",
+                false,
+            ),
         }
     }
 
@@ -2188,10 +2645,22 @@ impl App {
 
     pub fn run_confirm(&mut self, c: Confirm) {
         match c {
-            Confirm::Merge { root, branch, .. } => match git::merge(&root, &branch) {
-                Ok(m) => self.notify(m, false),
-                Err(e) => self.notify(format!("{e:#}"), true),
-            },
+            Confirm::Accept {
+                id,
+                root,
+                worktree,
+                branch,
+                target,
+                message,
+                ..
+            } => {
+                self.notify(format!("accepting {id}…"), false);
+                let id2 = id.clone();
+                self.in_background(
+                    move || accept(&root, &worktree, &branch, &target, &message),
+                    move |result| Reply::Accepted { id: id2, result },
+                );
+            }
             Confirm::Revert { task, snapshot, .. } => {
                 let Some(client) = self.client.clone() else {
                     return;
@@ -2235,10 +2704,9 @@ impl App {
                     },
                 );
             }
-            Confirm::Discard { dir, change, .. } => match git::discard_file(&dir, &change) {
-                Ok(_) => self.git_op(|_| Ok(format!("discarded {}", change.path))),
-                Err(e) => self.notify(format!("{e:#}"), true),
-            },
+            Confirm::Discard { dir, change, .. } => self.git_op(move |_| {
+                git::discard_file(&dir, &change).map(|_| format!("discarded {}", change.path))
+            }),
             Confirm::CloseDirty { tab, .. } => self.close_tab(tab, true),
             Confirm::RestartDaemon { .. } => {
                 // The connection loop notices the daemon is gone and starts
@@ -2273,13 +2741,75 @@ impl App {
         }
         if self.settings != self.saved_settings {
             match self.settings.save() {
-                Ok(()) => self.saved_settings = self.settings.clone(),
+                Ok(()) => {
+                    self.saved_settings = self.settings.clone();
+                    self.config_seen = config_mtime();
+                }
                 Err(e) => {
                     // Don't retry every frame; the next change tries again.
                     self.saved_settings = self.settings.clone();
                     self.notify(format!("couldn't save settings: {e}"), true);
                 }
             }
+        }
+    }
+}
+
+/// Commit what the agent left uncommitted in its worktree, then merge its
+/// branch into `target` in the main checkout.
+fn accept(
+    root: &Path,
+    worktree: &Path,
+    branch: &str,
+    target: &str,
+    message: &str,
+) -> Result<String, String> {
+    let e = |e: anyhow::Error| format!("{e:#}");
+    if git::current_branch(root).as_deref() != Some(target) {
+        return Err(format!(
+            "{} isn't on {target}; check it out, then accept again",
+            root.display()
+        ));
+    }
+    let mut out = String::new();
+    if worktree.is_dir() && !git::status(worktree).map_err(e)?.is_empty() {
+        git::stage_all(worktree).map_err(e)?;
+        let c = git::commit(worktree, message).map_err(e)?;
+        out.push_str(&format!("committed {c}; "));
+    }
+    out.push_str(&git::merge(root, branch).map_err(e)?);
+    Ok(out)
+}
+
+fn config_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(muster_core::paths::config())
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+impl App {
+    /// Pick up config.toml edited outside the app, every couple of seconds.
+    fn watch_config(&mut self) {
+        for p in std::mem::take(&mut self.config_problems) {
+            self.notify(p, true);
+        }
+        if self.config_checked.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.config_checked = Instant::now();
+        let now = config_mtime();
+        if now == self.config_seen {
+            return;
+        }
+        self.config_seen = now;
+        let (s, problems) = Settings::load();
+        self.settings = s.clone();
+        self.saved_settings = s;
+        if problems.is_empty() {
+            self.notify("reloaded config.toml", false);
+        }
+        for p in problems {
+            self.notify(p, true);
         }
     }
 }

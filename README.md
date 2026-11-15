@@ -7,10 +7,11 @@ A terminal app for running coding agents side by side.
 muster is a GPU-drawn terminal built around projects and the agents working in them. Your terminals, Claude Code / Codex / OpenCode sessions, each project's git changes and files, and an editor all live in one window. You can see at a glance which agent is working, which one is waiting on you and what each one is doing, and step in without switching apps.
 
 - **Projects first.** The sidebar is a tree of your projects. Each one holds its Changes, its Files and its terminals; agents across every project are listed below by what needs you.
-- **Real terminals that outlive the window.** Every tab is a real PTY owned by a background daemon. Close muster and your terminals and agents keep running; open it again and everything is where you left it.
+- **Real terminals that outlive the window.** Every tab is a real PTY owned by a background daemon. Close muster and your terminals and agents keep running; open it again and everything is where you left it. If the daemon itself restarts, each one comes back in its own folder, and Claude and Codex pick up their last session.
 - **Tabs and tiles.** A project's terminals are tabs. Drag one onto another to tile them, resize the tiles, swap them, maximize one.
 - **Agents in their own worktrees.** An agent you start from muster gets its own git worktree and branch (`muster/<name>`), an undo timeline of snapshots, and an approval bar for the commands it wants to run.
 - **Agents that talk to each other.** Agents can list each other, send messages and wait on each other's work through the `muster` command.
+- **Briefs.** Plan a change in a Markdown doc from a template, let an agent finish it, then hand it to a new agent to build.
 - **Git and an editor built in.** lazygit-style Changes with hunk staging, commit and merge; a file tree that opens files in the built-in editor, nvim/helix inside the card, or VS Code, Zed and friends.
 
 ## Install
@@ -66,7 +67,7 @@ Terminals follow `cd`. A terminal that moves into another repo moves to that pro
 
 ### Agents
 
-AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. Right-click for its Changes, merge, kill or remove.
+AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. An agent handed a brief shows the brief's title and how many of its steps are ticked. Right-click for its Changes, its brief, Accept, kill or remove.
 
 Any terminal running claude, codex, opencode, gemini, aider, goose, amp and other agent CLIs counts as an agent, whether muster started it or you typed it. When one is blocked on a numbered prompt, its choices show as buttons under it in the tree, so you can answer without opening it.
 
@@ -79,14 +80,16 @@ Whatever is on screen sits in a **card**. ⌘⇧D splits, and you can tile as ma
 - drag a tab onto another tab, or onto a card, to tile it beside that one;
 - drag a card's title bar onto another card to swap them;
 - drag the gap between cards to resize them, double-click it to even them out;
-- ⌥H / J / K / L move between cards, ⌥⇧H / J / K / L swap, ⌥Z maximizes, ⌥W closes (the modifier can be ⌃⌥ or off in Settings);
+- ⌥H / J / K / L move between cards, ⌥⇧H / J / K / L swap, ⌥Z maximizes, ⌥W closes (rebind them in Settings → Shortcuts);
 - right-click a title bar to maximize, swap, broadcast or close.
 
 **Broadcast** (⌘⇧B) sends your typing to every terminal card at once.
 
 ### Changes
 
-lazygit's layout and keys for the project's repo: Status, Changed files, Branches, Commits and (for agents) the undo history, with the diff beside them. Stage and unstage whole files or single hunks, discard, commit, check out a branch, and double-click a diff line to open the file there. An agent with its own worktree has its own Changes, with **vs base** (everything the agent did on its branch) and **merge** to bring its branch back into your checkout.
+lazygit's layout and keys for the project's repo: Status, Changed files, Branches, Commits and (for agents) the undo history, with the diff beside them. Stage and unstage whole files or single hunks, discard, commit, check out a branch, and double-click a diff line to open the file there. An agent with its own worktree has its own Changes, with **vs base** (everything the agent did on its branch).
+
+Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch it forked from. Your checkout has to be on that branch. Afterwards muster offers to remove the agent, its worktree and branch. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
 
 ### Files and editors
 
@@ -97,11 +100,41 @@ The project's file tree. Clicking a file opens it in the editor you choose in Se
 - a **desktop editor** (VS Code, Cursor, Zed, Sublime, JetBrains IDEs) opened at the line, while the built-in editor follows along and reloads as you save;
 - or `$VISUAL` / `$EDITOR`.
 
+Markdown files always open in the built-in editor, whatever you pick here (see below).
+
 ⌘-click a path in a terminal (`src/app.rs:42` too) to open it the same way.
+
+### Briefs
+
+A brief is a short Markdown doc you write before handing work to an agent. **+ Brief** under a project opens a popup with a title and six templates made for this kind of work:
+
+| Template | For |
+|---|---|
+| ✦ Feature | Something new the app should do: problem, scope, approach, choices, steps |
+| ✕ Bug fix | Something broken: what happens, how to see it, cause, fix |
+| ↻ Refactor | Change the shape, keep the behaviour, and prove nothing broke |
+| ◐ UI polish | How a screen should look and feel, with its states |
+| ◇ Spike | Find out first: options and a recommendation |
+| □ Blank | A title and an Ask line |
+
+The cursor lands on the **Ask:** line, where you say what you want in your own words. Fill in as much as you know, then:
+
+- **✦ Finish with AI** runs `claude -p` in the background with read-only tools (Read, Grep, Glob). It reads the code and fills in the rest, following the guide comment at the top of the template. Its reply streams straight into the brief, so you watch it write in the preview; the toolbar shows what it's reading meanwhile, with **Stop** to cancel. It can't ask you anything mid-run, so choices that change what gets built come back as options and a recommendation under Choices (or Open questions).
+- **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it (a Claude agent gets `--add-dir` for the briefs folder so it can, without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
+
+Briefs are listed under their project and saved in `.muster/briefs/` in the project, which is git-ignored by default (delete `.muster/.gitignore` to commit them).
+
+### Markdown
+
+Any Markdown file, briefs included, opens with **Edit** and **Preview**. Preview puts the rendered page next to the editor, and the two scroll together: scroll either one and the other follows. It renders headings, lists, task boxes, code blocks, quotes, tables and links; briefs open in Preview.
+
+Markdown is always edited in the built-in editor, the way inkterm does it. Lists, tasks and quotes carry on when you press Enter, and Enter on an empty item ends the list. **⌘T** turns the line into a task or ticks it, **⌘B** makes the word bold and **⌘E** makes it code (press again to undo either). A colon at the end of a line doesn't indent the next one.
 
 ### Approvals and undo
 
-muster hooks into Claude Code for that session only, through `--settings`. Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. The rules are yours to change in the config.
+muster hooks into Claude Code for that session only, through `--settings`. Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
+
+Finish with AI and agents rewriting an open file don't cost you your text: the version before is one ⌘Z away in the editor.
 
 Every agent also has a shadow-git timeline: a snapshot before each tool call, after file changes and at the end of each turn. Diff any step, revert to it, and undo a revert.
 
@@ -130,28 +163,44 @@ Claude Code agents started by muster are told all of this in their system prompt
 
 ## Shortcuts
 
-App commands use **⌘⇧** on macOS and **Ctrl+Shift** on Linux, as in keel, so plain ⌘ and every Ctrl key stay with the terminal (Ctrl+C still interrupts).
+Every command has a shortcut, and every shortcut can be changed: in **Settings → Shortcuts** click one and press the new keys (Esc cancels, Backspace leaves the command without one), or edit `[keys]` in config.toml:
+
+```toml
+[keys]
+command_bar = ["cmd+shift+p", "cmd+p"]   # a list gives a command more than one
+new_agent = "cmd+shift+n"                # cmd is ⌘ on macOS and Ctrl elsewhere
+card_left = "alt+h"
+clear_terminal = ""                      # no shortcut
+```
+
+Clashes are flagged in Settings, and **⌘⇧/** lists everything as it's set now. The defaults follow keel: app commands on **⌘⇧** (**Ctrl+Shift** on Linux), so plain ⌘ and every Ctrl key stay with the terminal (Ctrl+C still interrupts).
 
 | | macOS | Linux |
 |---|---|---|
 | Command bar: open a file, jump to an agent, start a task | ⌘⇧P or ⌘P | Ctrl+Shift+P |
-| New agent / new terminal | ⌘⇧N / ⌘⇧T | Ctrl+Shift+N / T |
+| New agent / terminal / project / brief | ⌘⇧N / ⌘⇧T / ⌘⌥N / ⌘⌥B | Ctrl+Shift+N / T, Ctrl+Alt+N / B |
 | Next agent that needs you | ⌘⇧A | Ctrl+Shift+A |
-| Approve / reject the pending command | ⌘⇧Y / ⌘⇧R | Ctrl+Shift+Y / R |
+| Approve / reject this agent's pending command | ⌘⇧Y / ⌘⇧R | Ctrl+Shift+Y / R |
+| Brief: finish with AI / hand to agent | ⌘⌥F / ⌘⌥↵ | Ctrl+Alt+F / Enter |
 | Changes / Files / undo history (again to go back) | ⌘⇧G / ⌘⇧O / ⌘⇧U | Ctrl+Shift+G / O / U |
+| Markdown: edit or preview | ⌘⌥P | Ctrl+Alt+P |
 | Split / close the focused card or open file | ⌘⇧D / ⌘⇧W | Ctrl+Shift+D / W |
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl+Tab | Ctrl+Tab / Ctrl+Shift+Tab |
+| Rename the tab / close the terminal | ⌘⌥R / ⌘⌥W | Ctrl+Alt+R / W |
 | Switch project / previous, next | ⌘1–9 / ⌘⇧J, ⌘⇧K | Ctrl+1–9 / Ctrl+Shift+J, K |
 | Broadcast typing to every terminal card | ⌘⇧B | Ctrl+Shift+B |
+| Clear the terminal | ⌘K | none |
 | Hide or show the sidebar | ⌘⇧E | Ctrl+Shift+E |
 | Font bigger / smaller / reset | ⌘= / ⌘- / ⌘0 | Ctrl+= / - / 0 |
 | Settings / all shortcuts | ⌘, / ⌘⇧/ | Ctrl+, / Ctrl+Shift+/ |
 
 **Cards:** ⌥H / J / K / L focus, ⌥⇧H / J / K / L swap, ⌥Return new terminal in its own card, ⌥W close, ⌥Z maximize.
 
+The keys inside a card (the terminal's, the editor's and Changes', below) are fixed.
+
 **Terminal:** ⌘C / ⌘V copy and paste (Ctrl+Shift+C / V on Linux) · ⌘F find in the scrollback · ⌘↑ / ⌘↓ previous / next command · ⌘K clear · ⌘-click a link or path · double-click a word, triple-click a line · Shift+PageUp / PageDown scroll back · mouse reporting for vim, htop and tmux (hold Shift to select instead) · right-click for copy, paste, copy the last command's output and snippets.
 
-**Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `m` merge its branch · undo history: `r` revert to here, `n` checkpoint.
+**Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `r` comment on the line · `m` accept (commit and merge) · undo history: `r` revert to here, `n` checkpoint.
 
 **Built-in editor:** ⌘S save · ⌘Z / ⌘⇧Z undo, redo · ⌘F find, ⌘G next · ⌘L go to line · ⌘K delete line · ⌘R reload from disk.
 
@@ -177,7 +226,7 @@ muster stop                              # stop the daemon and everything it run
 
 ## Configure
 
-**`~/.muster/config.toml`** is shared by the daemon, CLI and both UIs. `muster init` writes it with every option documented:
+**`~/.config/muster/config.toml`** holds every setting: the daemon's, the CLI's and both apps'. `muster init` writes it with every option documented (an older `~/.muster/config.toml` is moved here the first time muster runs). The daemon's sections look like this:
 
 ```toml
 [agents.aider]
@@ -195,17 +244,18 @@ rules = [{ pattern = "cargo test*", decision = "allow" }]
 theme = "base16-ocean.dark" # the editor's syntax theme
 ```
 
-**Settings** (⌘, or ⚙ at the foot of the sidebar) holds the app's look and behaviour, saved to `~/.muster/gui.json`:
+**Settings** (⌘, or ⚙ at the foot of the sidebar) is the app's half of the same file, written as `[app]` and `[keys]` at the end of it. Change things in either place: muster picks up a hand edit within a couple of seconds, and keeps your comments and the daemon's sections when it saves.
 
 - font (any installed monospace font or a font file), weight, bold weight, size and line height; pick a Nerd Font if your prompt uses icons;
 - one of 26 colour themes, cursor style, transparency and blur;
 - your editor, the default agent and whether new agents get a worktree;
-- tabs at the top or bottom, and the card keys' modifier;
+- tabs at the top or bottom;
+- every shortcut (below);
 - snippets: commands you run often, from the command bar or a terminal's right-click menu.
 
 Without a chosen font muster uses SF Mono or Menlo (JetBrains Mono or DejaVu on Linux) with symbol, CJK and colour emoji fallbacks, or `MUSTER_FONT=/path/to/font.ttf`.
 
-The layout (projects, tabs, cards and open files) is saved to `~/.muster/layout.json` and put back on the next launch.
+What isn't a setting stays in `~/.muster`: the layout (projects, tabs, cards and open files) in `layout.json`, put back on the next launch, and the names you give projects and tabs, and which projects are folded, in `state.json`.
 
 ## How it works
 
@@ -228,11 +278,11 @@ crates/
 scripts/macos-app.sh
 ```
 
-`cargo test --workspace` runs 45 tests: the command policy, config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages and secret redaction.
+`cargo test --workspace` runs 57 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor and its Markdown keys, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs, Markdown scroll sync, shortcuts and secret redaction.
 
 ## Known limitations
 
-- Terminals survive the app closing, not the daemon stopping (`muster stop`). Worktrees and snapshots always survive.
+- Terminals survive the app closing. When the daemon stops (`muster stop`, a reboot) their processes end; the next daemon starts them again in the same folders, and agents that had finished a turn resume their session (`resume_args` in each agent's config). A shell comes back as a fresh shell.
 - The approval bar works with Claude Code. Other agents' own prompts show as *waiting* and are answered in their tab.
 - The built-in editor has no multi-cursor and no text selection yet; copy and cut work on whole lines.
 - Card sizes reset when the app restarts.

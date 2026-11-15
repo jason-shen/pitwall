@@ -1,154 +1,17 @@
-//! Cards on the stage: the grid they sit in and the Mod-key bindings that move
-//! focus and cards around. From keel's tiling.rs, without its stacked panes.
+//! The grid cards sit in on the stage, from keel's tiling.rs, without its
+//! stacked panes. The keys that move cards around are in keys.rs.
 
-use egui::{pos2, vec2, Event, Key, Modifiers, Rect};
+use egui::{pos2, vec2, Rect};
 use serde::{Deserialize, Serialize};
 
+/// The old "card keys use" setting. Only read now, to give an upgraded
+/// config the same card keys in [keys].
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TileMod {
     #[default]
     Alt,
     CtrlAlt,
     Off,
-}
-
-impl TileMod {
-    pub const ALL: [TileMod; 3] = [TileMod::Alt, TileMod::CtrlAlt, TileMod::Off];
-
-    pub fn label(self) -> &'static str {
-        match (self, cfg!(target_os = "macos")) {
-            // The UI font has no ⌥ / ⌃ glyphs; only the monospace one does.
-            (TileMod::Alt, true) => "Option",
-            (TileMod::Alt, false) => "Alt",
-            (TileMod::CtrlAlt, true) => "Control+Option",
-            (TileMod::CtrlAlt, false) => "Ctrl+Alt",
-            (TileMod::Off, _) => "Off",
-        }
-    }
-
-    /// Some(shift) when the modifiers are exactly Mod or Mod+Shift.
-    fn matches(self, m: Modifiers) -> Option<bool> {
-        let ctrl = match self {
-            TileMod::Alt => false,
-            TileMod::CtrlAlt => true,
-            TileMod::Off => return None,
-        };
-        (m.alt && m.ctrl == ctrl && !m.mac_cmd).then_some(m.shift)
-    }
-}
-
-/// How a key chord reads in this OS's conventions, e.g. "⌥⇧H" or "Alt+Shift+H".
-pub fn chord(m: TileMod, shift: bool, key: &str) -> String {
-    if cfg!(target_os = "macos") {
-        let pre = if m == TileMod::CtrlAlt {
-            "⌃⌥"
-        } else {
-            "⌥"
-        };
-        format!("{pre}{}{key}", if shift { "⇧" } else { "" })
-    } else {
-        let pre = if m == TileMod::CtrlAlt {
-            "Ctrl+Alt"
-        } else {
-            "Alt"
-        };
-        format!("{pre}+{}{key}", if shift { "Shift+" } else { "" })
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dir {
-    Left,
-    Down,
-    Up,
-    Right,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TileCmd {
-    Focus(Dir),
-    Swap(Dir),
-    NewPane,
-    ClosePane,
-    Maximize,
-}
-
-/// (shift, key, what it does), for the Settings page.
-pub const HELP: &[(bool, &str, &str)] = &[
-    (
-        false,
-        "H / J / K / L",
-        "Focus the card left / below / above / right",
-    ),
-    (
-        true,
-        "H / J / K / L",
-        "Swap with the card left / below / above / right",
-    ),
-    (false, "Return", "New terminal in a card of its own"),
-    (false, "W", "Close card"),
-    (false, "Z", "Maximize / restore card"),
-];
-
-fn bind(key: Key, shift: bool) -> Option<TileCmd> {
-    let dir = match key {
-        Key::H => Some(Dir::Left),
-        Key::J => Some(Dir::Down),
-        Key::K => Some(Dir::Up),
-        Key::L => Some(Dir::Right),
-        _ => None,
-    };
-    match (dir, key, shift) {
-        (Some(d), _, false) => Some(TileCmd::Focus(d)),
-        (Some(d), _, true) => Some(TileCmd::Swap(d)),
-        (None, Key::Enter, false) => Some(TileCmd::NewPane),
-        (None, Key::W, false) => Some(TileCmd::ClosePane),
-        (None, Key::Z, false) => Some(TileCmd::Maximize),
-        _ => None,
-    }
-}
-
-/// Pulls this frame's Mod chords out of the input before the terminal sees them.
-///
-/// The Text event that follows a chord goes too: Alt+H types "˙" on macOS and
-/// "h" elsewhere. The physical key is the fallback for that macOS case, where
-/// the logical key is the composed character.
-pub fn take_cmds(ctx: &egui::Context, m: TileMod) -> Vec<TileCmd> {
-    if m == TileMod::Off {
-        return vec![];
-    }
-    ctx.input_mut(|i| {
-        let mut out = vec![];
-        let mut k = 0;
-        while k < i.events.len() {
-            if let Event::Key {
-                key,
-                physical_key,
-                pressed: true,
-                repeat,
-                modifiers,
-            } = &i.events[k]
-            {
-                if let Some(shift) = m.matches(*modifiers) {
-                    if let Some(cmd) =
-                        bind(*key, shift).or_else(|| physical_key.and_then(|p| bind(p, shift)))
-                    {
-                        // Holding Mod+W shouldn't close card after card.
-                        if !*repeat || matches!(cmd, TileCmd::Focus(_) | TileCmd::Swap(_)) {
-                            out.push(cmd);
-                        }
-                        i.events.remove(k);
-                        if matches!(i.events.get(k), Some(Event::Text(_))) {
-                            i.events.remove(k);
-                        }
-                        continue;
-                    }
-                }
-            }
-            k += 1;
-        }
-        out
-    })
 }
 
 /// Rows and columns of the grid for n panes.

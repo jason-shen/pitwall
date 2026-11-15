@@ -1,5 +1,6 @@
-//! GUI preferences, kept in `~/.muster/gui.json`. The daemon's config.toml is
-//! shared with the TUI and CLI, so window looks stay out of it.
+//! The app's settings: `[app]` and `[keys]` in the shared config.toml. The
+//! names you give projects and tabs, and what's folded, are state rather
+//! than settings, so they're kept in `~/.muster/state.json`.
 
 use std::path::PathBuf;
 
@@ -56,7 +57,9 @@ pub struct Settings {
     pub default_agent: String,
     /// New agents get their own branch and worktree.
     pub worktree: bool,
-    /// Modifier for the card keys (focus, swap, new, close, maximize).
+    /// The old card-keys modifier, read once to seed the card keys in
+    /// `[keys]`; the keys themselves are what count now.
+    #[serde(skip_serializing)]
     pub tile_mod: crate::tiling::TileMod,
     /// The tab strip runs along the bottom of the stage instead of the top.
     pub tabs_bottom: bool,
@@ -64,14 +67,31 @@ pub struct Settings {
     /// Post a system notification when an agent needs you or finishes while
     /// muster is in the background.
     pub system_notifications: bool,
+    /// Every command's keys, written as `[keys]`.
+    #[serde(skip)]
+    pub keys: crate::keys::Keymap,
     /// Names you gave projects, by root folder.
+    #[serde(skip)]
     pub project_names: std::collections::BTreeMap<String, String>,
     /// Names you gave terminals and agents, by task id.
+    #[serde(skip)]
     pub labels: std::collections::BTreeMap<String, String>,
     /// Projects folded up in the sidebar tree, by root folder.
+    #[serde(skip)]
     pub folded_projects: std::collections::BTreeSet<String>,
     /// AGENTS sorted by latest activity instead of what needs you.
+    #[serde(skip)]
     pub agents_by_recent: bool,
+}
+
+/// What's kept in state.json. Also how the old gui.json is read for it.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct State {
+    project_names: std::collections::BTreeMap<String, String>,
+    labels: std::collections::BTreeMap<String, String>,
+    folded_projects: std::collections::BTreeSet<String>,
+    agents_by_recent: bool,
 }
 
 pub const FONT_SIZE_MIN: f32 = 8.0;
@@ -106,30 +126,188 @@ impl Default for Settings {
             folded_projects: Default::default(),
             agents_by_recent: false,
             project_names: Default::default(),
+            keys: crate::keys::Keymap::new(None, Some("alt")).0,
         }
     }
 }
 
-fn path() -> PathBuf {
+fn state_path() -> PathBuf {
+    muster_core::paths::home().join("state.json")
+}
+
+/// Where the app's settings lived before config.toml.
+fn legacy_path() -> PathBuf {
     muster_core::paths::home().join("gui.json")
 }
 
+fn invalid(e: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+}
+
+/// Put [app] (with its sub-tables) and then [keys] after everything else,
+/// whatever order they were added in, so the daemon's sections read first.
+fn place_last(doc: &mut toml_edit::DocumentMut) {
+    fn max_pos(t: &toml_edit::Table) -> isize {
+        let mut m = t.position().unwrap_or(0);
+        for (_, item) in t.iter() {
+            match item {
+                toml_edit::Item::Table(sub) => m = m.max(max_pos(sub)),
+                toml_edit::Item::ArrayOfTables(a) => {
+                    for sub in a.iter() {
+                        m = m.max(max_pos(sub));
+                    }
+                }
+                _ => {}
+            }
+        }
+        m
+    }
+    fn place(t: &mut toml_edit::Table, next: &mut isize) {
+        t.set_position(Some(*next));
+        *next += 1;
+        for (_, item) in t.iter_mut() {
+            match item {
+                toml_edit::Item::Table(sub) => place(sub, next),
+                toml_edit::Item::ArrayOfTables(a) => {
+                    for sub in a.iter_mut() {
+                        place(sub, next);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut next = doc
+        .iter()
+        .filter(|(k, _)| *k != "app" && *k != "keys")
+        .filter_map(|(_, v)| v.as_table())
+        .map(max_pos)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    for name in ["app", "keys"] {
+        if let Some(t) = doc.get_mut(name).and_then(|i| i.as_table_mut()) {
+            place(t, &mut next);
+        }
+    }
+}
+
 impl Settings {
-    pub fn load() -> Self {
-        std::fs::read(path())
+    /// Read the settings, and anything in the file that couldn't be used.
+    pub fn load() -> (Self, Vec<String>) {
+        muster_core::paths::migrate_config();
+        let mut problems = vec![];
+        let text = std::fs::read_to_string(muster_core::paths::config()).unwrap_or_default();
+        let table: toml::Table = toml::from_str(&text).unwrap_or_else(|e| {
+            problems.push(format!("config.toml: {e}"));
+            toml::Table::new()
+        });
+        let legacy = std::fs::read(legacy_path()).ok();
+        let mut s: Settings = match table.get("app") {
+            Some(v) => v.clone().try_into().unwrap_or_else(|e| {
+                problems.push(format!("config.toml [app]: {e}"));
+                Settings::default()
+            }),
+            None => legacy
+                .as_deref()
+                .and_then(|b| serde_json::from_slice(b).ok())
+                .unwrap_or_default(),
+        };
+        let state: State = std::fs::read(state_path())
             .ok()
+            .or(legacy)
             .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.project_names = state.project_names;
+        s.labels = state.labels;
+        s.folded_projects = state.folded_projects;
+        s.agents_by_recent = state.agents_by_recent;
+        // Until [keys] is written, the card keys follow the old setting.
+        let cards = match (table.contains_key("keys"), s.tile_mod) {
+            (true, _) | (false, crate::tiling::TileMod::Alt) => Some("alt"),
+            (false, crate::tiling::TileMod::CtrlAlt) => Some("ctrl+alt"),
+            (false, crate::tiling::TileMod::Off) => None,
+        };
+        let (keys, p) =
+            crate::keys::Keymap::new(table.get("keys").and_then(|v| v.as_table()), cards);
+        s.keys = keys;
+        problems.extend(p);
+        // Settings still in gui.json move into config.toml now.
+        if !table.contains_key("app") && legacy_path().exists() && s.save().is_ok() {
+            let _ = std::fs::rename(legacy_path(), legacy_path().with_extension("json.moved"));
+        }
+        (s, problems)
     }
 
+    /// Write `[app]` and `[keys]` into config.toml, in place: the daemon's
+    /// sections and your comments elsewhere in the file stay as they are.
+    /// A file that doesn't parse is left alone rather than overwritten.
     pub fn save(&self) -> std::io::Result<()> {
-        let p = path();
-        if let Some(dir) = p.parent() {
+        let path = muster_core::paths::config();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => muster_core::config::DEFAULT_TOML.to_string(),
+        };
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(invalid)?;
+        let ours: toml_edit::DocumentMut = toml::to_string(self)
+            .map_err(invalid)?
+            .parse()
+            .map_err(invalid)?;
+        if !doc.contains_table("app") {
+            let mut t = toml_edit::Table::new();
+            t.decor_mut().set_prefix(
+                "\n# The app's settings. Settings in the app (cmd+,) writes these; edit them\n# here or there.\n",
+            );
+            doc.insert("app", toml_edit::Item::Table(t));
+        }
+        let app = doc["app"]
+            .as_table_mut()
+            .ok_or_else(|| invalid("[app] isn't a table"))?;
+        let gone: Vec<String> = app
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .filter(|k| !ours.contains_key(k))
+            .collect();
+        for k in gone {
+            app.remove(&k);
+        }
+        for (k, v) in ours.iter() {
+            app.insert(k, v.clone());
+        }
+        if !doc.contains_table("keys") {
+            let mut t = toml_edit::Table::new();
+            t.decor_mut().set_prefix(
+                "\n# Shortcuts. \"cmd\" is Cmd on macOS and Ctrl elsewhere; a list gives a\n# command more than one; \"\" leaves it without. Settings > Shortcuts rebinds.\n",
+            );
+            doc.insert("keys", toml_edit::Item::Table(t));
+        }
+        let keys = doc["keys"]
+            .as_table_mut()
+            .ok_or_else(|| invalid("[keys] isn't a table"))?;
+        for (k, v) in self.keys.to_toml().iter() {
+            keys.insert(k, v.clone());
+        }
+        place_last(&mut doc);
+        if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default())?;
-        std::fs::rename(tmp, p)
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, doc.to_string())?;
+        std::fs::rename(tmp, &path)?;
+
+        let state = State {
+            project_names: self.project_names.clone(),
+            labels: self.labels.clone(),
+            folded_projects: self.folded_projects.clone(),
+            agents_by_recent: self.agents_by_recent,
+        };
+        let sp = state_path();
+        if let Some(dir) = sp.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = sp.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&state).unwrap_or_default())?;
+        std::fs::rename(tmp, sp)
     }
 
     pub fn bump_font(&mut self, by: f32) {

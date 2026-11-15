@@ -60,6 +60,58 @@ pub struct Editor {
     crlf: bool,
 }
 
+/// A Markdown list item's or quote's lead: `  - [ ] `, `3. `, `> `.
+struct Lead {
+    /// Bytes of the lead, task box included.
+    len: usize,
+    /// Where the marker ends and a task box would go.
+    marker_end: usize,
+    /// Some(done) when it's a task.
+    task: Option<bool>,
+    /// What the next line starts with.
+    next: String,
+}
+
+fn md_lead(line: &str) -> Option<Lead> {
+    let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let (indent, rest) = line.split_at(indent_len);
+    let (marker, next_marker) = if let Some(m) = ["- ", "* ", "+ ", "> "]
+        .into_iter()
+        .find(|m| rest.starts_with(m))
+    {
+        (m.len(), m.to_string())
+    } else {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let sep = rest.as_bytes().get(digits).copied();
+        if !(1..=9).contains(&digits)
+            || !matches!(sep, Some(b'.' | b')'))
+            || !rest[digits + 1..].starts_with(' ')
+        {
+            return None;
+        }
+        let n: u64 = rest[..digits].parse().ok()?;
+        (digits + 2, format!("{}{} ", n + 1, sep? as char))
+    };
+    let marker_end = indent_len + marker;
+    let after = &line[marker_end..];
+    // "- [ ]" with its trailing space trimmed away is still a task.
+    let task = ["[ ]", "[x]", "[X]"]
+        .into_iter()
+        .find(|b| after.starts_with(b) && (after.len() == 3 || after[3..].starts_with(' ')))
+        .map(|b| b != "[ ]");
+    let len = match task {
+        Some(_) => (marker_end + 4).min(line.len()),
+        None => marker_end,
+    };
+    let task_next = if task.is_some() { "[ ] " } else { "" };
+    Some(Lead {
+        len,
+        marker_end,
+        task,
+        next: format!("{indent}{next_marker}{task_next}"),
+    })
+}
+
 fn mtime(p: &Path) -> Option<SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
@@ -148,6 +200,12 @@ impl Editor {
 
     /// Pick up changes made on disk (e.g. by an agent). Returns true if reloaded.
     pub fn check_disk(&mut self) -> bool {
+        self.check_disk_with(true)
+    }
+
+    /// `record`: whether the reload is its own undo step. A file being
+    /// rewritten many times a second only wants the first.
+    pub fn check_disk_with(&mut self, record: bool) -> bool {
         let m = mtime(&self.path);
         if m.is_none() || m == self.mtime {
             return false;
@@ -157,17 +215,34 @@ impl Editor {
             self.mtime = m;
             return false;
         }
-        self.reload();
+        self.reload_with(record);
         true
     }
 
     pub fn reload(&mut self) {
+        self.reload_with(true)
+    }
+
+    pub fn reload_with(&mut self, record: bool) {
         let (cy, cx, sy) = (self.cy, self.cx, self.scroll_y);
         if let Ok(mut fresh) = Editor::open(&self.path, self.tab_width) {
             fresh.cy = cy.min(fresh.lines.len() - 1);
             fresh.cx = cx.min(fresh.lines[fresh.cy].chars().count());
             fresh.scroll_y = sy.min(fresh.lines.len().saturating_sub(1));
             fresh.last_search = self.last_search.take();
+            // What was on screen before an agent rewrote the file is one ⌘Z
+            // away; briefs aren't in git, so this is the only copy.
+            fresh.undo = std::mem::take(&mut self.undo);
+            if record && fresh.lines != self.lines {
+                fresh.undo.push(UndoState {
+                    lines: std::mem::take(&mut self.lines),
+                    cy,
+                    cx,
+                });
+                if fresh.undo.len() > 200 {
+                    fresh.undo.remove(0);
+                }
+            }
             *self = fresh;
         }
     }
@@ -489,6 +564,10 @@ impl Editor {
         if self.readonly {
             return;
         }
+        let md = self.is_markdown();
+        if md && self.md_newline() {
+            return;
+        }
         self.checkpoint(2);
         let indent: String = self.lines[self.cy]
             .chars()
@@ -497,9 +576,11 @@ impl Editor {
         let b = self.byte_at(self.cy, self.cx);
         let rest = self.lines[self.cy].split_off(b);
         let trimmed_rest = rest.trim_start_matches([' ', '\t']).to_string();
-        let opens = self.lines[self.cy]
-            .trim_end()
-            .ends_with(['{', '(', '[', ':']);
+        // "- In:" in a brief isn't a block opener.
+        let opens = !md
+            && self.lines[self.cy]
+                .trim_end()
+                .ends_with(['{', '(', '[', ':']);
         let extra = if opens {
             if self.uses_tabs {
                 "\t".to_string()
@@ -514,6 +595,107 @@ impl Editor {
         self.cx = new_indent.chars().count();
         self.lines
             .insert(self.cy, format!("{new_indent}{trimmed_rest}"));
+        self.want_col = None;
+        self.touched();
+    }
+
+    // ── markdown ────────────────────────────────────────────────────────
+
+    pub fn is_markdown(&self) -> bool {
+        self.path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+    }
+
+    /// Enter in a list item, task or quote starts the next one; Enter on an
+    /// empty one ends the list. False when the line isn't one.
+    fn md_newline(&mut self) -> bool {
+        let Some(lead) = md_lead(&self.lines[self.cy]) else {
+            return false;
+        };
+        if self.cx < self.lines[self.cy][..lead.len].chars().count() {
+            return false;
+        }
+        self.checkpoint(2);
+        if self.lines[self.cy][lead.len..].trim().is_empty() {
+            self.lines[self.cy].clear();
+            self.cx = 0;
+        } else {
+            let b = self.byte_at(self.cy, self.cx);
+            let rest = self.lines[self.cy].split_off(b);
+            self.cy += 1;
+            self.cx = lead.next.chars().count();
+            self.lines
+                .insert(self.cy, format!("{}{}", lead.next, rest.trim_start()));
+        }
+        self.want_col = None;
+        self.touched();
+        true
+    }
+
+    /// Tick or untick the task on this line, making it a task first if it
+    /// isn't one.
+    pub fn toggle_task(&mut self) {
+        if self.readonly {
+            return;
+        }
+        self.checkpoint(5);
+        self.last_edit = None;
+        let line = &mut self.lines[self.cy];
+        let (at, insert) = match md_lead(line) {
+            Some(l) if l.task.is_some() => {
+                let mark = if l.task == Some(true) { " " } else { "x" };
+                line.replace_range(l.marker_end + 1..l.marker_end + 2, mark);
+                self.touched();
+                return;
+            }
+            Some(l) => (l.marker_end, "[ ] "),
+            None => (line.len() - line.trim_start_matches([' ', '\t']).len(), "- [ ] "),
+        };
+        line.insert_str(at, insert);
+        if self.cx >= line[..at].chars().count() {
+            self.cx += insert.len();
+        }
+        self.want_col = None;
+        self.touched();
+    }
+
+    /// Wrap the word at the cursor in `mark` (`**`, `` ` ``), or unwrap it if
+    /// it's wrapped already. With no word there, insert the pair and put the
+    /// cursor between.
+    pub fn wrap_word(&mut self, mark: &str) {
+        if self.readonly {
+            return;
+        }
+        self.checkpoint(5);
+        self.last_edit = None;
+        let mut chars: Vec<char> = self.lines[self.cy].chars().collect();
+        let m: Vec<char> = mark.chars().collect();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        let cx = self.cx.min(chars.len());
+        let mut start = cx;
+        while start > 0 && word(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = cx;
+        while end < chars.len() && word(chars[end]) {
+            end += 1;
+        }
+        let n = m.len();
+        let wrapped = start < end
+            && start >= n
+            && chars[start - n..start] == m[..]
+            && chars.get(end..end + n) == Some(&m[..]);
+        if wrapped {
+            chars.drain(end..end + n);
+            chars.drain(start - n..start);
+            self.cx = cx - n;
+        } else {
+            chars.splice(end..end, m.iter().copied());
+            chars.splice(start..start, m.iter().copied());
+            self.cx = cx + n;
+        }
+        self.lines[self.cy] = chars.into_iter().collect();
         self.want_col = None;
         self.touched();
     }
@@ -624,6 +806,68 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn md(text: &str) -> Editor {
+        let p = std::env::temp_dir().join(format!(
+            "muster-md-{}-{}.md",
+            std::process::id(),
+            text.len()
+        ));
+        std::fs::write(&p, text).unwrap();
+        Editor::open(&p, 4).unwrap()
+    }
+
+    #[test]
+    fn markdown_lists_continue_and_end_on_enter() {
+        let mut e = md("  - [x] done");
+        e.cx = e.line_len(0);
+        e.newline();
+        assert_eq!(e.lines[1], "  - [ ] ");
+        e.newline();
+        assert_eq!(e.lines, ["  - [x] done", ""]);
+        let mut e = md("9. nine");
+        e.cx = e.line_len(0);
+        e.newline();
+        assert_eq!(e.lines[1], "10. ");
+        // A trailing colon doesn't indent the next line.
+        let mut e = md("Scope:");
+        e.cx = e.line_len(0);
+        e.newline();
+        assert_eq!(e.lines, ["Scope:", ""]);
+        let mut e = md("**Ask:**");
+        e.cx = e.line_len(0);
+        e.newline();
+        assert_eq!(e.lines, ["**Ask:**", ""]);
+    }
+
+    #[test]
+    fn a_reload_from_disk_can_be_undone() {
+        let mut e = md("mine");
+        std::fs::write(&e.path, "the agent's").unwrap();
+        e.reload();
+        assert_eq!(e.lines, ["the agent's"]);
+        e.undo();
+        assert_eq!(e.lines, ["mine"]);
+        assert!(e.dirty);
+    }
+
+    #[test]
+    fn markdown_tasks_toggle_and_words_wrap() {
+        let mut e = md("buy milk");
+        e.toggle_task();
+        assert_eq!(e.lines[0], "- [ ] buy milk");
+        e.toggle_task();
+        assert_eq!(e.lines[0], "- [x] buy milk");
+        e.toggle_task();
+        assert_eq!(e.lines[0], "- [ ] buy milk");
+        let mut e = md("say hello now");
+        e.cx = 6;
+        e.wrap_word("**");
+        assert_eq!(e.lines[0], "say **hello** now");
+        e.wrap_word("**");
+        assert_eq!(e.lines[0], "say hello now");
+        assert_eq!(e.cx, 6);
+    }
 
     fn ed(text: &str) -> Editor {
         let p = std::env::temp_dir().join(format!(

@@ -66,6 +66,31 @@ impl DevShot {
                     }
                 }
                 Some(("type", text)) => self.typed = Some(text.to_string()),
+                Some(("pick", n)) => {
+                    if let (Some(f), Ok(n)) = (app.new_form.as_mut(), n.parse()) {
+                        f.template = n;
+                    }
+                }
+                Some(("brief", p)) => app.open_brief(std::path::Path::new(p)),
+                Some(("finish", p)) => app.finish_brief(std::path::Path::new(p)),
+                Some(("handoff", p)) => app.hand_off_brief(std::path::Path::new(p)),
+                Some(("edtop", n)) => {
+                    let cur = app.cur;
+                    if let (Some(it), Ok(n)) = (app.tabs.get_mut(cur), n.parse::<usize>()) {
+                        let f = it.file;
+                        if let Some(e) = it.files.get_mut(f) {
+                            app.md_mode
+                                .insert(e.path.clone(), crate::app::MdMode::Preview);
+                            e.scroll_y = n;
+                        }
+                    }
+                }
+                Some(("capture", id)) => {
+                    app.capturing = crate::keys::COMMANDS
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(|c| c.id)
+                }
                 Some(("tile", id)) => app.tile_beside(id, app.active),
                 Some(("chord", k)) => self.key = egui::Key::from_name(k).map(|k| (k, true)),
                 Some(("cmd", k)) => self.key = egui::Key::from_name(k).map(|k| (k, false)),
@@ -107,6 +132,8 @@ impl DevShot {
                         app.settings_ui = Some(Default::default());
                     }
                     "newcard" => app.new_terminal_card(),
+                    "newbrief" => app.open_new_brief(),
+                    "keys" => app.show_keys = true,
                     "submit" => app.submit_form(),
                     "swap" => app.swap_cards(0, 1),
                     "companion" => {

@@ -43,6 +43,11 @@ pub struct Daemon {
     pub audit: audit::Audit,
     watchers: Mutex<HashMap<String, Debouncer<RecommendedWatcher>>>,
     snap_tx: mpsc::UnboundedSender<String>,
+    /// Ids handed out to tasks still starting, so two at once can't get the same one.
+    starting: Mutex<std::collections::HashSet<String>>,
+    /// Saving waits for restore, or a task started meanwhile would write a
+    /// list that's missing the ones not back yet.
+    restoring: std::sync::atomic::AtomicBool,
 }
 
 impl Daemon {
@@ -58,6 +63,8 @@ impl Daemon {
             audit: audit::Audit::open(&paths::audit_log()),
             watchers: Mutex::new(HashMap::new()),
             snap_tx,
+            starting: Default::default(),
+            restoring: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -94,19 +101,37 @@ impl Daemon {
         }
         let id = {
             let tasks = self.tasks.lock().unwrap();
+            let mut starting = self.starting.lock().unwrap();
             let base = task::slug(&req.name);
             let mut id = base.clone();
             let mut n = 2;
-            while tasks.contains_key(&id) || paths::snapshots().join(format!("{id}.git")).exists() {
+            while tasks.contains_key(&id)
+                || starting.contains(&id)
+                || paths::snapshots().join(format!("{id}.git")).exists()
+            {
                 id = format!("{base}-{n}");
                 n += 1;
             }
+            starting.insert(id.clone());
             id
         };
         let cfg = self.cfg.clone();
         let id2 = id.clone();
-        let t = tokio::task::spawn_blocking(move || Task::spawn(id2, &req, &cfg)).await??;
+        let spawned = tokio::task::spawn_blocking(move || Task::spawn(id2, &req, &cfg)).await;
+        let t = match spawned {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                self.starting.lock().unwrap().remove(&id);
+                return Err(e);
+            }
+            Err(e) => {
+                self.starting.lock().unwrap().remove(&id);
+                return Err(e.into());
+            }
+        };
         self.tasks.lock().unwrap().insert(id.clone(), t.clone());
+        self.starting.lock().unwrap().remove(&id);
+        self.save();
         if self.cfg.snapshots.auto && t.snaps.is_some() {
             if let Err(e) = self.watch(&t) {
                 tracing::warn!("file watcher for {id} failed: {e:#}");
@@ -181,18 +206,24 @@ impl Daemon {
     }
 
     pub fn set_status(&self, t: &Task, status: TaskStatus) {
-        let changed = {
+        let (changed, first_turn) = {
             let mut st = t.state.lock().unwrap();
             if st.status != status && !matches!(st.status, TaskStatus::Exited { .. }) {
+                let first_turn = status == TaskStatus::Idle && !st.had_turn;
+                st.had_turn |= first_turn;
                 st.status = status;
                 st.status_since = Instant::now();
-                true
+                (true, first_turn)
             } else {
-                false
+                (false, false)
             }
         };
         if changed {
             self.emit_task(t);
+        }
+        // From now on a restart resumes its session instead of starting over.
+        if first_turn {
+            self.save();
         }
     }
 
@@ -285,6 +316,7 @@ impl Daemon {
         t.kill();
         self.watchers.lock().unwrap().remove(&t.id);
         self.tasks.lock().unwrap().remove(&t.id);
+        self.save();
         if prune {
             if let Some(repo) = &t.repo {
                 if t.branch.is_some() {
@@ -297,6 +329,67 @@ impl Daemon {
         self.audit.log(serde_json::json!({"source": "task", "event": "removed", "task": t.id, "pruned": prune}));
         self.emit(Push::TaskRemoved { id: t.id.clone() });
         Ok(())
+    }
+
+    /// Write the task list for the next daemon to bring back. Only on start
+    /// and remove: at shutdown the agents may already be dying, and a task
+    /// that exited on its own is still listed until it's removed.
+    fn save(&self) {
+        if self.restoring.load(Ordering::SeqCst) {
+            return;
+        }
+        let saved: Vec<task::Saved> = self
+            .tasks
+            .lock()
+            .unwrap()
+            .values()
+            .map(|t| t.saved())
+            .collect();
+        let path = paths::home().join("tasks.json");
+        let tmp = path.with_extension("json.tmp");
+        let res = serde_json::to_vec_pretty(&saved)
+            .map_err(anyhow::Error::from)
+            .and_then(|b| Ok(std::fs::write(&tmp, b)?))
+            .and_then(|_| Ok(std::fs::rename(&tmp, &path)?));
+        if let Err(e) = res {
+            tracing::warn!("couldn't save tasks: {e:#}");
+        }
+    }
+
+    /// Start again the tasks the last daemon had, each in its own folder.
+    async fn restore(self: &Arc<Self>) {
+        let path = paths::home().join("tasks.json");
+        let saved: Vec<task::Saved> = match std::fs::read(&path) {
+            Err(_) => vec![],
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                tracing::warn!("ignoring {}: {e}", path.display());
+                vec![]
+            }),
+        };
+        for s in saved {
+            let id = s.id.clone();
+            if !s.place.cwd.is_dir() {
+                tracing::warn!("not restoring {id}: {} is gone", s.place.cwd.display());
+                continue;
+            }
+            let cfg = self.cfg.clone();
+            match tokio::task::spawn_blocking(move || Task::resume(s, &cfg)).await {
+                Ok(Ok(t)) => {
+                    if self.cfg.snapshots.auto && t.snaps.is_some() {
+                        if let Err(e) = self.watch(&t) {
+                            tracing::warn!("file watcher for {id} failed: {e:#}");
+                        }
+                    }
+                    tracing::info!("restored {id}");
+                    self.tasks.lock().unwrap().insert(id, t.clone());
+                    self.emit_task(&t);
+                }
+                Ok(Err(e)) => tracing::warn!("couldn't restore {id}: {e:#}"),
+                Err(e) => tracing::warn!("couldn't restore {id}: {e}"),
+            }
+        }
+        self.restoring.store(false, Ordering::SeqCst);
+        self.save();
     }
 
     fn shutdown(&self) {
@@ -452,6 +545,10 @@ pub async fn run() -> Result<()> {
     );
 
     tokio::spawn(ticker(d.clone()));
+    {
+        let d = d.clone();
+        tokio::spawn(async move { d.restore().await });
+    }
     tokio::spawn(snapshot_worker(d.clone(), snap_rx));
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

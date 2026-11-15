@@ -76,7 +76,9 @@ pub fn init(force: bool) -> Result<()> {
     if p.exists() && !force {
         bail!("{} already exists (use --force to overwrite)", p.display());
     }
-    std::fs::create_dir_all(paths::home())?;
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     std::fs::write(&p, DEFAULT_TOML)?;
     println!("wrote {}", p.display());
     Ok(())
@@ -394,6 +396,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
                 prompt,
                 rows,
                 cols,
+                brief: None,
             };
             let Response::Task(t) = client.call(Request::NewTask(req)).await? else {
                 bail!("unexpected reply")

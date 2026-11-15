@@ -1,12 +1,15 @@
 //! muster — a standalone GPU terminal for running coding agents side by side.
 
 mod app;
+mod briefs;
 #[cfg(debug_assertions)]
 mod devshot;
 mod editors;
 mod emoji;
 mod find;
+mod keys;
 mod layout;
+mod markdown;
 mod net;
 mod settings;
 mod term;
@@ -33,7 +36,7 @@ fn main() -> eframe::Result {
     let workspace = workspace.canonicalize().unwrap_or(workspace);
 
     // Read before the window exists: transparency can't be switched on later.
-    let settings = settings::Settings::load();
+    let (settings, config_problems) = settings::Settings::load();
     let transparent = settings.see_through;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -53,6 +56,7 @@ fn main() -> eframe::Result {
                 cc,
                 workspace,
                 settings,
+                config_problems,
                 transparent,
             )))
         }),

@@ -419,13 +419,31 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
             .and_then(|t| app.tasks.get(&t.id))
             .and_then(|t| t.branch.as_ref())
             .is_some();
+        let id = app.tabs.get(app.cur).map(|t| t.id.clone()).unwrap_or_default();
+        if let Some(list) = app.remarks.get(&id).filter(|l| !l.is_empty()) {
+            let all = list
+                .iter()
+                .map(|r| format!("{}:{}  {}", r.file, r.line.unwrap_or(0), r.text.trim()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if ui
+                .small_button(format!("💬 send {} to agent", list.len()))
+                .on_hover_text(all)
+                .clicked()
+            {
+                acts.push(Action::SendRemarks(id.clone()));
+            }
+            if ui.small_button("clear").clicked() {
+                acts.push(Action::ClearRemarks(id.clone()));
+            }
+        }
         if has_branch
             && ui
-                .small_button("merge…")
-                .on_hover_text("Merge this agent's branch into your main checkout (m)")
+                .small_button("✓ accept…")
+                .on_hover_text("Commit the agent's work and merge it into the branch it came from (m)")
                 .clicked()
         {
-            acts.push(Action::Merge);
+            acts.push(Action::Accept);
         }
     });
 }
@@ -440,6 +458,9 @@ fn main_panel(
 ) {
     let cur = app.cur;
     let active = app.tabs[cur].git.panel == Panel::Main;
+    let id = &app.tabs[cur].id;
+    let is_agent = app.tasks.get(id).is_some_and(|t| t.agent != "shell");
+    let remarks = app.remarks.get(id).cloned().unwrap_or_default();
     let font = theme::term_font(app.settings.font_size - 0.5);
     let gv = &mut app.tabs[cur].git;
     let src = gv.main.clone();
@@ -512,6 +533,14 @@ fn main_panel(
                 {
                     acts.push(Action::OpenFile(f.clone(), Some(l.new_line.unwrap_or(1))));
                 }
+                if is_agent
+                    && ui
+                        .small_button("💬 comment")
+                        .on_hover_text("r: a review comment on this line, sent to the agent with the others")
+                        .clicked()
+                {
+                    acts.push(Action::Remark);
+                }
             }
         }
         let files = d.parsed.files.len();
@@ -550,6 +579,10 @@ fn main_panel(
     }
     let cur_h = d.parsed.lines.get(d.cursor).and_then(|l| l.hunk);
     let total = d.parsed.lines.len();
+    let commented: std::collections::HashSet<(String, Option<usize>)> = remarks
+        .iter()
+        .map(|r| (r.file.clone(), r.line))
+        .collect();
     let mut click: Option<(usize, bool)> = None;
     sa.show_rows(ui, row_h, total, |ui, range| {
         let width = ui.available_width().max(800.0);
@@ -586,6 +619,17 @@ fn main_panel(
                 font.clone(),
                 fg,
             );
+            if l.kind != LineKind::FileHeader
+                && l.file.as_ref().is_some_and(|f| commented.contains(&(f.clone(), l.new_line)))
+            {
+                painter.text(
+                    pos2(ui.clip_rect().right() - 8.0, rect.top()),
+                    Align2::RIGHT_TOP,
+                    "💬",
+                    font.clone(),
+                    AMBER,
+                );
+            }
             if r.clicked() {
                 click = Some((i, false));
             }
@@ -684,7 +728,7 @@ fn keys(ui: &mut Ui, app: &mut App, is_agent: bool, acts: &mut Vec<Action>) {
                 app.tabs[cur].git.panel = Panel::Main;
             }
             Key::C if !m.shift => acts.push(Action::StartCommit),
-            Key::M if is_agent => acts.push(Action::Merge),
+            Key::M if is_agent => acts.push(Action::Accept),
             Key::B if is_agent => {
                 if let Some(b) = base_of(app) {
                     acts.push(Action::ShowMain(MainSrc::Changes {
@@ -805,6 +849,7 @@ fn main_key(app: &mut App, key: Key, m: egui::Modifiers, acts: &mut Vec<Action>)
                 acts.push(Action::UnstageHunk(h));
             }
         }
+        Key::R => acts.push(Action::Remark),
         Key::E | Key::Enter => {
             if let Some(l) = line {
                 if let Some(f) = l.file {

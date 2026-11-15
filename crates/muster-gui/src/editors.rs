@@ -64,6 +64,16 @@ pub fn resolve(setting: &str) -> Kind {
     }
 }
 
+/// The editor for one file. Markdown always gets the built-in editor, whose
+/// live preview, list keys and brief streaming nvim or VS Code wouldn't have.
+pub fn for_file(setting: &str, path: &Path) -> Kind {
+    if crate::briefs::is_markdown(path) {
+        Kind::Builtin
+    } else {
+        resolve(setting)
+    }
+}
+
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
@@ -163,6 +173,8 @@ mod tests {
         assert!(matches!(resolve("emacs -nw"), Kind::Terminal(_)));
         assert!(matches!(resolve("emacs"), Kind::Gui(_)));
         assert!(matches!(resolve("code --wait"), Kind::Gui(_)));
+        assert!(matches!(for_file("nvim", Path::new("a/README.md")), Kind::Builtin));
+        assert!(matches!(for_file("nvim", Path::new("a/main.rs")), Kind::Terminal(_)));
     }
 
     #[test]

@@ -195,6 +195,10 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             if from.as_deref() == Some(t.id.as_str()) {
                 anyhow::bail!("{} is you", t.id);
             }
+            // The Return would pick an option on a prompt it's waiting on.
+            if matches!(t.info().status, muster_core::proto::TaskStatus::Waiting { .. }) {
+                anyhow::bail!("{} is waiting on a prompt; answer that first", t.id);
+            }
             let line = muster_core::agents::message_line(from.as_deref(), &text);
             t.write(line.as_bytes())?;
             // A Return in the same write reads as part of a paste to TUIs

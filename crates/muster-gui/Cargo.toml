@@ -12,6 +12,12 @@ eframe = { version = "0.37.0", default-features = false, features = ["default_fo
 # no Nerd Font has; this bundles Noto Emoji, as keel does.
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 muster-core = { version = "0.1.0", path = "../muster-core" }
+# config.toml: read with toml, rewritten with toml_edit so the user's
+# comments and the daemon's sections survive the app saving its own.
+toml = "1.2"
+toml_edit = "0.25"
+# Markdown for the live preview beside the editor.
+pulldown-cmark = { version = "0.13", default-features = false }
 # Native folder and file pickers, as keel uses.
 rfd = "0.17"
 # URL and path detection in terminal output; already in the tree.

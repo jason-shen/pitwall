@@ -15,7 +15,7 @@ mod gitview;
 
 use crate::app::{
     agent_kind, is_agent, item_project, project_item, task_dir, App, Child, CmdBar, Confirm,
-    MainSrc, SettingsUi, Target,
+    MainSrc, MdMode, SettingsUi, Target,
 };
 use crate::settings::{self as cfg, CursorStyle};
 use crate::{term, termview, theme};
@@ -54,6 +54,15 @@ enum Action {
     FocusPane(usize),
     Split,
     NewShell,
+    NewBrief,
+    OpenBrief(PathBuf),
+    FinishBrief(PathBuf),
+    StopBrief(PathBuf),
+    Remark,
+    SendRemarks(String),
+    ClearRemarks(String),
+    HandOffBrief(PathBuf),
+    SetMdMode(PathBuf, MdMode),
     NewShellIn(String),
     FoldProject(String),
     ToggleAgentSort,
@@ -65,7 +74,7 @@ enum Action {
     StartAgent(String),
     Kill(String),
     Remove(String),
-    Merge,
+    Accept,
     Stage(String),
     Unstage(String),
     StageAll,
@@ -134,52 +143,6 @@ fn section_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).small().strong().color(MUTED));
 }
 
-/// App-level shortcut: Cmd+key on macOS, Ctrl+Shift+key elsewhere. Consumes the event.
-/// Consume a key press with exactly these modifiers. Shared conventions with
-/// keel: app commands are ⌘⇧ on macOS and Ctrl+Shift elsewhere (`chord`), so
-/// plain ⌘ keys and every Ctrl key stay with the terminal; only a few plain ⌘
-/// keys are the app's (`cmd`).
-fn press(ctx: &egui::Context, key: Key, shift: bool) -> bool {
-    let mac = cfg!(target_os = "macos");
-    ctx.input_mut(|i| {
-        let pos = i.events.iter().position(|e| match e {
-            Event::Key {
-                key: k,
-                pressed: true,
-                modifiers: m,
-                ..
-            } if *k == key => {
-                let primary = if mac { m.mac_cmd && !m.ctrl } else { m.ctrl };
-                primary && m.shift == shift && !m.alt
-            }
-            _ => false,
-        });
-        if let Some(p) = pos {
-            i.events.remove(p);
-            true
-        } else {
-            false
-        }
-    })
-}
-
-fn chord(ctx: &egui::Context, key: Key) -> bool {
-    press(ctx, key, true)
-}
-
-fn cmd(ctx: &egui::Context, key: Key) -> bool {
-    press(ctx, key, false)
-}
-
-/// Label prefix for a `chord`.
-pub fn mod_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "⌘⇧"
-    } else {
-        "Ctrl+Shift+"
-    }
-}
-
 /// Label prefix for a `cmd` key.
 pub fn cmd_label() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -212,6 +175,8 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
         });
     }
 
+    crate::keys::set_current(&app.settings.keys);
+    capture_keys(&ctx, app);
     shortcuts(&ctx, app, &mut acts);
 
     let need = app
@@ -311,51 +276,59 @@ fn project_color(root: &str) -> Color32 {
 }
 
 fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
-    use crate::tiling::{Dir, TileCmd};
-    for c in crate::tiling::take_cmds(ctx, app.settings.tile_mod) {
-        let dir = match c {
-            TileCmd::Focus(d) | TileCmd::Swap(d) => Some(d),
-            _ => None,
-        };
-        let (dx, dy) = match dir {
-            Some(Dir::Left) => (-1.0, 0.0),
-            Some(Dir::Right) => (1.0, 0.0),
-            Some(Dir::Up) => (0.0, -1.0),
-            Some(Dir::Down) => (0.0, 1.0),
-            None => (0.0, 0.0),
-        };
-        match c {
-            TileCmd::Focus(_) => {
-                if let Some(i) = app.neighbour(dx, dy) {
-                    acts.push(Action::FocusPane(i));
-                }
-            }
-            TileCmd::Swap(_) => {
-                if let Some(i) = app.neighbour(dx, dy) {
+    // While Settings waits for new keys, every key goes there.
+    if app.capturing.is_some() {
+        return;
+    }
+    let keys = app.settings.keys.clone();
+    let k = |id: &str| keys.take(ctx, id);
+
+    for (id, dx, dy, swap) in [
+        ("card_left", -1.0, 0.0, false),
+        ("card_right", 1.0, 0.0, false),
+        ("card_up", 0.0, -1.0, false),
+        ("card_down", 0.0, 1.0, false),
+        ("swap_left", -1.0, 0.0, true),
+        ("swap_right", 1.0, 0.0, true),
+        ("swap_up", 0.0, -1.0, true),
+        ("swap_down", 0.0, 1.0, true),
+    ] {
+        if k(id) {
+            if let Some(i) = app.neighbour(dx, dy) {
+                if swap {
                     app.swap_card(i);
-                }
-            }
-            TileCmd::NewPane => app.new_terminal_card(),
-            TileCmd::ClosePane => acts.push(Action::CloseSide(app.active)),
-            TileCmd::Maximize => {
-                if app.split() {
-                    app.zoom = !app.zoom;
+                } else {
+                    acts.push(Action::FocusPane(i));
                 }
             }
         }
     }
-    // ⌘P too on macOS (VS Code's quick open); Ctrl+P elsewhere is the
-    // shell's previous command.
-    if chord(ctx, Key::P) || (cfg!(target_os = "macos") && cmd(ctx, Key::P)) {
+    if k("card_terminal") {
+        app.new_terminal_card();
+    }
+    if k("card_close") {
+        acts.push(Action::CloseSide(app.active));
+    }
+    if k("card_maximize") && app.split() {
+        app.zoom = !app.zoom;
+    }
+
+    if k("command_bar") {
         acts.push(Action::OpenBar(false));
     }
-    if chord(ctx, Key::T) {
+    if k("new_terminal") {
         acts.push(new_terminal_action(app));
     }
-    if chord(ctx, Key::N) {
+    if k("new_agent") {
         acts.push(Action::NewAgent);
     }
-    if chord(ctx, Key::W) {
+    if k("new_project") {
+        acts.push(Action::NewProject);
+    }
+    if k("new_brief") {
+        acts.push(Action::NewBrief);
+    }
+    if k("close_card") {
         if app.split() {
             acts.push(Action::CloseSide(app.active));
         } else if let Some(Target {
@@ -366,34 +339,34 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
             acts.push(Action::CloseFile(item, p));
         }
     }
-    if chord(ctx, Key::D) {
+    if k("split") {
         acts.push(Action::Split);
     }
-    if chord(ctx, Key::E) {
+    if k("toggle_sidebar") {
         app.sidebar = !app.sidebar;
     }
-    if chord(ctx, Key::G) {
+    if k("show_changes") {
         app.toggle_child(Child::Changes);
     }
-    if chord(ctx, Key::O) {
+    if k("show_files") {
         app.toggle_child(Child::Files);
     }
-    if chord(ctx, Key::U) {
+    if k("undo_history") {
         app.show_git();
         if let Some(it) = app.item() {
             it.git.panel = crate::app::Panel::Snapshots;
         }
     }
-    if chord(ctx, Key::A) {
+    if k("next_attention") {
         acts.push(Action::NextAttention);
     }
-    if chord(ctx, Key::Y) {
+    if k("approve") {
         app.decide_first(true);
     }
-    if chord(ctx, Key::R) {
+    if k("reject") {
         app.decide_first(false);
     }
-    if chord(ctx, Key::B) {
+    if k("broadcast") {
         app.broadcast = !app.broadcast;
         app.notify(
             if app.broadcast {
@@ -404,29 +377,22 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
             false,
         );
     }
-    if chord(ctx, Key::Slash) {
+    if k("shortcuts") {
         app.show_keys = !app.show_keys;
     }
-    if cmd(ctx, Key::Comma) {
+    if k("settings") {
         toggle_settings(app);
     }
-    // ⌘= also arrives as ⌘⇧= (⌘+) on most layouts.
-    if cmd(ctx, Key::Equals)
-        || cmd(ctx, Key::Plus)
-        || chord(ctx, Key::Equals)
-        || chord(ctx, Key::Plus)
-    {
+    if k("font_bigger") {
         app.settings.bump_font(1.0);
     }
-    if cmd(ctx, Key::Minus) {
+    if k("font_smaller") {
         app.settings.bump_font(-1.0);
     }
-    if cmd(ctx, Key::Num0) {
+    if k("font_reset") {
         app.settings.font_size = cfg::FONT_SIZE_DEFAULT;
     }
-    // ⌘K clears the terminal like Terminal.app and iTerm2. Ctrl+K belongs to
-    // the shell elsewhere, so this is macOS only.
-    if cfg!(target_os = "macos") && cmd(ctx, Key::K) {
+    if k("clear_terminal") {
         if let Some(Target {
             item,
             child: Child::Terminal,
@@ -439,22 +405,63 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         }
     }
 
-    // Next / previous agent or terminal: Ctrl+Tab, or ⌘⇧] / ⌘⇧[ like keel.
-    let ctab = ctx.input_mut(|i| {
-        let p = i.events.iter().position(|e| {
-            matches!(e, Event::Key { key: Key::Tab, pressed: true, modifiers, .. } if modifiers.ctrl)
-        });
-        p.map(|p| {
-            let back = matches!(&i.events[p], Event::Key { modifiers, .. } if modifiers.shift);
-            i.events.remove(p);
-            back
-        })
-    });
-    let mut step = ctab.map(|back| if back { -1isize } else { 1 });
-    if chord(ctx, Key::CloseBracket) {
-        step = Some(1);
+    // What the focused card shows, for the commands that act on it.
+    let target = app.target().cloned();
+    if k("rename_tab") {
+        if let Some(t) = target.as_ref().filter(|t| app.tasks.contains_key(&t.item)) {
+            acts.push(Action::StartRenameTab(t.item.clone()));
+        }
     }
-    if chord(ctx, Key::OpenBracket) {
+    if k("close_tab") {
+        if let Some(t) = target
+            .as_ref()
+            .filter(|t| app.tasks.get(&t.item).is_some_and(|x| x.agent == "shell"))
+        {
+            acts.push(Action::CloseTerminal(t.item.clone()));
+        }
+    }
+    let file = match &target {
+        Some(Target {
+            child: Child::File(p),
+            ..
+        }) => Some(p.clone()),
+        _ => None,
+    };
+    let brief = file.clone().filter(|p| crate::briefs::is_brief(p));
+    if k("finish_brief") {
+        if let Some(p) = brief.clone() {
+            acts.push(Action::FinishBrief(p));
+        }
+    }
+    if k("hand_off_brief") {
+        if let Some(p) = brief {
+            acts.push(Action::HandOffBrief(p));
+        }
+    }
+    if k("markdown_view") {
+        if let Some(p) = file.filter(|p| crate::briefs::is_markdown(p)) {
+            let now = app
+                .md_mode
+                .get(&p)
+                .copied()
+                .unwrap_or(if crate::briefs::is_brief(&p) {
+                    MdMode::Preview
+                } else {
+                    MdMode::Edit
+                });
+            let next = match now {
+                MdMode::Edit => MdMode::Preview,
+                MdMode::Preview => MdMode::Edit,
+            };
+            acts.push(Action::SetMdMode(p, next));
+        }
+    }
+
+    let mut step = None;
+    if k("next_tab") {
+        step = Some(1isize);
+    }
+    if k("prev_tab") {
         step = Some(-1);
     }
     if let Some(d) = step {
@@ -469,33 +476,62 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         }
     }
 
-    // Projects: ⌘1–9, or step with ⌘⇧J / ⌘⇧K like keel's workspaces.
     let roots = project_list(app);
-    for (k, n) in [
-        (Key::Num1, 0),
-        (Key::Num2, 1),
-        (Key::Num3, 2),
-        (Key::Num4, 3),
-        (Key::Num5, 4),
-        (Key::Num6, 5),
-        (Key::Num7, 6),
-        (Key::Num8, 7),
-        (Key::Num9, 8),
-    ] {
-        if cmd(ctx, k) {
+    for n in 0..9 {
+        if k(&format!("project_{}", n + 1)) {
             if let Some(r) = roots.get(n) {
                 acts.push(Action::SetProject(r.clone()));
             }
         }
     }
-    for (key, d) in [(Key::J, -1isize), (Key::K, 1)] {
-        if chord(ctx, key) && !roots.is_empty() {
+    for (id, d) in [("prev_project", -1isize), ("next_project", 1)] {
+        if k(id) && !roots.is_empty() {
             let here = app.project.clone().unwrap_or_default();
             let at = roots.iter().position(|r| *r == here).unwrap_or(0) as isize;
             let next = roots[(at + d).rem_euclid(roots.len() as isize) as usize].clone();
             acts.push(Action::SetProject(next));
         }
     }
+}
+
+/// Settings → Shortcuts is waiting for keys: the next press is the new
+/// chord. Esc cancels; Backspace or Delete on their own clear the command.
+fn capture_keys(ctx: &egui::Context, app: &mut App) {
+    let Some(id) = app.capturing else {
+        return;
+    };
+    let got = ctx.input_mut(|i| {
+        let p = i
+            .events
+            .iter()
+            .position(|e| matches!(e, Event::Key { pressed: true, .. }))?;
+        let Event::Key {
+            key,
+            physical_key,
+            modifiers,
+            ..
+        } = i.events.remove(p)
+        else {
+            return None;
+        };
+        if matches!(i.events.get(p), Some(Event::Text(_))) {
+            i.events.remove(p);
+        }
+        Some((key, physical_key, modifiers))
+    });
+    let Some((key, physical, m)) = got else {
+        return;
+    };
+    let bare = !(m.alt || m.ctrl || m.shift || m.mac_cmd || m.command);
+    match key {
+        Key::Escape if bare => {}
+        Key::Backspace | Key::Delete if bare => app.settings.keys.set(id, vec![]),
+        _ => app
+            .settings
+            .keys
+            .set(id, vec![crate::keys::Chord::from_event(key, physical, m)]),
+    }
+    app.capturing = None;
 }
 
 /// New terminal: beside the focused agent, in its directory, when an agent
@@ -571,7 +607,7 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         .show(ui, |ui| {
             let omni = ui.add(
                 egui::Button::new(
-                    RichText::new(format!("⌕  Search or start a task      {}P", mod_label()))
+                    RichText::new(format!("⌕  Search or start a task      {}", crate::keys::hint("command_bar")))
                         .color(MUTED),
                 )
                 .min_size(vec2(ui.available_width(), 30.0))
@@ -712,27 +748,32 @@ fn project_header(
         acts.push(Action::FoldProject(root.to_string()));
     }
     let r = r.on_hover_text(format!(
-        "{}   {}{}",
+        "{}   {}",
         if root.is_empty() {
             "Terminals outside any repo".to_string()
         } else {
             tilde(std::path::Path::new(root))
         },
-        cmd_label(),
-        index + 1
+        crate::keys::hint(&format!("project_{}", index + 1))
     ));
     if r.clicked() && !fold.clicked() {
         acts.push(Action::SetProject(root.to_string()));
     }
     let root = root.to_string();
     r.context_menu(|ui| {
-        if ui.button(format!("New agent   {}N", mod_label())).clicked() {
+        if ui
+            .button(format!("New agent   {}", crate::keys::hint("new_agent")))
+            .clicked()
+        {
             acts.push(Action::SetProject(root.clone()));
             acts.push(Action::NewAgent);
             ui.close();
         }
         if ui
-            .button(format!("New terminal   {}T", mod_label()))
+            .button(format!(
+                "New terminal   {}",
+                crate::keys::hint("new_terminal")
+            ))
             .clicked()
         {
             acts.push(Action::SetProject(root.clone()));
@@ -771,11 +812,16 @@ fn project_body(ui: &mut Ui, app: &mut App, root: &str, acts: &mut Vec<Action>) 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (label, tip, act) in [
-            ("+ Agent", format!("{}N", mod_label()), Action::NewAgent),
+            ("+ Agent", crate::keys::hint("new_agent"), Action::NewAgent),
             (
                 "+ Terminal",
-                format!("{}T", mod_label()),
+                crate::keys::hint("new_terminal"),
                 Action::NewShellIn(root.to_string()),
+            ),
+            (
+                "+ Brief",
+                "A doc to plan the work, then hand to an agent".to_string(),
+                Action::NewBrief,
             ),
         ] {
             let b = egui::Button::new(RichText::new(label).size(12.5).color(MUTED))
@@ -856,8 +902,87 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
     };
     row(ui, Child::Changes, "±", "Changes", count, acts);
     row(ui, Child::Files, "▤", "Files", None, acts);
+    for entry in app.briefs(root) {
+        let (path, title) = (entry.path.clone(), entry.title.clone());
+        let on = is_shown(app, &item, &Child::File(path.clone()));
+        let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+        let p = ui.painter();
+        if on {
+            p.rect_filled(rect, 5.0, SEL);
+        } else if r.hovered() {
+            p.rect_filled(rect, 5.0, PANEL_2);
+        }
+        let y = rect.center().y;
+        p.text(
+            pos2(rect.left() + 10.0, y),
+            Align2::CENTER_CENTER,
+            "✎",
+            FontId::proportional(12.5),
+            ACCENT,
+        );
+        // Filling in, then whoever is building it and how far they've got.
+        let steps = (entry.steps > 0).then(|| format!("{}/{}", entry.done, entry.steps));
+        let status = if app.brief_runs.contains_key(&path) {
+            Some(("✦ filling in".to_string(), ACCENT))
+        } else if let Some(t) = app.brief_agent(&path) {
+            let (state, color) = state_label(t);
+            Some((
+                match &steps {
+                    Some(s) => format!("{state} · {s}"),
+                    None => state.to_string(),
+                },
+                color,
+            ))
+        } else if entry.steps > 0 && entry.done == entry.steps {
+            Some((format!("✓ {}", steps.clone().unwrap_or_default()), GREEN))
+        } else {
+            steps.map(|s| (s, FAINT))
+        };
+        let right = match status {
+            Some((s, c)) => {
+                p.text(
+                    pos2(rect.right() - 6.0, y),
+                    Align2::RIGHT_CENTER,
+                    s,
+                    FontId::proportional(11.0),
+                    c,
+                )
+                .left()
+                    - 6.0
+            }
+            None => rect.right() - 6.0,
+        };
+        p.with_clip_rect(Rect::from_min_max(rect.min, pos2(right, rect.max.y)))
+            .text(
+                pos2(rect.left() + 24.0, y),
+                Align2::LEFT_CENTER,
+                &title,
+                FontId::proportional(13.0),
+                if on { TEXT } else { MUTED },
+            );
+        let r = r.on_hover_text(tilde(&path));
+        if r.clicked() {
+            acts.push(Action::OpenBrief(path.clone()));
+        }
+        r.context_menu(|ui| {
+            if ui.button("✦ Finish with AI").clicked() {
+                acts.push(Action::OpenBrief(path.clone()));
+                acts.push(Action::FinishBrief(path.clone()));
+                ui.close();
+            }
+            if ui.button("Hand to agent  →").clicked() {
+                acts.push(Action::HandOffBrief(path.clone()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Copy path").clicked() {
+                acts.push(Action::Copy(path.display().to_string()));
+                ui.close();
+            }
+        });
+    }
     if let Some(it) = app.tabs.iter().find(|i| i.id == item) {
-        for path in &it.opened {
+        for path in it.opened.iter().filter(|p| !crate::briefs::is_brief(p)) {
             let name = path
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
@@ -926,8 +1051,8 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
     let mut right = strip.right();
     let mut toggles = vec![];
     for (label, child, key) in [
-        ("▤ Files".to_string(), Child::Files, "O"),
-        (changes, Child::Changes, "G"),
+        ("▤ Files".to_string(), Child::Files, "show_files"),
+        (changes, Child::Changes, "show_changes"),
     ] {
         let w = ui
             .painter()
@@ -950,7 +1075,7 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
             egui::Button::selectable(on, RichText::new(label).size(12.5))
                 .wrap_mode(egui::TextWrapMode::Extend),
         );
-        if b.on_hover_text(format!("{}{key}", mod_label())).clicked() && target.is_some() {
+        if b.on_hover_text(crate::keys::hint(key)).clicked() && target.is_some() {
             acts.push(Action::ToggleChild(child));
         }
     }
@@ -982,7 +1107,10 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
                         .frame_when_inactive(false)
                         .min_size(vec2(28.0, TAB_H - 6.0)),
                 )
-                .on_hover_text(format!("New terminal   {}T", mod_label()))
+                .on_hover_text(format!(
+                    "New terminal   {}",
+                    crate::keys::hint("new_terminal")
+                ))
                 .clicked()
             {
                 acts.push(Action::NewShellIn(root));
@@ -1183,7 +1311,10 @@ fn agents_section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
                 .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
-                .on_hover_text(format!("New agent in {here}   {}N", mod_label()))
+                .on_hover_text(format!(
+                    "New agent in {here}   {}",
+                    crate::keys::hint("new_agent")
+                ))
                 .clicked()
             {
                 acts.push(Action::NewAgent);
@@ -1257,10 +1388,15 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     );
     let galley = ui.fonts_mut(|f| f.layout_job(line));
     clip.galley(pos2(text.left(), top - galley.size().y / 2.0), galley, TEXT);
+    let brief = t.brief.as_ref().and_then(|b| app.brief_entry(std::path::Path::new(b)));
     let what = match &t.status {
         TaskStatus::Waiting { reason } => Some((reason.clone(), AMBER)),
         _ if t.pending_approvals > 0 => Some(("wants to run a command".into(), AMBER)),
-        _ => t.title.clone().map(|s| (s, FAINT)),
+        _ => match &brief {
+            Some(b) if b.steps > 0 => Some((format!("✎ {} · {}/{}", b.title, b.done, b.steps), FAINT)),
+            Some(b) => Some((format!("✎ {}", b.title), FAINT)),
+            None => t.title.clone().map(|s| (s, FAINT)),
+        },
     };
     if let Some((what, c)) = what {
         clip.text(
@@ -1293,9 +1429,15 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             }));
             ui.close();
         }
-        if t.branch.is_some() && ui.button("Merge branch…").clicked() {
+        if let Some(b) = &t.brief {
+            if ui.button("Open its brief").clicked() {
+                acts.push(Action::OpenBrief(std::path::PathBuf::from(b)));
+                ui.close();
+            }
+        }
+        if t.branch.is_some() && ui.button("Accept: commit and merge…").clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
-            acts.push(Action::Merge);
+            acts.push(Action::Accept);
             ui.close();
         }
         ui.separator();
@@ -1462,9 +1604,15 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             }));
             ui.close();
         }
-        if t.branch.is_some() && ui.button("Merge branch…").clicked() {
+        if let Some(b) = &t.brief {
+            if ui.button("Open its brief").clicked() {
+                acts.push(Action::OpenBrief(std::path::PathBuf::from(b)));
+                ui.close();
+            }
+        }
+        if t.branch.is_some() && ui.button("Accept: commit and merge…").clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
-            acts.push(Action::Merge);
+            acts.push(Action::Accept);
             ui.close();
         }
         ui.separator();
@@ -1525,14 +1673,14 @@ fn side_footer(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         if ui
             .add(egui::Button::new(RichText::new("⚙ Settings").color(MUTED)).frame(false))
-            .on_hover_text(format!("{},", cmd_label()))
+            .on_hover_text(crate::keys::hint("settings"))
             .clicked()
         {
             acts.push(Action::Settings);
         }
         if ui
             .add(egui::Button::new(RichText::new("? Shortcuts").color(MUTED)).frame(false))
-            .on_hover_text(format!("{}/", mod_label()))
+            .on_hover_text(crate::keys::hint("shortcuts"))
             .clicked()
         {
             acts.push(Action::Shortcuts);
@@ -1874,8 +2022,8 @@ fn welcome(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         ui.add_space(6.0);
         ui.label(
             RichText::new(format!(
-                "Start an agent with a task, or open a project. {}P finds anything.",
-                mod_label()
+                "Start an agent with a task, or open a project. {} finds anything.",
+                crate::keys::hint("command_bar")
             ))
             .color(MUTED),
         );
@@ -1966,6 +2114,7 @@ fn card(
         && app.new_form.is_none()
         && app.confirm.is_none()
         && !app.committing
+        && app.remarking.is_none()
     {
         resp.request_focus();
     }
@@ -2071,14 +2220,17 @@ fn card(
     if hr.clicked() || hr.drag_started() {
         acts.push(Action::FocusPane(side));
     }
-    let tm = app.settings.tile_mod;
-    let key = |shift: bool, k: &str| {
-        if tm == crate::tiling::TileMod::Off {
-            String::new()
-        } else {
-            format!("   {}", crate::tiling::chord(tm, shift, k))
-        }
+    let keys = &app.settings.keys;
+    let key = |id: &str| match keys.label(id) {
+        l if l.is_empty() => String::new(),
+        l => format!("   {l}"),
     };
+    let (max_key, close_key) = (key("card_maximize"), key("card_close"));
+    let swap_keys: Vec<String> = ["swap_left", "swap_down", "swap_up", "swap_right"]
+        .iter()
+        .map(|id| keys.label(id))
+        .filter(|l| !l.is_empty())
+        .collect();
     let others: Vec<(usize, String)> = app
         .cards
         .iter()
@@ -2102,7 +2254,7 @@ fn card(
                     } else {
                         "Maximize card"
                     },
-                    key(false, "Z")
+                    max_key
                 ))
                 .clicked()
             {
@@ -2118,10 +2270,11 @@ fn card(
                     }
                 }
                 ui.label(
-                    RichText::new(format!(
-                        "or drag the title bar · {}H/J/K/L",
-                        key(true, "").trim()
-                    ))
+                    RichText::new(if swap_keys.is_empty() {
+                        "or drag the title bar".to_string()
+                    } else {
+                        format!("or drag the title bar · {}", swap_keys.join(" "))
+                    })
                     .small()
                     .color(MUTED),
                 );
@@ -2138,14 +2291,14 @@ fn card(
                 ui.close();
             }
             ui.separator();
-            if ui
-                .button(format!("Close card{}", key(false, "W")))
-                .clicked()
-            {
+            if ui.button(format!("Close card{close_key}")).clicked() {
                 acts.push(Action::CloseSide(side));
                 ui.close();
             }
-        } else if ui.button(format!("Split   {}D", mod_label())).clicked() {
+        } else if ui
+            .button(format!("Split   {}", crate::keys::hint("split")))
+            .clicked()
+        {
             acts.push(Action::Split);
             ui.close();
         }
@@ -2158,14 +2311,14 @@ fn card(
     if app.split() {
         if hb
             .small_button("Close")
-            .on_hover_text(format!("{}W", mod_label()))
+            .on_hover_text(crate::keys::hint("close_card"))
             .clicked()
         {
             acts.push(Action::CloseSide(side));
         }
     } else if hb
         .small_button("Split")
-        .on_hover_text(format!("{}D", mod_label()))
+        .on_hover_text(crate::keys::hint("split"))
         .clicked()
     {
         acts.push(Action::Split);
@@ -2173,8 +2326,8 @@ fn card(
     if app.broadcast && t.child == Child::Terminal {
         hb.label(RichText::new("broadcasting").small().color(AMBER))
             .on_hover_text(format!(
-                "Typing goes to every terminal card ({}B turns it off)",
-                mod_label()
+                "Typing goes to every terminal card ({} turns it off)",
+                crate::keys::hint("broadcast")
             ));
     }
     if matches!(t.child, Child::Files | Child::File(_)) {
@@ -2232,7 +2385,7 @@ fn card(
                 .on_hover_text(&a.reason);
             s.with_layout(Layout::right_to_left(Align::Center), |s| {
                 if s.button(
-                    RichText::new(format!("Approve  {}Y", mod_label()))
+                    RichText::new(format!("Approve  {}", crate::keys::hint("approve")))
                         .color(GREEN)
                         .strong(),
                 )
@@ -2240,8 +2393,10 @@ fn card(
                 {
                     acts.push(Action::Decide(a.id, true));
                 }
-                if s.button(RichText::new(format!("Reject  {}R", mod_label())).color(RED))
-                    .clicked()
+                if s.button(
+                    RichText::new(format!("Reject  {}", crate::keys::hint("reject"))).color(RED),
+                )
+                .clicked()
                 {
                     acts.push(Action::Decide(a.id, false));
                 }
@@ -2258,8 +2413,10 @@ fn card(
 
     // Git data and the file tree are loaded for the focused task only; a
     // second card on another task asks to be focused first.
+    // An open file keeps its own buffer, so it shows either way: a brief
+    // stays visible while an agent beside it fills it in.
     let loaded = app.ctx_task.as_deref() == Some(t.item.as_str());
-    if !loaded && t.child != Child::Terminal {
+    if !loaded && !matches!(t.child, Child::Terminal | Child::File(_)) {
         ui.painter().text(
             body.center(),
             Align2::CENTER_CENTER,
@@ -2294,9 +2451,412 @@ fn card(
     }
 }
 
-/// A file opened from a task, shown the way the editor setting says.
+/// A file's card: the editor, and for Markdown a toolbar with Edit, Side by
+/// side and Preview, plus a brief's Finish with AI and Hand to agent.
 #[allow(clippy::too_many_arguments)]
 fn file_card(
+    ui: &mut Ui,
+    app: &mut App,
+    side: usize,
+    path: &std::path::Path,
+    body: Rect,
+    resp: &egui::Response,
+    focused: bool,
+    acts: &mut Vec<Action>,
+) {
+    if !crate::briefs::is_markdown(path) {
+        return file_editor(ui, app, side, path, body, resp, focused, acts);
+    }
+    let brief = crate::briefs::is_brief(path);
+    let mode =
+        app.md_mode
+            .get(path)
+            .copied()
+            .unwrap_or(if brief { MdMode::Preview } else { MdMode::Edit });
+    let strip = Rect::from_min_size(body.min, vec2(body.width(), 40.0));
+    let rest = Rect::from_min_max(pos2(body.left(), strip.bottom()), body.max);
+    md_toolbar(ui, app, path, strip, mode, brief, acts);
+    match mode {
+        MdMode::Edit => file_editor(ui, app, side, path, rest, resp, focused, acts),
+        MdMode::Preview => {
+            let mid = rest.center().x;
+            let left = Rect::from_min_max(rest.min, pos2(mid - 0.5, rest.bottom()));
+            let right = Rect::from_min_max(pos2(mid + 0.5, rest.top()), rest.max);
+            file_editor(ui, app, side, path, left, resp, focused, acts);
+            ui.painter().line_segment(
+                [pos2(mid, rest.top()), pos2(mid, rest.bottom())],
+                Stroke::new(1.0, Color32::from_white_alpha(14)),
+            );
+            md_preview(ui, app, side, path, right);
+        }
+    }
+}
+
+fn md_toolbar(
+    ui: &mut Ui,
+    app: &App,
+    path: &std::path::Path,
+    strip: Rect,
+    mode: MdMode,
+    brief: bool,
+    acts: &mut Vec<Action>,
+) {
+    ui.painter().rect_filled(strip, 0.0, PANEL_2);
+    ui.painter().line_segment(
+        [strip.left_bottom(), strip.right_bottom()],
+        Stroke::new(1.0, Color32::from_white_alpha(10)),
+    );
+    let mut bar = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(("md-toolbar", path))
+            .max_rect(strip.shrink2(vec2(12.0, 6.0)))
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    // A narrow card keeps the buttons and drops the words around them.
+    let compact = strip.width() < 760.0;
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let (icon, name) = match brief.then(|| crate::briefs::template_of(&text)).flatten() {
+        Some(t) => (t.icon, format!("{} brief", t.name)),
+        None if brief => ("✎", "Brief".to_string()),
+        None => ("¶", "Markdown".to_string()),
+    };
+    bar.label(
+        RichText::new(icon)
+            .size(14.0)
+            .color(if brief { ACCENT } else { MUTED }),
+    )
+    .on_hover_text(&name);
+    if !compact {
+        bar.label(RichText::new(name).size(13.0).color(TEXT));
+    }
+    bar.with_layout(Layout::right_to_left(Align::Center), |bar| {
+        bar.spacing_mut().item_spacing.x = 6.0;
+        let builder = brief.then(|| app.brief_agent(path)).flatten();
+        if let Some(t) = builder {
+            // Handed off: what's next is reviewing what the agent built.
+            let review = egui::Button::new(
+                RichText::new("Review  →").color(theme::c::ON_ACCENT).strong(),
+            )
+            .fill(ACCENT)
+            .corner_radius(CornerRadius::same(6));
+            if bar
+                .add(review)
+                .on_hover_text(format!("{}'s changes, to comment on and accept", app.label(t)))
+                .clicked()
+            {
+                acts.push(Action::OpenTerm(t.id.clone()));
+                acts.push(Action::Show(Target {
+                    item: t.id.clone(),
+                    child: Child::Changes,
+                }));
+            }
+            if bar.small_button("Show agent").clicked() {
+                acts.push(Action::OpenBeside(t.id.clone()));
+            }
+            let (state, color) = state_label(t);
+            let (done, all) = crate::briefs::progress(&text);
+            let steps = if all > 0 {
+                format!(" · {done}/{all} steps")
+            } else {
+                String::new()
+            };
+            bar.label(
+                RichText::new(format!("● {} {state}{steps}", app.label(t)))
+                    .small()
+                    .color(color),
+            )
+            .on_hover_text("The agent ticks the brief's steps as it finishes them");
+            bar.add_space(8.0);
+        } else if brief {
+            let go = egui::Button::new(
+                RichText::new(if compact { "Hand off  →" } else { "Hand to agent  →" })
+                    .color(theme::c::ON_ACCENT)
+                    .strong(),
+            )
+            .fill(ACCENT)
+            .corner_radius(CornerRadius::same(6));
+            if bar
+                .add(go)
+                .on_hover_text("Start a new agent in this project with the brief as its task")
+                .clicked()
+            {
+                acts.push(Action::HandOffBrief(path.to_path_buf()));
+            }
+            match app.brief_runs.get(path) {
+                Some(run) => {
+                    if bar.small_button("Stop").clicked() {
+                        acts.push(Action::StopBrief(path.to_path_buf()));
+                    }
+                    bar.label(
+                        RichText::new(format!("✦ filling in · {}", run.status))
+                            .small()
+                            .color(GREEN),
+                    )
+                    .on_hover_text("claude is reading the code and writing into this brief");
+                }
+                None => {
+                    let label = if compact { "✦ Finish" } else { "✦ Finish with AI" };
+                    if bar
+                        .add(
+                            egui::Button::new(RichText::new(label).color(TEXT))
+                                .corner_radius(CornerRadius::same(6)),
+                        )
+                        .on_hover_text(
+                            "An agent reads the code and fills in the rest; you'll see it write here",
+                        )
+                        .clicked()
+                    {
+                        acts.push(Action::FinishBrief(path.to_path_buf()));
+                    }
+                }
+            }
+            bar.add_space(8.0);
+        }
+        // Edit | Preview, as one segmented control.
+        for (m, label) in [(MdMode::Preview, "Preview"), (MdMode::Edit, "Edit")] {
+            if bar
+                .add(egui::Button::selectable(mode == m, RichText::new(label).size(12.5)))
+                .clicked()
+            {
+                acts.push(Action::SetMdMode(path.to_path_buf(), m));
+            }
+        }
+    });
+}
+
+/// The rendered Markdown beside the editor, scrolling with it both ways.
+/// Without an editor buffer it shows the file on disk.
+fn md_preview(
+    ui: &mut Ui,
+    app: &mut App,
+    side: usize,
+    path: &std::path::Path,
+    rect: Rect,
+) {
+    let item = app
+        .cards
+        .get(side)
+        .map(|t| t.item.clone())
+        .unwrap_or_default();
+    // The editor's buffer when it has the file, so the preview is live as
+    // you type; the file on disk otherwise (a terminal editor saving it, or
+    // an agent writing it).
+    let ed = app.tabs.iter().position(|t| t.id == item).and_then(|ti| {
+        app.tabs[ti]
+            .files
+            .iter()
+            .position(|e| e.path == path)
+            .map(|fi| (ti, fi))
+    });
+    let text = match ed {
+        Some((ti, fi)) => app.tabs[ti].files[fi].lines.join("\n"),
+        None => std::fs::read_to_string(path).unwrap_or_default(),
+    };
+    let synced = ed.is_some();
+    let editor_top = ed
+        .map(|(ti, fi)| app.tabs[ti].files[fi].scroll_y)
+        .unwrap_or(0);
+    let sync = app.md_sync.entry(path.to_path_buf()).or_default();
+    if synced && editor_top != sync.editor_top {
+        sync.scroll_to = Some(crate::markdown::y_for_line(&sync.anchors, editor_top));
+        sync.editor_top = editor_top;
+    }
+    let jump = sync.scroll_to.take();
+
+    ui.painter().rect_filled(
+        rect,
+        0.0,
+        theme::surface(theme::c::BG, theme::scheme(&app.settings.scheme).bg),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(("md-preview", side, path))
+            .max_rect(rect.shrink2(vec2(0.0, 2.0)))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    let mut area = ScrollArea::vertical()
+        .id_salt(("md-scroll", side, path))
+        .auto_shrink([false, false]);
+    if let Some(y) = jump {
+        area = area.vertical_scroll_offset(y);
+    }
+    let mut anchors = vec![];
+    let out = area.show(&mut child, |ui| {
+        // A readable measure, centred when the card is wide.
+        let w = ui.available_width();
+        let measure = w.min(760.0);
+        ui.horizontal_top(|ui| {
+            ui.add_space(((w - measure) / 2.0).max(0.0) + 22.0);
+            ui.vertical(|ui| {
+                ui.set_width(measure - 44.0);
+                ui.add_space(16.0);
+                anchors = crate::markdown::show(ui, &text);
+                ui.add_space(40.0);
+            });
+        });
+    });
+    let offset = out.state.clamped_offset().y;
+    let over = ui.rect_contains_pointer(rect);
+    let sync = app.md_sync.entry(path.to_path_buf()).or_default();
+    // The 16pt above the content was counted in the anchors' origin.
+    sync.anchors = anchors.into_iter().map(|(l, y)| (l, y + 16.0)).collect();
+    // Scrolled by hand: bring the editor along.
+    if synced && jump.is_none() && over && (offset - sync.preview_y).abs() > 0.5 {
+        let line = crate::markdown::line_for_y(&sync.anchors, offset);
+        sync.editor_top = line;
+        if let Some((ti, fi)) = ed {
+            let e = &mut app.tabs[ti].files[fi];
+            e.scroll_y = line.min(e.lines.len().saturating_sub(1));
+        }
+    }
+    let sync = app.md_sync.entry(path.to_path_buf()).or_default();
+    sync.preview_y = offset;
+}
+
+/// Writing a review comment on a diff line.
+fn remark_dialog(ctx: &egui::Context, app: &mut App) {
+    let Some((id, r)) = app.remarking.as_mut() else {
+        return;
+    };
+    let (mut add, mut close) = (false, false);
+    let at = match r.line {
+        Some(l) => format!("{}:{l}", r.file),
+        None => r.file.clone(),
+    };
+    egui::Window::new(format!("Comment for {id}"))
+        .collapsible(false)
+        .resizable(false)
+        .default_width(480.0)
+        .anchor(Align2::CENTER_TOP, vec2(0.0, 140.0))
+        .show(ctx, |ui| {
+            ui.label(RichText::new(&at).small().color(MUTED));
+            ui.label(RichText::new(&r.quote).monospace().small().color(FAINT));
+            ui.add_space(6.0);
+            let edit = ui.add(
+                egui::TextEdit::multiline(&mut r.text)
+                    .hint_text("What should change here?")
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            );
+            if !edit.has_focus() && r.text.is_empty() {
+                edit.request_focus();
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let ok = !r.text.trim().is_empty();
+                if ui.add_enabled(ok, egui::Button::new("Add  ⌘↵")).clicked()
+                    || (ok && ui.input(|i| i.key_pressed(Key::Enter) && i.modifiers.command))
+                {
+                    add = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                    close = true;
+                }
+            });
+        });
+    if add {
+        if let Some((id, r)) = app.remarking.take() {
+            app.remarks.entry(id).or_default().push(r);
+        }
+        app.focus_pane = true;
+    } else if close {
+        app.remarking = None;
+        app.focus_pane = true;
+    }
+}
+
+/// Pick a template and a title for a new brief.
+fn brief_picker(ui: &mut Ui, f: &mut crate::app::NewForm, create: &mut bool) {
+    ui.label(
+        RichText::new(
+            "Write down what you want. Finish it yourself, let an agent fill in the rest, \
+             then hand it to an agent to build.",
+        )
+        .size(12.5)
+        .color(MUTED),
+    );
+    ui.add_space(12.0);
+    ui.label(RichText::new("Title").size(12.5).color(MUTED));
+    let r = ui.add(
+        TextEdit::singleline(&mut f.name)
+            .hint_text("Fix the login redirect loop")
+            .font(FontId::proportional(15.0))
+            .desired_width(f32::INFINITY),
+    );
+    if !f.focus_set {
+        r.request_focus();
+        f.focus_set = true;
+    }
+    if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+        *create = true;
+    }
+    ui.add_space(14.0);
+    ui.label(RichText::new("Template").size(12.5).color(MUTED));
+    ui.add_space(4.0);
+    let gap = 10.0;
+    let w = (ui.available_width() - gap * 2.0) / 3.0;
+    for (row, chunk) in crate::briefs::TEMPLATES.chunks(3).enumerate() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (k, t) in chunk.iter().enumerate() {
+                let i = row * 3 + k;
+                let on = f.template == i;
+                let (rect, r) = ui.allocate_exact_size(vec2(w, 78.0), Sense::click());
+                let p = ui.painter();
+                let fill = if on {
+                    ACCENT.gamma_multiply(0.12)
+                } else if r.hovered() {
+                    theme::c::CARD_HOVER
+                } else {
+                    theme::c::CARD
+                };
+                p.rect_filled(rect, 8.0, fill);
+                p.rect_stroke(
+                    rect,
+                    8.0,
+                    Stroke::new(
+                        if on { 1.5 } else { 1.0 },
+                        if on { ACCENT } else { theme::c::BORDER },
+                    ),
+                    egui::StrokeKind::Inside,
+                );
+                p.text(
+                    rect.left_top() + vec2(14.0, 20.0),
+                    Align2::LEFT_CENTER,
+                    t.icon,
+                    FontId::proportional(17.0),
+                    if on { ACCENT } else { MUTED },
+                );
+                p.text(
+                    rect.left_top() + vec2(36.0, 20.0),
+                    Align2::LEFT_CENTER,
+                    t.name,
+                    FontId::proportional(14.0),
+                    TEXT,
+                );
+                let g = p.layout(
+                    t.blurb.to_string(),
+                    FontId::proportional(11.5),
+                    MUTED,
+                    w - 28.0,
+                );
+                p.galley(rect.left_top() + vec2(14.0, 38.0), g, MUTED);
+                if r.clicked() {
+                    f.template = i;
+                }
+                if r.double_clicked() {
+                    f.template = i;
+                    *create = true;
+                }
+            }
+        });
+        ui.add_space(gap);
+    }
+}
+
+/// A file opened from a task, shown the way the editor setting says.
+#[allow(clippy::too_many_arguments)]
+fn file_editor(
     ui: &mut Ui,
     app: &mut App,
     side: usize,
@@ -2328,7 +2888,7 @@ fn file_card(
             }
         }
     };
-    match crate::editors::resolve(&app.settings.editor) {
+    match crate::editors::for_file(&app.settings.editor, path) {
         crate::editors::Kind::Terminal(cmd) => {
             // This card's own item; the focused card may be showing another.
             let item = app
@@ -2353,7 +2913,14 @@ fn file_card(
             }
         }
         kind => {
-            let it = &mut app.tabs[app.cur];
+            // This card's own item, which isn't the focused card's when it's
+            // on screen beside it.
+            let ti = app
+                .cards
+                .get(side)
+                .and_then(|c| app.tabs.iter().position(|t| t.id == c.item))
+                .unwrap_or(app.cur);
+            let it = &mut app.tabs[ti];
             let Some(i) = it.files.iter().position(|e| e.path == path) else {
                 center(ui, rel.clone(), Some("Open".into()), acts);
                 return;
@@ -2382,7 +2949,10 @@ fn file_card(
                     }
                 });
             }
+            // editor_body works on the current item; point it at this one.
+            let cur = std::mem::replace(&mut app.cur, ti);
             editor_body(ui, app, body, resp, focused, acts);
+            app.cur = cur;
         }
     }
 }
@@ -2575,7 +3145,10 @@ fn term_body(
             t.view.open_find();
             ui.close();
         }
-        if ui.button(format!("Clear   {}K", cmd_label())).clicked() {
+        if ui
+            .button(format!("Clear   {}", crate::keys::hint("clear_terminal")))
+            .clicked()
+        {
             t.view.clear_scrollback();
             actions.push(termview::TermAction::Typed(vec![0x0c]));
             ui.close();
@@ -2689,6 +3262,7 @@ fn editor_body(
     if focused && app.find.is_none() && app.goto.is_none() {
         let events = ui.input(|i| i.events.clone());
         let mut saved: Option<Result<(), String>> = None;
+        let md = e.is_markdown();
         for ev in events {
             match ev {
                 Event::Text(t) => {
@@ -2733,6 +3307,10 @@ fn editor_body(
                                 e.find_next(&q);
                             }
                         }
+                        // inkterm's Markdown keys: ⌘B bold, ⌘E code, ⌘T task.
+                        Key::B if cmd && md && !m.shift => e.wrap_word("**"),
+                        Key::E if cmd && md && !m.shift => e.wrap_word("`"),
+                        Key::T if cmd && md && !m.shift => e.toggle_task(),
                         Key::K if cmd => e.delete_line(),
                         Key::R if cmd => e.reload(),
                         Key::Enter => e.newline(),
@@ -2928,8 +3506,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
     let in_repo = app
         .new_form
         .as_ref()
-        .map(|f| git::root(&paths::expand(f.dir.trim())).is_some())
-        .unwrap_or(false);
+        .is_some_and(|f| app.is_repo_cached(f.dir.trim()));
     // ⌘↵ creates from anywhere in the form (the task box takes plain Enter).
     let (cmd_enter, esc) = ctx.input(|i| {
         (
@@ -2942,6 +3519,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
     let title = match kind {
         NewKind::Agent => "New agent",
         NewKind::Project => "New project",
+        NewKind::Brief => "New brief",
     };
     let id = Id::unique("new-form");
     egui::Modal::new(id)
@@ -2951,10 +3529,14 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
             ui.set_width(520.0);
             ui.label(RichText::new(title).size(16.0).strong().color(TEXT));
             ui.add_space(8.0);
+            if kind == NewKind::Brief {
+                brief_picker(ui, f, &mut create);
+            }
             egui::Grid::new("new-form-grid")
                 .num_columns(2)
                 .spacing([12.0, 10.0])
                 .show(ui, |ui| match kind {
+                    NewKind::Brief => {}
                     NewKind::Agent => {
                         ui.label("Task");
                         let r = ui.add(
@@ -3075,6 +3657,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                 let label = match kind {
                     NewKind::Agent => "Start agent",
                     NewKind::Project => "Create project",
+                    NewKind::Brief => "Create brief",
                 };
                 if ui
                     .add_enabled(
@@ -3105,17 +3688,29 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
 
 fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     new_form(ctx, app);
+    remark_dialog(ctx, app);
     if let Some(c) = &app.confirm {
         let text = c.text().to_string();
+        let accept = matches!(c, Confirm::Accept { .. });
         let mut answer: Option<bool> = None;
         let m = egui::Modal::new(Id::unique("confirm")).show(ctx, |ui| {
             ui.set_width(440.0);
             ui.label(RichText::new(text).size(14.0));
+            if let Some(Confirm::Accept { message, .. }) = app.confirm.as_mut() {
+                ui.add_space(8.0);
+                ui.label(RichText::new("Commit message").small().color(MUTED));
+                ui.add(
+                    egui::TextEdit::multiline(message)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY),
+                );
+            }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(RichText::new("Yes").strong()).clicked()
-                    || ui.input(|i| i.key_pressed(Key::Enter))
-                {
+                // Enter types a newline in the message; ⌘↵ accepts.
+                let enter = ui.input(|i| i.key_pressed(Key::Enter) && (!accept || i.modifiers.command));
+                let yes = if accept { "Accept" } else { "Yes" };
+                if ui.button(RichText::new(yes).strong()).clicked() || enter {
                     answer = Some(true);
                 }
                 if ui.button("Cancel").clicked() {
@@ -3320,12 +3915,13 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
             act: BarAct::Start(q.to_string()),
         });
     }
-    let cmds: [(&str, &str, BarFn); 10] = [
+    let cmds: [(&str, &str, BarFn); 11] = [
         ("New agent", "✦", |_, a| a.push(Action::NewAgent)),
         ("New terminal", "❯", |app, a| {
             a.push(new_terminal_action(app))
         }),
         ("New project…", "+", |_, a| a.push(Action::NewProject)),
+        ("New brief…", "✎", |_, a| a.push(Action::NewBrief)),
         ("Show changes", "±", |app, _| app.show_git()),
         ("Browse files", "▤", |app, _| {
             app.toggle_child(Child::Files)
@@ -3333,8 +3929,8 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
         ("Commit staged changes", "c", |_, a| {
             a.push(Action::StartCommit)
         }),
-        ("Merge agent branch into main", "⇢", |_, a| {
-            a.push(Action::Merge)
+        ("Accept agent: commit and merge", "✓", |_, a| {
+            a.push(Action::Accept)
         }),
         ("Split view", "◫", |_, a| a.push(Action::Split)),
         ("Settings: editor, font, theme", "⚙", |_, a| {
@@ -3507,88 +4103,78 @@ fn shortcuts_sheet(ctx: &egui::Context, app: &mut App) {
     if !app.show_keys {
         return;
     }
-    let m = mod_label();
     let c = cmd_label();
-    let rows: Vec<(String, &str)> = vec![
-        (
-            format!("{m}P"),
-            "Command bar: open a file, jump to an agent, start a task",
-        ),
-        (format!("{m}N"), "New agent (asks for the task)"),
-        (format!("{m}T"), "New terminal"),
-        (format!("{m}A"), "Next agent that needs you"),
-        (
-            format!("{m}Y  /  {m}R"),
-            "Approve / reject the pending command",
-        ),
-        (format!("{m}G"), "Changes (again to go back)"),
-        (format!("{m}O"), "Files (again to go back)"),
-        (format!("{m}U"), "Undo history"),
-        (format!("{m}D"), "Split: a second card beside this one"),
-        (format!("{m}W"), "Close the focused card or the open file"),
-        (
-            format!("{m}B"),
-            "Broadcast: typing goes to every terminal card",
-        ),
-        (
-            format!("Ctrl+Tab  /  {m}]"),
-            "Next agent or terminal (Shift / [ for previous)",
-        ),
-        (format!("{c}1–9"), "Switch project"),
-        (format!("{m}J  /  {m}K"), "Previous / next project"),
-        (format!("{m}E"), "Hide or show the sidebar"),
-        (
-            format!("{c}=  {c}-  {c}0"),
-            "Font size bigger / smaller / reset",
-        ),
-        (format!("{c},"), "Settings"),
-        (format!("{m}/"), "These shortcuts"),
-        (
-            format!("{c}F"),
-            "Terminal: find in scrollback (Enter / Shift+Enter step)",
-        ),
+    // Keys inside the terminal, the editor and Changes, which stay as they are.
+    let fixed: Vec<(String, &str)> = vec![
+        (format!("{c}F"), "Terminal: find in scrollback"),
         (
             format!("{c}↑  /  {c}↓"),
             "Terminal: previous / next command",
         ),
-        (format!("{c}K"), "Terminal: clear"),
-        (
-            format!("{c}-click"),
-            "Terminal: open a link, or a file path in the editor",
-        ),
+        (format!("{c}-click"), "Terminal: open a link or a file path"),
         ("Shift+PageUp / Down".into(), "Terminal: scroll back"),
+        (
+            format!("{c}S  {c}Z  {c}F  {c}L"),
+            "Editor: save, undo, find, go to line",
+        ),
         ("j  k".into(), "Changes: move (the diff follows)"),
         ("space  a".into(), "Changes: stage the file / everything"),
-        (
-            "e  c  d".into(),
-            "Changes: edit / commit / discard (asks first)",
-        ),
+        ("e  c  d".into(), "Changes: edit / commit / discard"),
         ("s  u".into(), "Diff: stage / unstage the hunk"),
     ];
-    let mut rows = rows;
-    let tm = app.settings.tile_mod;
-    if tm != crate::tiling::TileMod::Off {
-        for (shift, key, what) in crate::tiling::HELP {
-            rows.push((crate::tiling::chord(tm, *shift, key), what));
-        }
-    }
+    let keys = &app.settings.keys;
     let mut open = true;
     egui::Window::new("Keyboard shortcuts")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .anchor(Align2::CENTER_TOP, vec2(0.0, 80.0))
+        .default_height(560.0)
+        .anchor(Align2::CENTER_TOP, vec2(0.0, 60.0))
         .show(ctx, |ui| {
-            egui::Grid::new("keys")
-                .num_columns(2)
-                .spacing([18.0, 6.0])
-                .show(ui, |ui| {
-                    for (k, what) in &rows {
-                        ui.label(RichText::new(k).monospace().color(TEXT));
-                        ui.label(RichText::new(*what).color(MUTED));
+            ui.label(
+                RichText::new(format!(
+                    "Change any of these in Settings → Shortcuts ({c},), or in [keys] in {}.",
+                    tilde(&muster_core::paths::config())
+                ))
+                .small()
+                .color(MUTED),
+            );
+            ui.add_space(6.0);
+            ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
+                egui::Grid::new("keys")
+                    .num_columns(2)
+                    .spacing([18.0, 5.0])
+                    .show(ui, |ui| {
+                        let mut group = "";
+                        for cmd in crate::keys::COMMANDS {
+                            let chords = keys.chords(cmd.id);
+                            if chords.is_empty() {
+                                continue;
+                            }
+                            if cmd.group != group {
+                                group = cmd.group;
+                                ui.label(
+                                    RichText::new(group.to_uppercase())
+                                        .small()
+                                        .strong()
+                                        .color(MUTED),
+                                );
+                                ui.end_row();
+                            }
+                            let k: Vec<String> = chords.iter().map(|c| c.label()).collect();
+                            ui.label(RichText::new(k.join("  /  ")).monospace().color(TEXT));
+                            ui.label(RichText::new(cmd.label).color(MUTED));
+                            ui.end_row();
+                        }
+                        ui.label(RichText::new("INSIDE A CARD").small().strong().color(MUTED));
                         ui.end_row();
-                    }
-                });
+                        for (k, what) in &fixed {
+                            ui.label(RichText::new(k).monospace().color(TEXT));
+                            ui.label(RichText::new(*what).color(MUTED));
+                            ui.end_row();
+                        }
+                    });
+            });
         });
     if !open || ctx.input(|i| i.key_pressed(Key::Escape)) {
         app.show_keys = false;
@@ -3602,6 +4188,17 @@ fn toggle_settings(app: &mut App) {
         Some(_) => None,
         None => Some(SettingsUi::default()),
     };
+}
+
+/// Save any built-in editor buffer of `path`, so an agent reads what's on
+/// screen.
+fn save_open(app: &mut App, path: &std::path::Path) -> anyhow::Result<()> {
+    for it in app.tabs.iter_mut() {
+        for e in it.files.iter_mut().filter(|e| e.path == path && e.dirty) {
+            e.save()?;
+        }
+    }
+    Ok(())
 }
 
 /// The system folder picker, starting at what's typed when that's a folder.
@@ -3666,6 +4263,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
         .cloned()
         .collect();
     let s = &mut app.settings;
+    let capturing = &mut app.capturing;
     let font_error = app.font_error.as_deref();
     let started_transparent = app.transparent;
     egui::Window::new("Settings")
@@ -3674,6 +4272,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
         .collapsible(false)
         .resizable(true)
         .default_width(560.0)
+        .max_width(680.0)
         .default_height(620.0)
         .show(ctx, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -3715,8 +4314,8 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 });
                 let what = match crate::editors::resolve(&s.editor) {
                     crate::editors::Kind::Builtin => "Clicking a file opens it in the card, in muster's own editor. It reloads when an agent edits the file.".to_string(),
-                    crate::editors::Kind::Terminal(c) => format!("Clicking a file runs `{c}` inside the card, one per agent or terminal. Opening another file sends it to the same {c}."),
-                    crate::editors::Kind::Gui(c) => format!("Clicking a file opens it in `{c}` at the right line. muster shows it read-only alongside and reloads on save."),
+                    crate::editors::Kind::Terminal(c) => format!("Clicking a file runs `{c}` inside the card, one per agent or terminal. Opening another file sends it to the same {c}. Markdown still opens in muster's own editor."),
+                    crate::editors::Kind::Gui(c) => format!("Clicking a file opens it in `{c}` at the right line. muster shows it read-only alongside and reloads on save. Markdown still opens in muster's own editor."),
                 };
                 Frame::new()
                     .fill(Color32::from_black_alpha(60))
@@ -3838,11 +4437,11 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 }
                 ui.horizontal(|ui| {
                     ui.label("Size");
-                    if ui.small_button("−").on_hover_text(format!("{}-", cmd_label())).clicked() {
+                    if ui.small_button("−").on_hover_text(crate::keys::hint("font_smaller")).clicked() {
                         s.bump_font(-1.0);
                     }
                     ui.add(egui::Slider::new(&mut s.font_size, cfg::FONT_SIZE_MIN..=cfg::FONT_SIZE_MAX).step_by(0.5));
-                    if ui.small_button("+").on_hover_text(format!("{}=", cmd_label())).clicked() {
+                    if ui.small_button("+").on_hover_text(crate::keys::hint("font_bigger")).clicked() {
                         s.bump_font(1.0);
                     }
                     if s.font_size != cfg::FONT_SIZE_DEFAULT && ui.small_button("Reset").clicked() {
@@ -3923,30 +4522,100 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     ui.selectable_value(&mut s.tabs_bottom, false, "Top");
                     ui.selectable_value(&mut s.tabs_bottom, true, "Bottom");
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Card keys use");
-                    for m in crate::tiling::TileMod::ALL {
-                        ui.selectable_value(&mut s.tile_mod, m, m.label());
-                    }
-                });
-                if s.tile_mod != crate::tiling::TileMod::Off {
-                    egui::Grid::new("tile-keys").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
-                        for (shift, key, what) in crate::tiling::HELP {
-                            ui.label(
-                                RichText::new(crate::tiling::chord(s.tile_mod, *shift, key))
-                                    .monospace()
-                                    .color(TEXT),
+                ui.add_space(8.0);
+                settings_heading(ui, "Shortcuts");
+                ui.label(
+                    RichText::new("Click a shortcut and press the new keys. Esc cancels; Backspace leaves the command without one. They're kept in [keys] in config.toml, where a command can have more than one.")
+                        .small()
+                        .color(MUTED),
+                );
+                let clashes = s.keys.clashes();
+                if !clashes.is_empty() {
+                    let names: Vec<String> = clashes
+                        .iter()
+                        .map(|(ch, ids)| format!("{} is on {}", ch.label(), ids.join(" and ")))
+                        .collect();
+                    ui.label(RichText::new(names.join(" · ")).small().color(AMBER));
+                }
+                let mut group = "";
+                egui::Grid::new("key-settings")
+                    .num_columns(3)
+                    .max_col_width(300.0)
+                    .spacing([14.0, 4.0])
+                    .show(ui, |ui| {
+                        for cmd in crate::keys::COMMANDS {
+                            if cmd.group != group {
+                                group = cmd.group;
+                                ui.label(RichText::new(group).strong().color(TEXT));
+                                ui.end_row();
+                            }
+                            ui.add(
+                                egui::Label::new(RichText::new(cmd.label).color(MUTED)).wrap(),
                             );
-                            ui.label(RichText::new(*what).color(MUTED));
+                            let waiting = *capturing == Some(cmd.id);
+                            let clash = clashes.iter().any(|(_, ids)| ids.contains(&cmd.id));
+                            let shown: Vec<String> =
+                                s.keys.chords(cmd.id).iter().map(|c| c.label()).collect();
+                            let text = if waiting {
+                                "press keys…".to_string()
+                            } else if shown.is_empty() {
+                                "—".to_string()
+                            } else {
+                                shown.join("  /  ")
+                            };
+                            let b = egui::Button::new(
+                                RichText::new(text).monospace().color(if waiting {
+                                    ACCENT
+                                } else if clash {
+                                    AMBER
+                                } else {
+                                    TEXT
+                                }),
+                            )
+                            .min_size(vec2(130.0, 0.0))
+                            .selected(waiting);
+                            if ui.add(b).clicked() {
+                                *capturing = if waiting { None } else { Some(cmd.id) };
+                            }
+                            if !s.keys.is_default(cmd.id) {
+                                if ui
+                                    .small_button("↺")
+                                    .on_hover_text("Back to the default")
+                                    .clicked()
+                                {
+                                    s.keys.reset(cmd.id);
+                                }
+                            } else {
+                                ui.label("");
+                            }
                             ui.end_row();
                         }
                     });
-                    ui.label(
-                        RichText::new("These chords are taken before the terminal sees them, so the shell no longer gets them as Meta keys.")
-                            .small()
-                            .color(MUTED),
-                    );
+                if ui.button("Reset every shortcut").clicked() {
+                    for cmd in crate::keys::COMMANDS {
+                        s.keys.reset(cmd.id);
+                    }
                 }
+                ui.add_space(8.0);
+                settings_heading(ui, "Config file");
+                let path = muster_core::paths::config();
+                ui.label(
+                    RichText::new("Everything here, and the daemon's settings (agents, the command policy, hosts), is in one file. Edits made there show up here within a couple of seconds.")
+                        .small()
+                        .color(MUTED),
+                );
+                ui.add(
+                    egui::Label::new(RichText::new(tilde(&path)).monospace().color(TEXT)).wrap(),
+                );
+                ui.horizontal(|ui| {
+                    if ui.small_button("Open").clicked() {
+                        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                        let _ = std::process::Command::new(opener).arg(&path).spawn();
+                    }
+                    if ui.small_button("Copy path").clicked() {
+                        ui.ctx().copy_text(path.display().to_string());
+                    }
+                });
                 ui.add_space(8.0);
                 settings_heading(ui, "Shell integration");
                 ui.label(
@@ -4164,6 +4833,22 @@ fn apply(app: &mut App, a: Action) {
         Action::FocusPane(p) => app.focus_card(p),
         Action::Split => app.toggle_split(),
         Action::NewShell => app.new_shell(),
+        Action::NewBrief => app.open_new_brief(),
+        Action::OpenBrief(p) => app.open_brief(&p),
+        Action::FinishBrief(p) | Action::HandOffBrief(p) if save_open(app, &p).is_err() => {
+            app.notify("couldn't save the brief first", true);
+        }
+        Action::FinishBrief(p) => app.finish_brief(&p),
+        Action::StopBrief(p) => app.stop_brief(&p),
+        Action::Remark => app.start_remark(),
+        Action::SendRemarks(id) => app.send_remarks(&id),
+        Action::ClearRemarks(id) => {
+            app.remarks.remove(&id);
+        }
+        Action::HandOffBrief(p) => app.hand_off_brief(&p),
+        Action::SetMdMode(p, m) => {
+            app.md_mode.insert(p, m);
+        }
         Action::NewShellIn(root) => app.new_shell_in(PathBuf::from(root)),
         Action::FoldProject(root) => {
             let f = &mut app.settings.folded_projects;
@@ -4196,14 +4881,14 @@ fn apply(app: &mut App, a: Action) {
             };
             app.confirm = Some(Confirm::Remove { id, prune, text });
         }
-        Action::Merge => app.merge_prompt(),
-        Action::Stage(p) => app.git_op(|d| git::stage_file(d, &p).map(|_| format!("staged {p}"))),
+        Action::Accept => app.accept_prompt(),
+        Action::Stage(p) => app.git_op(move |d| git::stage_file(d, &p).map(|_| format!("staged {p}"))),
         Action::Unstage(p) => {
-            app.git_op(|d| git::unstage_file(d, &p).map(|_| format!("unstaged {p}")))
+            app.git_op(move |d| git::unstage_file(d, &p).map(|_| format!("unstaged {p}")))
         }
-        Action::StageAll => app.git_op(|d| git::stage_all(d).map(|_| "staged everything".into())),
+        Action::StageAll => app.git_op(move |d| git::stage_all(d).map(|_| "staged everything".into())),
         Action::UnstageAll => {
-            app.git_op(|d| git::unstage_file(d, ".").map(|_| "unstaged everything".into()))
+            app.git_op(move |d| git::unstage_file(d, ".").map(|_| "unstaged everything".into()))
         }
         Action::StartCommit => {
             if app.changes.iter().any(|c| c.staged()) {
@@ -4218,7 +4903,7 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::Commit => {
             let msg = app.commit_msg.trim().to_string();
-            app.git_op(|d| git::commit(d, &msg).map(|m| format!("committed {m}")));
+            app.git_op(move |d| git::commit(d, &msg).map(|m| format!("committed {m}")));
             if app.notice.as_ref().is_some_and(|n| !n.2) {
                 app.commit_msg.clear();
             }
@@ -4231,7 +4916,7 @@ fn apply(app: &mut App, a: Action) {
                 text,
             });
         }
-        Action::Checkout(b) => app.git_op(|d| git::checkout(d, &b)),
+        Action::Checkout(b) => app.git_op(move |d| git::checkout(d, &b)),
         Action::Decide(id, allow) => app.decide(id, allow),
         Action::NextAttention => app.next_attention(),
         Action::Revert(task, s) => {
@@ -4244,18 +4929,18 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::Checkpoint(task) => app.checkpoint(&task),
         Action::StageHunk(h) => {
-            app.git_op(|d| git::stage_hunk(d, &h).map(|_| "staged hunk".into()))
+            app.git_op(move |d| git::stage_hunk(d, &h).map(|_| "staged hunk".into()))
         }
         Action::UnstageHunk(h) => {
-            app.git_op(|d| git::unstage_hunk(d, &h).map(|_| "unstaged hunk".into()))
+            app.git_op(move |d| git::unstage_hunk(d, &h).map(|_| "unstaged hunk".into()))
         }
         Action::StageFileFromDiff(f) => {
             let rel = rel_from_repo(app, &f);
-            app.git_op(|d| git::stage_file(d, &rel).map(|_| format!("staged {rel}")));
+            app.git_op(move |d| git::stage_file(d, &rel).map(|_| format!("staged {rel}")));
         }
         Action::UnstageFileFromDiff(f) => {
             let rel = rel_from_repo(app, &f);
-            app.git_op(|d| git::unstage_file(d, &rel).map(|_| format!("unstaged {rel}")));
+            app.git_op(move |d| git::unstage_file(d, &rel).map(|_| format!("unstaged {rel}")));
         }
         Action::Input(id, data) => app.send_input(&id, data),
         Action::Typed(id, data) => {

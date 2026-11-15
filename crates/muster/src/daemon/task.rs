@@ -13,6 +13,7 @@ use muster_core::config::{AgentConfig, Config};
 use muster_core::proto::{NewTask, TaskInfo, TaskStatus};
 use muster_core::{now_unix, paths};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use super::snapshot::Store;
@@ -37,6 +38,8 @@ pub struct TaskState {
     pub pending_approvals: u32,
     pub snap_count: u32,
     pub status_since: Instant,
+    /// It has finished a turn, so the agent has a session to resume.
+    pub had_turn: bool,
 }
 
 pub struct Task {
@@ -48,6 +51,10 @@ pub struct Task {
     pub repo: Option<PathBuf>,
     pub branch: Option<String>,
     pub base: Option<String>,
+    pub base_branch: Option<String>,
+    pub brief: Option<String>,
+    /// The task it was started with, for starting it again if it never got going.
+    pub prompt: Option<String>,
     pub created_unix: i64,
     pid: Option<u32>,
     pub state: Mutex<TaskState>,
@@ -107,7 +114,7 @@ fn create_worktree(
     repo: &Path,
     id: &str,
     base: Option<&str>,
-) -> Result<(PathBuf, PathBuf, String, String)> {
+) -> Result<(PathBuf, PathBuf, String, String, Option<String>)> {
     let root = PathBuf::from(
         git(repo, &["rev-parse", "--show-toplevel"]).context("not a git repository")?,
     );
@@ -141,6 +148,13 @@ fn create_worktree(
         n += 1;
     };
     std::fs::create_dir_all(paths::worktrees())?;
+    // The branch it forks from is where its work goes back to.
+    let base_branch = match base {
+        None => git(&root, &["symbolic-ref", "--short", "-q", "HEAD"]).ok(),
+        Some(b) => git(&root, &["rev-parse", "-q", "--verify", &format!("refs/heads/{b}")])
+            .ok()
+            .map(|_| b.to_string()),
+    };
     let base = base.unwrap_or("HEAD");
     let base_sha = git(&root, &["rev-parse", &format!("{base}^{{commit}}")])
         .with_context(|| format!("unknown base ref `{base}`"))?;
@@ -150,7 +164,7 @@ fn create_worktree(
         &["worktree", "add", "-q", "-b", &branch, &p, &base_sha],
     )
     .with_context(|| format!("create worktree (does branch {branch} already exist?)"))?;
-    Ok((root, path, branch, base_sha))
+    Ok((root, path, branch, base_sha, base_branch))
 }
 
 pub fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
@@ -159,6 +173,13 @@ pub fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
         &["worktree", "remove", "--force", &path.to_string_lossy()],
     )?;
     Ok(())
+}
+
+fn agent_config(cfg: &Config, agent: &str) -> Result<AgentConfig> {
+    cfg.agents
+        .get(agent)
+        .cloned()
+        .ok_or_else(|| anyhow!("unknown agent `{agent}` (configure it under [agents.{agent}])"))
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -174,7 +195,103 @@ fn resolve_command(cmd: &str) -> String {
             return v;
         }
     }
-    cmd.to_string()
+    if cmd.contains('/') {
+        return cmd.to_string();
+    }
+    shell_lookup(cmd).unwrap_or_else(|| cmd.to_string())
+}
+
+/// Where your interactive shell finds `cmd`. The daemon's PATH is whatever
+/// launched it, often in another order than your shell config sets up, so
+/// a bare `claude` can find an old copy (an npm install in /usr/local/bin)
+/// instead of the one you get typing `claude`. Asked once per command.
+fn shell_lookup(cmd: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static FOUND: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    let found = FOUND.get_or_init(Default::default);
+    if let Some(hit) = found.lock().unwrap().get(cmd) {
+        return hit.clone();
+    }
+    let hit = ask_shell(cmd);
+    if let Some(p) = &hit {
+        tracing::info!("agent command {cmd} is {p}");
+    }
+    found.lock().unwrap().insert(cmd.to_string(), hit.clone());
+    hit
+}
+
+fn ask_shell(cmd: &str) -> Option<String> {
+    if !cmd
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c))
+    {
+        return None;
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let mut child = std::process::Command::new(&shell)
+        .args(["-lic", &format!("command -v -- {cmd}")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    // A shell config that waits on something mustn't hold up the agent.
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() < std::time::Duration::from_secs(4) => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    std::io::Read::read_to_string(child.stdout.as_mut()?, &mut out).ok()?;
+    // An interactive shell may print a greeting first, and terminal escape
+    // codes around the answer; the answer is the last line that's a path to
+    // a file.
+    out.lines()
+        .rev()
+        .map(|l| strip_escapes(l).trim().to_string())
+        .find(|l| l.starts_with('/') && Path::new(l).is_file())
+}
+
+/// A line without its CSI and OSC escape sequences.
+fn strip_escapes(line: &str) -> String {
+    let mut out = String::new();
+    let mut it = line.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            // CSI: parameters, then a final letter.
+            Some('[') => {
+                for c in it.by_ref() {
+                    if c.is_ascii_alphabetic() || c == '~' {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or ESC \.
+            Some(']') => {
+                while let Some(c) = it.next() {
+                    if c == '\x07' || (c == '\x1b' && it.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// `--settings` JSON that wires Claude Code's hooks to `muster hook claude`.
@@ -193,45 +310,139 @@ fn claude_settings(exe: &Path) -> String {
     .to_string()
 }
 
+/// Where a task runs.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Place {
+    pub cwd: PathBuf,
+    pub repo: Option<PathBuf>,
+    pub branch: Option<String>,
+    pub base: Option<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
+}
+
+/// What the daemon keeps of a task in tasks.json, to bring it back after a
+/// restart.
+#[derive(Serialize, Deserialize)]
+pub struct Saved {
+    pub id: String,
+    pub name: String,
+    pub agent: String,
+    #[serde(flatten)]
+    pub place: Place,
+    #[serde(default)]
+    pub brief: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub had_turn: bool,
+    pub created_unix: i64,
+}
+
 impl Task {
     pub fn spawn(id: String, req: &NewTask, cfg: &Config) -> Result<Arc<Task>> {
-        let agent_cfg = cfg.agents.get(&req.agent).cloned().ok_or_else(|| {
-            anyhow!(
-                "unknown agent `{}` (configure it under [agents.{}])",
-                req.agent,
-                req.agent
-            )
-        })?;
-
-        let (cwd, repo, branch, base) = match (&req.repo, req.no_worktree) {
+        let agent_cfg = agent_config(cfg, &req.agent)?;
+        let place = match (&req.repo, req.no_worktree) {
             (Some(r), false) => {
-                let (root, wt, br, base) =
+                let (root, wt, br, base, base_branch) =
                     create_worktree(&paths::expand(r), &id, req.base.as_deref())?;
-                (wt, Some(root), Some(br), Some(base))
+                Place {
+                    cwd: wt,
+                    repo: Some(root),
+                    branch: Some(br),
+                    base: Some(base),
+                    base_branch,
+                }
             }
-            (Some(r), true) => {
+            (repo, _) => {
                 let p = req
                     .cwd
                     .as_deref()
-                    .map(paths::expand)
-                    .unwrap_or_else(|| paths::expand(r));
-                let root = git(&p, &["rev-parse", "--show-toplevel"])
-                    .ok()
-                    .map(PathBuf::from);
-                (p, root, None, None)
-            }
-            (None, _) => {
-                let p = req
-                    .cwd
-                    .as_deref()
+                    .or(repo.as_deref())
                     .map(paths::expand)
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 let root = git(&p, &["rev-parse", "--show-toplevel"])
                     .ok()
                     .map(PathBuf::from);
-                (p, root, None, None)
+                Place {
+                    cwd: p,
+                    repo: root,
+                    branch: None,
+                    base: None,
+                    base_branch: None,
+                }
             }
         };
+        let made = place.branch.clone().zip(place.repo.clone());
+        let started = Self::start(id, req, cfg, agent_cfg, place.clone(), &[], now_unix());
+        // A worktree for an agent that never started would sit there unlisted.
+        if let (Err(_), Some((branch, repo))) = (&started, made) {
+            let _ = remove_worktree(&repo, &place.cwd);
+            let _ = git(&repo, &["branch", "-D", &branch]);
+        }
+        started
+    }
+
+    /// Start a saved task again in its own folder, picking up its last
+    /// session where the agent can.
+    pub fn resume(saved: Saved, cfg: &Config) -> Result<Arc<Task>> {
+        let agent_cfg = agent_config(cfg, &saved.agent)?;
+        // `claude --continue` with no session behind it just exits, as it
+        // does for an agent that was still on its trust prompt: those start
+        // over with their task instead.
+        let resume = saved.had_turn && !agent_cfg.resume_args.is_empty();
+        let req = NewTask {
+            name: saved.name,
+            agent: saved.agent,
+            brief: saved.brief,
+            prompt: if resume { None } else { saved.prompt },
+            ..Default::default()
+        };
+        let extra = if resume {
+            agent_cfg.resume_args.clone()
+        } else {
+            vec![]
+        };
+        let t = Self::start(saved.id, &req, cfg, agent_cfg, saved.place, &extra, saved.created_unix)?;
+        t.state.lock().unwrap().had_turn = saved.had_turn;
+        Ok(t)
+    }
+
+    pub fn saved(&self) -> Saved {
+        Saved {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            agent: self.agent.clone(),
+            place: Place {
+                cwd: self.cwd.clone(),
+                repo: self.repo.clone(),
+                branch: self.branch.clone(),
+                base: self.base.clone(),
+                base_branch: self.base_branch.clone(),
+            },
+            brief: self.brief.clone(),
+            prompt: self.prompt.clone(),
+            had_turn: self.state.lock().unwrap().had_turn,
+            created_unix: self.created_unix,
+        }
+    }
+
+    fn start(
+        id: String,
+        req: &NewTask,
+        cfg: &Config,
+        agent_cfg: AgentConfig,
+        place: Place,
+        extra: &[String],
+        created_unix: i64,
+    ) -> Result<Arc<Task>> {
+        let Place {
+            cwd,
+            repo,
+            branch,
+            base,
+            base_branch,
+        } = place;
         if !cwd.is_dir() {
             bail!("working directory {} does not exist", cwd.display());
         }
@@ -258,7 +469,7 @@ impl Task {
             cmd.arg("--append-system-prompt");
             cmd.arg(muster_core::agents::GUIDE);
         }
-        for a in agent_cfg.args.iter().chain(req.args.iter()) {
+        for a in agent_cfg.args.iter().chain(&req.args).chain(extra) {
             cmd.arg(a);
         }
         if let (Some(p), "arg") = (&req.prompt, agent_cfg.prompt_mode.as_str()) {
@@ -341,7 +552,10 @@ impl Task {
             repo,
             branch,
             base,
-            created_unix: now_unix(),
+            base_branch,
+            brief: req.brief.clone(),
+            prompt: req.prompt.clone(),
+            created_unix,
             pid,
             state: Mutex::new(TaskState {
                 status: TaskStatus::Running,
@@ -350,6 +564,7 @@ impl Task {
                 pending_approvals: 0,
                 snap_count: 0,
                 status_since: Instant::now(),
+                had_turn: false,
             }),
             term: Mutex::new(vt100::Parser::new_with_callbacks(
                 nz(rows, 40),
@@ -536,6 +751,8 @@ impl Task {
             fg,
             choices,
             title: self.title(),
+            brief: self.brief.clone(),
+            base_branch: self.base_branch.clone(),
         }
     }
 
@@ -805,5 +1022,22 @@ mod tests {
         let got = super::proc_program(child.id());
         let _ = child.kill();
         assert_eq!(got.as_deref(), Some("sleep"));
+    }
+}
+
+#[cfg(test)]
+mod shell_tests {
+    #[test]
+    fn finds_a_command_the_way_the_shell_does() {
+        let sh = super::ask_shell("sh").expect("the shell knows sh");
+        assert!(sh.starts_with('/') && sh.ends_with("/sh"));
+        assert!(super::ask_shell("no-such-command-muster").is_none());
+        assert!(super::ask_shell("sh; echo pwned").is_none());
+        assert_eq!(super::resolve_command("/bin/echo"), "/bin/echo");
+        assert_eq!(super::strip_escapes("\x1b[?25h\x1b[?7h/bin/sh"), "/bin/sh");
+        assert_eq!(
+            super::strip_escapes("\x1b]0;title\x07/usr/bin/x"),
+            "/usr/bin/x"
+        );
     }
 }
