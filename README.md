@@ -29,17 +29,22 @@ It's also a real terminal, drawn on the GPU, so the agents run in their own TUIs
 
 ## Install
 
-You need Rust 1.80+ and `git`. macOS and Linux are supported. Windows isn't yet, since the daemon uses Unix sockets.
+On macOS, with Homebrew:
 
 ```sh
-cargo install --path crates/muster       # the daemon, CLI and terminal UI
-cargo install --path crates/muster-gui   # the app
+brew install --cask jason-shen/tap/muster   # Muster.app, and `muster` on your PATH
+```
+
+From source you need Rust 1.80+ and `git`. macOS and Linux are supported. Windows isn't yet, since the daemon uses Unix sockets.
+
+```sh
+make install                             # macOS: Muster.app in ~/Applications, `muster` in ~/.local/bin
+cargo install --path crates/muster       # elsewhere: the daemon, CLI and terminal UI
+cargo install --path crates/muster-gui   # and the app
 muster-gui ~/code/my-app                 # or run `muster-gui` inside a repo
 ```
 
-The daemon starts on its own the first time anything needs it.
-
-**macOS app:** `scripts/macos-app.sh` builds `~/Applications/Muster.app` so muster opens from Spotlight or the Dock. Launched that way it loads your login shell's environment (`PATH`, API keys), so `claude` and `codex` are found.
+The daemon starts on its own the first time anything needs it. Opened from Spotlight or the Dock, the app loads your login shell's environment (`PATH`, API keys), so `claude` and `codex` are found.
 
 **Renderer:** muster draws with wgpu (Metal on macOS) by default. `cargo install --path crates/muster-gui --no-default-features --features glow` builds an OpenGL version instead: 10.5 MB against 14.5 MB, with the same memory use and no difference at idle.
 
@@ -295,10 +300,24 @@ crates/
   muster-core/   protocol, config, command policy, agent detection, git, editor, file tree, client
   muster/        the `muster` binary: daemon, CLI and terminal UI
   muster-gui/    the app: state and actions (app.rs), the UI (views/), the terminal view, tiling, settings
-scripts/macos-app.sh
+assets/          the icon: muster.svg (and a simpler muster-small.svg for 16 and 32 px); `make icon` rebuilds Muster.icns
+scripts/         the app bundle's Info.plist, the Homebrew cask template, macos-app.sh
+Makefile         build, install and publish (`make help`)
 ```
 
 `cargo test --workspace` runs 85 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
+
+## Releasing
+
+`make help` lists the steps. A release is the version in `Cargo.toml`, on a tag you push yourself:
+
+```sh
+make tools                               # once: Rust targets for both Mac architectures
+git tag v0.2.0 && git push origin v0.2.0
+make publish                             # test, build a universal Muster.app, release it on GitHub, update the cask
+```
+
+The app is signed ad hoc, and the cask clears the quarantine flag so Gatekeeper opens it. With a Developer ID, `make publish DEVELOPER_ID="Developer ID Application: …" NOTARY_PROFILE=muster` signs and notarizes it instead. `REPO` and `TAP` name the GitHub repo and the Homebrew tap (`jason-shen/muster` and `jason-shen/homebrew-tap` by default); `make check` says what's missing before anything is built or uploaded.
 
 ## Known limitations
 

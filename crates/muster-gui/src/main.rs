@@ -38,13 +38,21 @@ fn main() -> eframe::Result {
     // Read before the window exists: transparency can't be switched on later.
     let (settings, config_problems) = settings::Settings::load();
     let transparent = settings.see_through;
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("muster")
+        .with_app_id("muster")
+        .with_inner_size([1480.0, 920.0])
+        .with_min_inner_size([760.0, 480.0])
+        .with_transparent(transparent);
+    // Muster.app has its .icns; this is for running it any other way (Linux,
+    // cargo run), where the window would otherwise get a blank icon.
+    if let Ok(icon) =
+        eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/muster-256.png"))
+    {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("muster")
-            .with_app_id("muster")
-            .with_inner_size([1480.0, 920.0])
-            .with_min_inner_size([760.0, 480.0])
-            .with_transparent(transparent),
+        viewport,
         renderer: renderer(),
         ..Default::default()
     };
