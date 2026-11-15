@@ -139,7 +139,12 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             Response::Ok
         }
 
-        Request::Attach { id, rows, cols } => {
+        Request::Attach {
+            id,
+            rows,
+            cols,
+            repaints,
+        } => {
             let t = d.task(&id)?;
             if rows > 0 && cols > 0 {
                 t.resize(rows, cols)?;
@@ -153,24 +158,43 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             });
             let c2 = conn.clone();
             let t2 = t.clone();
+            let mut reflowed = t.reflowed.subscribe();
+            reflowed.mark_unchanged();
             let h = tokio::spawn(async move {
+                let resend = |rx: &mut broadcast::Receiver<Vec<u8>>| {
+                    let (r, c, data, new_rx) = t2.attach();
+                    *rx = new_rx;
+                    c2.push(Push::Screen {
+                        id: t2.id.clone(),
+                        rows: r,
+                        cols: c,
+                        data,
+                    });
+                };
                 loop {
-                    match rx.recv().await {
-                        Ok(data) => c2.push(Push::Output {
-                            id: t2.id.clone(),
-                            data,
-                        }),
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            let (r, c, data, new_rx) = t2.attach();
-                            rx = new_rx;
-                            c2.push(Push::Screen {
+                    tokio::select! {
+                        got = rx.recv() => match got {
+                            Ok(data) => c2.push(Push::Output {
                                 id: t2.id.clone(),
-                                rows: r,
-                                cols: c,
                                 data,
-                            });
+                            }),
+                            Err(broadcast::error::RecvError::Lagged(_)) => resend(&mut rx),
+                            Err(_) => break,
+                        },
+                        // Reflowed for a new size: once the resizing stops
+                        // (a window being dragged sends many), the new screen.
+                        changed = reflowed.changed(), if repaints => {
+                            if changed.is_err() {
+                                break;
+                            }
+                            loop {
+                                tokio::select! {
+                                    _ = tokio::time::sleep(Duration::from_millis(150)) => break,
+                                    c = reflowed.changed() => if c.is_err() { break },
+                                }
+                            }
+                            resend(&mut rx);
                         }
-                        Err(_) => break,
                     }
                 }
             });

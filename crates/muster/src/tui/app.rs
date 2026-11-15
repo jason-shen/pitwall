@@ -491,6 +491,7 @@ impl App {
                     id: id.to_string(),
                     rows,
                     cols,
+                    repaints: false,
                 });
             }
             Some(t) if t.size != (rows, cols) => {

@@ -447,6 +447,47 @@ pub fn commit(dir: &Path, message: &str) -> Result<String> {
     Ok(format!("{}{}", out.trim(), head.trim()))
 }
 
+/// Untracked files in the main checkout that the agent's work would bring in
+/// (committed on its branch, or still lying in its worktree); git refuses
+/// to merge over them.
+fn untracked_in_the_way(
+    root: &Path,
+    worktree: &Path,
+    target: &str,
+    branch: &str,
+) -> Result<Vec<String>> {
+    let untracked: std::collections::HashSet<String> =
+        run(root, &["ls-files", "--others", "--exclude-standard"])?
+            .lines()
+            .map(String::from)
+            .collect();
+    if untracked.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut incoming: Vec<String> = run(
+        root,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=AR",
+            &format!("{target}...{branch}"),
+        ],
+    )?
+    .lines()
+    .map(String::from)
+    .collect();
+    if worktree.is_dir() {
+        incoming.extend(status(worktree)?.into_iter().map(|c| c.path));
+    }
+    let mut hit: Vec<String> = incoming
+        .into_iter()
+        .filter(|p| untracked.contains(p))
+        .collect();
+    hit.sort();
+    hit.dedup();
+    Ok(hit)
+}
+
 fn ensure_clean(repo_root: &Path, target: &str) -> Result<()> {
     let dirty = run(
         repo_root,
@@ -479,6 +520,14 @@ pub fn accept(
     // Everything that can refuse the merge is checked before committing, so
     // a refusal doesn't leave a commit behind in the agent's branch.
     ensure_clean(root, target)?;
+    let in_the_way = untracked_in_the_way(root, worktree, target, branch)?;
+    if !in_the_way.is_empty() {
+        bail!(
+            "{} has untracked files the merge would overwrite: {}; move them, then accept again",
+            root.display(),
+            in_the_way.join(", ")
+        );
+    }
     let mut out = String::new();
     if worktree.is_dir() && !status(worktree)?.is_empty() {
         if message.trim().is_empty() {
@@ -704,6 +753,16 @@ mod tests {
         assert!(accept(&d, &wt, "muster/x", "release", "msg").is_err());
         // Uncommitted work needs a message.
         assert!(accept(&d, &wt, "muster/x", "main", "  ").is_err());
+        // An untracked file where the agent adds one refuses before anything
+        // is committed.
+        std::fs::write(d.join("b.txt"), "mine\n").unwrap();
+        let head = run(&wt, &["rev-parse", "HEAD"]).unwrap();
+        let err = accept(&d, &wt, "muster/x", "main", "Add b")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("b.txt"), "{err}");
+        assert_eq!(run(&wt, &["rev-parse", "HEAD"]).unwrap(), head);
+        std::fs::remove_file(d.join("b.txt")).unwrap();
         // A dirty main checkout refuses before anything is committed.
         std::fs::write(d.join("a.txt"), "mine\n").unwrap();
         let head = run(&wt, &["rev-parse", "HEAD"]).unwrap();

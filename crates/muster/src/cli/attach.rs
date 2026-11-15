@@ -83,7 +83,15 @@ fn reply_len(d: &[u8]) -> Option<usize> {
 pub async fn run(client: Client, mut pushes: UnboundedReceiver<Push>, id: String) -> Result<()> {
     client.call(Request::Subscribe).await?;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((120, 40));
-    let Response::Task(info) = client.call(Request::Attach { id, rows, cols }).await? else {
+    let Response::Task(info) = client
+        .call(Request::Attach {
+            id,
+            rows,
+            cols,
+            repaints: false,
+        })
+        .await?
+    else {
         bail!("unexpected reply")
     };
     let id = info.id;

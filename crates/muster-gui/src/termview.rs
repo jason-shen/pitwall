@@ -12,6 +12,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct Callbacks {
     pub replies: Vec<u8>,
+    /// The keyboard flags the program asked for (the daemon answers its
+    /// queries; this side only needs to know how to send keys).
+    pub keys: muster_core::kitty::Keys,
     pub title: Option<String>,
     pub bell: bool,
     /// Desktop-notification escapes (OSC 9 / 777 / 99) not yet shown.
@@ -91,6 +94,9 @@ impl vt100::Callbacks for Callbacks {
             // Primary / secondary device attributes
             ('c', None) if first == 0 => self.replies.extend_from_slice(b"\x1b[?62;22c"),
             ('c', Some(b'>')) => self.replies.extend_from_slice(b"\x1b[>0;10;1c"),
+            ('u', marker) => {
+                let _ = self.keys.csi(marker, params);
+            }
             _ => {}
         }
     }
@@ -636,7 +642,7 @@ impl TerminalView {
         }
 
         // Snapshot the modes we need for input encoding.
-        let (app_cursor, mouse_mode, mouse_enc, alt_screen) = {
+        let (app_cursor, mouse_mode, mouse_enc, alt_screen, kitty) = {
             let p = self.parser.lock().unwrap();
             let s = p.screen();
             (
@@ -644,6 +650,7 @@ impl TerminalView {
                 s.mouse_protocol_mode(),
                 s.mouse_protocol_encoding(),
                 s.alternate_screen(),
+                p.callbacks().keys.disambiguate(),
             )
         };
         let mods_now = ui.input(|i| i.modifiers);
@@ -830,10 +837,19 @@ impl TerminalView {
                                 continue;
                             }
                         }
-                        // In a full-screen program (vim, less) Shift+Return is
-                        // Return; the newline meaning is for line editors.
-                        if key == Key::Enter && modifiers.shift && alt_screen {
-                            self.input_typed(&mut actions, vec![b'\r']);
+                        // Shift+Return: its own key for a program that asked for
+                        // distinct keys (Codex, Claude Code, full screen or
+                        // not); plain Return in other full-screen programs
+                        // (vim, less); a newline (Esc+CR) at a line editor.
+                        if key == Key::Enter && modifiers.shift && !modifiers.ctrl {
+                            let b: &[u8] = if kitty {
+                                b"\x1b[13;2u"
+                            } else if alt_screen {
+                                b"\r"
+                            } else {
+                                b"\x1b\r"
+                            };
+                            self.input_typed(&mut actions, b.to_vec());
                             continue;
                         }
                         if let Some(b) = encode_key(key, modifiers, app_cursor) {
@@ -1927,6 +1943,15 @@ mod tests {
         v.sel_anchor = Some((0, 0));
         v.sel_end = Some((1, 3));
         assert_eq!(v.selection_text().unwrap(), "ab中文cd\nline");
+    }
+
+    #[test]
+    fn a_program_asking_for_distinct_keys_is_tracked() {
+        let p = new_parser(3, 20, 10);
+        feed(&p, b"\x1b[>1u");
+        assert!(p.lock().unwrap().callbacks().keys.disambiguate());
+        feed(&p, b"\x1b[<u");
+        assert!(!p.lock().unwrap().callbacks().keys.disambiguate());
     }
 
     #[test]

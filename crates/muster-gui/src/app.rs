@@ -1278,6 +1278,7 @@ impl App {
                 id: id.to_string(),
                 rows,
                 cols,
+                repaints: true,
             });
         }
     }

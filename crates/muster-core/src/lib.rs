@@ -7,6 +7,7 @@ pub mod config;
 pub mod editor;
 pub mod git;
 pub mod hosts;
+pub mod kitty;
 pub mod mdhl;
 pub mod paths;
 pub mod policy;

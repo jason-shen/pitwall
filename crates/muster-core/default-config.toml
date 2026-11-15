@@ -29,11 +29,10 @@ args = []
 prompt_mode = "arg"
 attention_on_idle = true
 resume_args = ["resume", "--last"]
-# hooks = "codex" puts Codex's shell commands through muster's policy and
-# approval bar, as for Claude (Codex 0.157+, which asks you once to trust the
-# hook). Off until it has been tried on your setup: if your Codex rejects the
-# hook config, Codex agents won't start.
-# hooks = "codex"
+# Codex's shell commands go through muster's policy and approval bar, as for
+# Claude. Codex asks you once to trust muster's hook. A Codex that can't read
+# the hook config (checked before each start) runs without it.
+hooks = "codex"
 
 [agents.opencode]
 command = "opencode"
@@ -66,6 +65,8 @@ patterns = [
   # Claude Code's pickers, including the folder-trust check it shows before
   # its hooks run, so nothing else would notice it's blocked.
   "Enter to confirm",
+  # Codex's pickers (update, folder trust).
+  "enter continue",
 ]
 
 # ── TUI ──────────────────────────────────────────────────────────────────

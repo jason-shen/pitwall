@@ -269,6 +269,11 @@ pub enum Request {
         id: String,
         rows: u16,
         cols: u16,
+        /// Send a fresh screen after the daemon reflows the terminal for a
+        /// new width. A window drawing its own grid wants it; a real terminal
+        /// (`muster attach`) reflows by itself.
+        #[serde(default)]
+        repaints: bool,
     },
     Detach {
         id: String,

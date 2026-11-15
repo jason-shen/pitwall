@@ -26,6 +26,7 @@ use super::snapshot::Store;
 pub struct Titles {
     pub title: Option<String>,
     pub replies: Vec<u8>,
+    pub keys: muster_core::kitty::Keys,
 }
 
 impl vt100::Callbacks for Titles {
@@ -51,6 +52,11 @@ impl vt100::Callbacks for Titles {
             ('n', None) if first == 5 => self.replies.extend_from_slice(b"\x1b[0n"),
             ('c', None) if first == 0 => self.replies.extend_from_slice(b"\x1b[?62;22c"),
             ('c', Some(b'>')) => self.replies.extend_from_slice(b"\x1b[>0;10;1c"),
+            ('u', marker) => {
+                if let Some(r) = self.keys.csi(marker, params) {
+                    self.replies.extend_from_slice(&r);
+                }
+            }
             _ => {}
         }
     }
@@ -103,6 +109,9 @@ pub struct Task {
     pid: Option<u32>,
     pub state: Mutex<TaskState>,
     pub term: Mutex<vt100::Parser<Titles>>,
+    /// Bumped when the terminal is reflowed for a new size, so attached
+    /// windows fetch the new screen.
+    pub reflowed: tokio::sync::watch::Sender<u64>,
     /// Held while a message is typed in, so two arriving at once don't
     /// interleave their keystrokes.
     pub typing: tokio::sync::Mutex<()>,
@@ -239,6 +248,132 @@ pub fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Resize the terminal, rewrapping what's in it: lines that had wrapped
+/// are joined and wrapped again at the new width, history included, so
+/// narrowing doesn't cut lines and widening joins them back up. vt100 can't
+/// do this in place, so it's a fresh terminal fed the old one's lines. A
+/// full-screen program redraws itself on the resize; that's left alone.
+pub fn reflow(term: &mut vt100::Parser<Titles>, rows: u16, cols: u16) {
+    if term.screen().alternate_screen() {
+        term.set_size(nz(rows, 40), nz(cols, 120));
+        return;
+    }
+    let (old_rows, old_cols) = {
+        let (r, c) = term.screen().size();
+        (r.get(), c.get())
+    };
+    let (cur_r, cur_c) = term.screen().cursor_position();
+    let modes = term.screen().input_mode_formatted();
+    let cap = term.screen().scrollback_capacity();
+
+    // Every row, oldest first: its formatted text, its width in cells, and
+    // whether it ran on into the next row.
+    struct Row {
+        text: String,
+        width: usize,
+        wrapped: bool,
+    }
+    let read = |s: &vt100::Screen, r: u16| -> Row {
+        let mut width = 0;
+        for c in 0..old_cols {
+            if let Some(cell) = s.cell(r, c) {
+                if cell.has_contents() {
+                    width = c as usize + if cell.is_wide() { 2 } else { 1 };
+                }
+            }
+        }
+        let wrapped = s.row_wrapped(r);
+        Row {
+            text: s
+                .rows_formatted(0, old_cols)
+                .nth(r as usize)
+                .unwrap_or_default(),
+            width: if wrapped { old_cols as usize } else { width },
+            wrapped,
+        }
+    };
+    let mut all: Vec<Row> = vec![];
+    {
+        let screen = term.screen_mut();
+        let have = screen.scrollback_len();
+        for k in (1..=have).rev() {
+            screen.set_scrollback(k);
+            all.push(read(screen, 0));
+        }
+        screen.set_scrollback(0);
+        for r in 0..old_rows {
+            all.push(read(screen, r));
+        }
+    }
+    let cursor_row = all.len() - old_rows as usize + cur_r as usize;
+
+    // Rows into lines; where the cursor sits as (line, cell in that line).
+    struct Line {
+        text: String,
+        width: usize,
+    }
+    let mut lines: Vec<Line> = vec![];
+    let mut cursor = (0, 0);
+    let mut open = false;
+    for (i, row) in all.iter().enumerate() {
+        if !open {
+            lines.push(Line {
+                text: String::new(),
+                width: 0,
+            });
+        }
+        let n = lines.len() - 1;
+        let line = &mut lines[n];
+        if i == cursor_row {
+            cursor = (n, line.width + cur_c as usize);
+        }
+        line.text.push_str(&row.text);
+        line.text.push_str("\x1b[m");
+        line.width += row.width;
+        open = row.wrapped;
+    }
+    // Blank lines below both the cursor and any text aren't kept.
+    while lines.len() > cursor.0 + 1 && lines.last().is_some_and(|l| l.width == 0) {
+        lines.pop();
+    }
+
+    let rows_of = |w: usize| w.div_ceil(cols as usize).max(1);
+    let mut fresh = vt100::Parser::new_with_callbacks(
+        nz(rows, 40),
+        nz(cols, 120),
+        cap,
+        std::mem::take(term.callbacks_mut()),
+    );
+    let mut out = String::new();
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push_str("\r\n");
+        }
+        out.push_str(&l.text);
+    }
+    // Back from the end of the text to the cursor's cell: up past the lines
+    // after it, then to its row and column within its own line.
+    let (line, at) = cursor;
+    let below: usize = lines[line + 1..].iter().map(|l| rows_of(l.width)).sum();
+    let end_row = rows_of(lines[line].width) - 1;
+    let want_row = at / cols as usize;
+    let up = below + end_row.saturating_sub(want_row);
+    out.push('\r');
+    if up > 0 {
+        out.push_str(&format!("\x1b[{up}A"));
+    }
+    if want_row > end_row {
+        out.push_str(&format!("\x1b[{}B", want_row - end_row));
+    }
+    out.push_str(&format!("\x1b[{}G", at % cols as usize + 1));
+    out.push_str(&modes);
+    fresh.process(out.as_bytes());
+    // The query answers this replay produced (none, but to be sure) aren't
+    // the program's to see.
+    fresh.callbacks_mut().replies.clear();
+    *term = fresh;
+}
+
 /// Bytes that rebuild a terminal from nothing: the scrollback (printed as
 /// lines, so it scrolls into the client's own), then the screen and its
 /// modes. A full-screen program is put back on the alternate screen, so the
@@ -269,6 +404,8 @@ fn repaint(term: &mut vt100::Parser<Titles>, rows: u16, cols: u16) -> Vec<u8> {
         data.extend_from_slice(b"\x1b[?1049h\x1b[H\x1b[2J");
     }
     data.extend_from_slice(term.screen().state_formatted().as_bytes());
+    // The keys a program asked for, so a window attached now sends them too.
+    data.extend_from_slice(&term.callbacks().keys.restore());
     data
 }
 
@@ -405,6 +542,50 @@ fn claude_settings(exe: &Path) -> String {
         }
     })
     .to_string()
+}
+
+/// Whether this Codex starts with these hooks. An older or newer Codex that
+/// can't read them would refuse to start at all, so they're tried first
+/// with `features list`, which loads the config and nothing else (no model,
+/// no network). Asked once per Codex.
+fn codex_accepts(program: &str, hooks: &[String]) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    if let Some(ok) = seen.lock().unwrap().get(program) {
+        return *ok;
+    }
+    let mut c = Command::new(program);
+    for h in hooks {
+        c.arg("-c").arg(h);
+    }
+    let ok = c
+        .args(["features", "list"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()
+        .and_then(|mut child| {
+            let start = std::time::Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => return Some(status.success()),
+                    Ok(None) if start.elapsed() < std::time::Duration::from_secs(15) => {
+                        std::thread::sleep(std::time::Duration::from_millis(50))
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                }
+            }
+        })
+        .unwrap_or(false);
+    seen.lock().unwrap().insert(program.to_string(), ok);
+    ok
 }
 
 /// `-c` overrides that point Codex's hooks at muster.
@@ -626,9 +807,16 @@ impl Task {
         if agent_cfg.hooks.as_deref() == Some("codex") {
             // Codex's hooks speak Claude's format, so the same bridge serves
             // both. Codex asks you once to trust a hook it hasn't seen.
-            for c in codex_hooks(&exe) {
-                cmd.arg("-c");
-                cmd.arg(c);
+            let hooks = codex_hooks(&exe);
+            if codex_accepts(&program, &hooks) {
+                for c in hooks {
+                    cmd.arg("-c");
+                    cmd.arg(c);
+                }
+            } else {
+                tracing::warn!(
+                    "{program} rejected muster's hook config; starting {id} without muster's policy"
+                );
             }
         }
         for a in agent_cfg.args.iter().chain(&req.args).chain(extra) {
@@ -739,6 +927,7 @@ impl Task {
                 Titles::default(),
             )),
             typing: tokio::sync::Mutex::new(()),
+            reflowed: tokio::sync::watch::channel(0).0,
             out_tx,
             writer: Mutex::new(writer),
             replies,
@@ -838,7 +1027,9 @@ impl Task {
         if (r.get(), c.get()) == (rows, cols) {
             return Ok(());
         }
-        term.set_size(nz(rows, 40), nz(cols, 120));
+        reflow(&mut term, rows, cols);
+        drop(term);
+        self.reflowed.send_modify(|n| *n += 1);
         self.master
             .lock()
             .unwrap()
@@ -1196,7 +1387,67 @@ mod tests {
         assert!(client.screen().contents().contains("full screen"));
         // And the daemon answers where the cursor is.
         daemon.process(b"\x1b[6n");
-        assert_eq!(daemon.callbacks_mut().replies, b"\x1b[1;12R");
+        assert_eq!(
+            std::mem::take(&mut daemon.callbacks_mut().replies),
+            b"\x1b[1;12R"
+        );
+        // The keyboard flags a program asks for: answered, and carried over
+        // to a window attached later.
+        daemon.process(b"\x1b[?u\x1b[>1u\x1b[?u");
+        assert_eq!(daemon.callbacks_mut().replies, b"\x1b[?0u\x1b[?1u");
+        assert!(super::repaint(&mut daemon, 5, 20).ends_with(b"\x1b[>1u"));
+    }
+
+    #[test]
+    fn a_narrowed_terminal_rewraps_and_widens_back() {
+        let mut t = vt100::Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(4).unwrap(),
+            std::num::NonZeroU16::new(20).unwrap(),
+            100,
+            super::Titles::default(),
+        );
+        t.process(b"0123456789abcdefghij-tail\r\n$ ");
+        // Narrower: nothing is cut, the long line wraps at 10.
+        super::reflow(&mut t, 4, 10);
+        let all = |t: &mut vt100::Parser<super::Titles>| {
+            t.screen_mut().set_scrollback(usize::MAX);
+            let s = t.screen().contents();
+            t.screen_mut().set_scrollback(0);
+            s
+        };
+        let text = all(&mut t);
+        assert!(
+            text.contains("0123456789abcdefghij-tail")
+                || text.replace('\n', "").contains("0123456789abcdefghij-tail"),
+            "{text:?}"
+        );
+        assert_eq!(
+            t.screen().cursor_position(),
+            (3, 2),
+            "{:?}",
+            t.screen().contents()
+        );
+        // Wider again: it's one line, as it was.
+        super::reflow(&mut t, 4, 40);
+        assert!(
+            t.screen()
+                .contents()
+                .starts_with("0123456789abcdefghij-tail\n$"),
+            "{:?}",
+            t.screen().contents()
+        );
+        assert_eq!(t.screen().cursor_position(), (1, 2));
+        // Colours survive.
+        t.process(b"\x1b[31mred\x1b[m");
+        super::reflow(&mut t, 4, 12);
+        let red = (0..4)
+            .flat_map(|r| (0..12).map(move |c| (r, c)))
+            .any(|(r, c)| {
+                t.screen()
+                    .cell(r, c)
+                    .is_some_and(|x| x.contents() == "r" && x.fgcolor() == vt100::Color::Idx(1))
+            });
+        assert!(red);
     }
 
     #[test]

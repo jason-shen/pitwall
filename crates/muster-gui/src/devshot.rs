@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, split, select), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -92,6 +92,16 @@ impl DevShot {
                         .map(|c| c.id)
                 }
                 Some(("tile", id)) => app.tile_beside(id, app.active),
+                // size:WxH resizes the window, to see terminals reflow.
+                Some(("size", wh)) => {
+                    if let Some((w, h)) = wh.split_once('x') {
+                        if let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>()) {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                                w, h,
+                            )));
+                        }
+                    }
+                }
                 Some(("chord", k)) => self.key = egui::Key::from_name(k).map(|k| (k, true)),
                 Some(("cmd", k)) => self.key = egui::Key::from_name(k).map(|k| (k, false)),
                 Some(("file", f)) => app.open_file(f, Some(1)),

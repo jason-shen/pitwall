@@ -110,7 +110,10 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
         }
     }
     if lexed.segments.len() <= 1 && lexed.subs.is_empty() {
-        let writes = lexed.segments.first().is_some_and(writes_files);
+        let writes = lexed
+            .segments
+            .first()
+            .is_some_and(|s| writes_files(s) || runs_another_program(s));
         return match rule_for(&norm).filter(|r| !(writes && r.decision == Decision::Allow)) {
             Some(r) => Classification {
                 tier,
@@ -131,8 +134,9 @@ pub fn classify(cmd: &str, cfg: &PolicyConfig) -> Classification {
     let mut prev: Option<String> = None;
     for seg in &lexed.segments {
         let (t, _, prog) = seg_tier(seg, prev.as_deref(), &cfg.read_only_programs);
-        let rule = rule_for(&seg.words.join(" "))
-            .filter(|r| !(writes_files(seg) && r.decision == Decision::Allow));
+        let rule = rule_for(&seg.words.join(" ")).filter(|r| {
+            !((writes_files(seg) || runs_another_program(seg)) && r.decision == Decision::Allow)
+        });
         let d = match (shell_script(&seg.words), rule) {
             (Some(script), _) if writes_files(seg) => {
                 stricter(classify(&script, cfg).decision, by_tier(t))
@@ -168,6 +172,28 @@ fn writes_files(seg: &Seg) -> bool {
             "/dev/null" | "/dev/stdout" | "/dev/stderr" | "/dev/tty"
         )
     })
+}
+
+/// Flags that make an allowed tool run some other program: `cargo test
+/// --config 'target.x.runner=…'`, `go test -exec …`, npm's script shell.
+/// An allow rule for the tool isn't an allow for whatever that program is.
+fn runs_another_program(seg: &Seg) -> bool {
+    let words = strip_wrappers(&seg.words);
+    let Some((prog, args)) = words.split_first() else {
+        return false;
+    };
+    let any = |f: &dyn Fn(&str) -> bool| args.iter().any(|a| f(a));
+    match basename(prog) {
+        "cargo" => any(&|a| a == "--config" || a.starts_with("--config=") || a.starts_with("-Z")),
+        "go" => any(&|a| {
+            let a = a.trim_start_matches('-');
+            a == "exec" || a == "toolexec" || a.starts_with("exec=") || a.starts_with("toolexec=")
+        }),
+        "npm" | "pnpm" | "yarn" | "bun" | "npx" => {
+            any(&|a| a.starts_with("--script-shell") || a.starts_with("--node-options"))
+        }
+        _ => false,
+    }
 }
 
 /// The deny rule a command runs into, if any. Each part is tried as written
@@ -1971,6 +1997,17 @@ mod tests {
             assert_ne!(d(c), Decision::Allow, "{c}");
         }
         assert_eq!(d("cargo test 2>/dev/null"), Decision::Allow);
+        for c in [
+            "cargo test --config 'target.x.runner=\"sh\"'",
+            "cargo test --config=build.rustc-wrapper=x",
+            "go test -exec 'rm -rf ~' ./...",
+            "go test -toolexec=x ./...",
+            "npm test --script-shell=sh",
+        ] {
+            assert_ne!(d(c), Decision::Allow, "{c}");
+        }
+        assert_eq!(d("cargo test --workspace -- --nocapture"), Decision::Allow);
+        assert_eq!(d("go test ./..."), Decision::Allow);
         assert_eq!(d("cargo test 2>&1"), Decision::Allow);
         assert_eq!(d(&"x".repeat(100_000)), Decision::Ask);
     }
