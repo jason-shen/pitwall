@@ -8,7 +8,8 @@
 #   prompt_mode: "arg"  -> initial prompt passed as the last argument
 #                "type" -> typed into the TUI after startup
 #                "none" -> ignored
-#   hooks: "claude" injects muster's Claude Code hooks via --settings
+#   hooks: "claude" injects muster's Claude Code hooks via --settings;
+#          "codex" passes the same hooks to Codex with -c (see below)
 #          (policy gate + snapshot before every tool call + precise attention).
 #   attention_on_idle: idle output counts as "needs you" (turn finished).
 #   resume_args: when the daemon restarts, agents come back in their worktrees
@@ -28,6 +29,11 @@ args = []
 prompt_mode = "arg"
 attention_on_idle = true
 resume_args = ["resume", "--last"]
+# hooks = "codex" puts Codex's shell commands through muster's policy and
+# approval bar, as for Claude (Codex 0.157+, which asks you once to trust the
+# hook). Off until it has been tried on your setup: if your Codex rejects the
+# hook config, Codex agents won't start.
+# hooks = "codex"
 
 [agents.opencode]
 command = "opencode"

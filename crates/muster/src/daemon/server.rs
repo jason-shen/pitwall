@@ -200,6 +200,7 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
                 anyhow::bail!("{} is waiting on a prompt; answer that first", t.id);
             }
             let line = muster_core::agents::message_line(from.as_deref(), &text);
+            let _turn = t.typing.lock().await;
             t.write(line.as_bytes())?;
             // A Return in the same write reads as part of a paste to TUIs
             // like Claude Code, which then don't submit it.

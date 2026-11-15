@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, split), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, split, select), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -132,6 +132,18 @@ impl DevShot {
                         app.settings_ui = Some(Default::default());
                     }
                     "newcard" => app.new_terminal_card(),
+                    // Lines 5 to 8 of the open file, to see a selection drawn.
+                    "select" => {
+                        let cur = app.cur;
+                        if let Some(it) = app.tabs.get_mut(cur) {
+                            let f = it.file;
+                            if let Some(e) = it.files.get_mut(f) {
+                                e.anchor = Some((4.min(e.lines.len() - 1), 2));
+                                e.cy = 7.min(e.lines.len() - 1);
+                                e.cx = 6.min(e.lines[e.cy].chars().count());
+                            }
+                        }
+                    }
                     "newbrief" => app.open_new_brief(),
                     "keys" => app.show_keys = true,
                     "submit" => app.submit_form(),

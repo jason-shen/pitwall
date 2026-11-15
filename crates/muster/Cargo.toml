@@ -27,3 +27,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2.3"
 vt100 = "0.18.1"
+
+[dev-dependencies]
+# Checks the -c overrides muster passes to Codex are valid TOML; already in
+# the tree through muster-core.
+toml = "1.2.1"

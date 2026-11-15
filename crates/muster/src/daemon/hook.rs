@@ -43,6 +43,36 @@ fn summarize_tool(tool: &str, input: &Value) -> String {
     }
 }
 
+/// The shell command in a tool call, whatever the agent calls its shell tool:
+/// Claude's Bash sends `command`; Codex's shell tools send a string or an
+/// argv, sometimes wrapped in `bash -lc`. None for tools that aren't one.
+pub fn shell_command(input: &Value) -> Option<String> {
+    let v = input.get("command").or_else(|| input.get("cmd"))?;
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    let argv: Vec<&str> = v.as_array()?.iter().filter_map(Value::as_str).collect();
+    let shells = ["bash", "sh", "zsh", "/bin/bash", "/bin/sh", "/bin/zsh"];
+    match argv.as_slice() {
+        [sh, flag, script, ..] if shells.contains(sh) && flag.ends_with('c') && flag.starts_with('-') => {
+            Some(script.to_string())
+        }
+        [] => None,
+        _ => Some(
+            argv.iter()
+                .map(|a| {
+                    if a.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c)) {
+                        a.to_string()
+                    } else {
+                        format!("'{}'", a.replace('\'', "'\\''"))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+    }
+}
+
 pub async fn handle(d: &Arc<Daemon>, req: HookRequest) -> HookReply {
     let Ok(payload) = serde_json::from_str::<Value>(&req.payload) else {
         return none();
@@ -78,6 +108,23 @@ pub async fn handle(d: &Arc<Daemon>, req: HookRequest) -> HookReply {
             }
             none()
         }
+        // Codex asking you to approve something on its own prompt.
+        "PermissionRequest" => {
+            if let Some(t) = &task {
+                let what = payload
+                    .get("tool_input")
+                    .and_then(shell_command)
+                    .map(|c| format!("wants to run {c}"))
+                    .unwrap_or_else(|| "waiting for your approval".into());
+                d.set_status(
+                    t,
+                    TaskStatus::Waiting {
+                        reason: what.chars().take(160).collect(),
+                    },
+                );
+            }
+            none()
+        }
         "PreToolUse" => pre_tool(d, task, &payload).await,
         _ => none(),
     }
@@ -96,21 +143,20 @@ async fn pre_tool(
     let input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
 
     // 1. Snapshot *before* the tool runs, so "revert to here" undoes this step.
-    if let Some(t) = &task {
+    // A read-only command has no step to undo, and agents run a lot of them;
+    // each snapshot walks the whole worktree, which adds up in a big repo.
+    let command = shell_command(&input);
+    let read_only = command.as_deref().is_some_and(|c| {
+        policy::tier_of(c, &d.cfg.policy.read_only_programs).0 == muster_core::proto::Tier::ReadOnly
+    });
+    if let Some(t) = task.as_ref().filter(|_| !read_only) {
         if d.cfg.hooks.snapshot_before.iter().any(|x| x == &tool) {
             d.snapshot(t, format!("before {}", summarize_tool(&tool, &input)))
                 .await;
         }
     }
 
-    if tool != "Bash" {
-        return none();
-    }
-    let Some(command) = input
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
+    let Some(command) = command else {
         return none();
     };
 
@@ -191,5 +237,19 @@ async fn pre_tool(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shell_commands_are_found_in_claude_and_codex_tool_calls() {
+        use serde_json::json;
+        let c = |v| super::shell_command(&v);
+        assert_eq!(c(json!({"command": "ls -la"})).as_deref(), Some("ls -la"));
+        assert_eq!(c(json!({"command": ["bash", "-lc", "rm -rf x && ls"]})).as_deref(), Some("rm -rf x && ls"));
+        assert_eq!(c(json!({"cmd": "git status"})).as_deref(), Some("git status"));
+        assert_eq!(c(json!({"command": ["git", "commit", "-m", "a b"]})).as_deref(), Some("git commit -m 'a b'"));
+        assert_eq!(c(json!({"file_path": "a.rs"})), None);
     }
 }

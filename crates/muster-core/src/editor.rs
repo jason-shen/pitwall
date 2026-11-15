@@ -38,6 +38,8 @@ pub struct Editor {
     /// Cursor: line index and char index within the line.
     pub cy: usize,
     pub cx: usize,
+    /// The other end of the selection (line, char); the cursor is one end.
+    pub anchor: Option<(usize, usize)>,
     want_col: Option<usize>,
     pub scroll_y: usize,
     pub scroll_x: usize,
@@ -154,6 +156,7 @@ impl Editor {
             lines,
             cy: 0,
             cx: 0,
+            anchor: None,
             want_col: None,
             scroll_y: 0,
             scroll_x: 0,
@@ -255,6 +258,10 @@ impl Editor {
             return;
         }
         self.hl_dirty = None;
+        if self.is_markdown() && self.lines.len() <= MAX_HIGHLIGHT_LINES {
+            self.highlight = crate::mdhl::highlight(&self.lines, theme.contains("light"));
+            return;
+        }
         let Some(name) = &self.syntax else {
             self.highlight.clear();
             return;
@@ -320,6 +327,7 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
+        self.anchor = None;
         if let Some(s) = self.undo.pop() {
             self.redo.push(UndoState {
                 lines: self.lines.clone(),
@@ -335,6 +343,7 @@ impl Editor {
     }
 
     pub fn redo(&mut self) {
+        self.anchor = None;
         if let Some(s) = self.redo.pop() {
             self.undo.push(UndoState {
                 lines: self.lines.clone(),
@@ -516,6 +525,7 @@ impl Editor {
         if self.readonly {
             return;
         }
+        self.delete_selection();
         self.checkpoint(1);
         let b = self.byte_at(self.cy, self.cx);
         self.lines[self.cy].insert(b, ch);
@@ -528,6 +538,7 @@ impl Editor {
         if self.readonly {
             return;
         }
+        self.delete_selection();
         self.checkpoint(4);
         self.last_edit = None;
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
@@ -549,6 +560,9 @@ impl Editor {
     }
 
     pub fn tab(&mut self) {
+        if self.selection().is_some() {
+            return self.indent_lines(false);
+        }
         if self.uses_tabs {
             self.insert_char('\t');
         } else {
@@ -564,6 +578,7 @@ impl Editor {
         if self.readonly {
             return;
         }
+        self.delete_selection();
         let md = self.is_markdown();
         if md && self.md_newline() {
             return;
@@ -595,6 +610,120 @@ impl Editor {
         self.cx = new_indent.chars().count();
         self.lines
             .insert(self.cy, format!("{new_indent}{trimmed_rest}"));
+        self.want_col = None;
+        self.touched();
+    }
+
+    // ── selection ───────────────────────────────────────────────────────
+
+    /// The selected range, start first, when anything is selected.
+    pub fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        let a = self.anchor?;
+        let a = (a.0.min(self.lines.len() - 1), a.1.min(self.line_len(a.0.min(self.lines.len() - 1))));
+        let c = (self.cy, self.cx);
+        match a.cmp(&c) {
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Less => Some((a, c)),
+            std::cmp::Ordering::Greater => Some((c, a)),
+        }
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let ((y0, x0), (y1, x1)) = self.selection()?;
+        let part = |y: usize, from: usize, to: usize| -> String {
+            self.lines[y].chars().skip(from).take(to.saturating_sub(from)).collect()
+        };
+        if y0 == y1 {
+            return Some(part(y0, x0, x1));
+        }
+        let mut out = part(y0, x0, usize::MAX);
+        for y in y0 + 1..y1 {
+            out.push('\n');
+            out.push_str(&self.lines[y]);
+        }
+        out.push('\n');
+        out.push_str(&part(y1, 0, x1));
+        Some(out)
+    }
+
+    /// Remove the selection and put the cursor where it began. False when
+    /// nothing was selected.
+    pub fn delete_selection(&mut self) -> bool {
+        let Some(((y0, x0), (y1, x1))) = self.selection() else {
+            self.anchor = None;
+            return false;
+        };
+        if self.readonly {
+            return false;
+        }
+        self.checkpoint(6);
+        self.last_edit = None;
+        let (b0, b1) = (self.byte_at(y0, x0), self.byte_at(y1, x1));
+        let tail = self.lines[y1][b1..].to_string();
+        self.lines[y0].truncate(b0);
+        self.lines[y0].push_str(&tail);
+        self.lines.drain(y0 + 1..=y1);
+        (self.cy, self.cx) = (y0, x0);
+        self.anchor = None;
+        self.want_col = None;
+        self.touched();
+        true
+    }
+
+    pub fn select_all(&mut self) {
+        self.anchor = Some((0, 0));
+        self.cy = self.lines.len() - 1;
+        self.cx = self.line_len(self.cy);
+    }
+
+    /// Indent, or with `out` dedent, every line the selection touches (or
+    /// just this one), keeping the selection on the same text.
+    pub fn indent_lines(&mut self, out: bool) {
+        if self.readonly {
+            return;
+        }
+        let (y0, y1) = match self.selection() {
+            Some(((a, _), (b, _))) => (a, b),
+            None => (self.cy, self.cy),
+        };
+        self.checkpoint(7);
+        self.last_edit = None;
+        let unit = if self.uses_tabs {
+            "\t".to_string()
+        } else {
+            " ".repeat(self.tab_width)
+        };
+        for y in y0..=y1 {
+            let delta: isize = if out {
+                let l = &self.lines[y];
+                let n = if l.starts_with('\t') {
+                    1
+                } else {
+                    l.chars().take(self.tab_width).take_while(|c| *c == ' ').count()
+                };
+                self.lines[y].drain(..n);
+                -(n as isize)
+            } else if self.lines[y].is_empty() {
+                0
+            } else {
+                self.lines[y].insert_str(0, &unit);
+                unit.chars().count() as isize
+            };
+            // A selection from the start of a line keeps the new indent in it.
+            let shift = |x: usize| {
+                if x == 0 && delta > 0 {
+                    0
+                } else {
+                    (x as isize + delta).max(0) as usize
+                }
+            };
+            if self.cy == y {
+                self.cx = shift(self.cx);
+            }
+            if let Some((ay, ax)) = self.anchor.filter(|a| a.0 == y) {
+                self.anchor = Some((ay, shift(ax)));
+            }
+        }
         self.want_col = None;
         self.touched();
     }
@@ -639,6 +768,7 @@ impl Editor {
         if self.readonly {
             return;
         }
+        self.anchor = None;
         self.checkpoint(5);
         self.last_edit = None;
         let line = &mut self.lines[self.cy];
@@ -667,6 +797,7 @@ impl Editor {
         if self.readonly {
             return;
         }
+        self.anchor = None;
         self.checkpoint(5);
         self.last_edit = None;
         let mut chars: Vec<char> = self.lines[self.cy].chars().collect();
@@ -701,7 +832,7 @@ impl Editor {
     }
 
     pub fn backspace(&mut self) {
-        if self.readonly {
+        if self.readonly || self.delete_selection() {
             return;
         }
         if self.cx == 0 && self.cy == 0 {
@@ -738,7 +869,7 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
-        if self.readonly {
+        if self.readonly || self.delete_selection() {
             return;
         }
         self.checkpoint(3);
@@ -758,6 +889,7 @@ impl Editor {
         if self.readonly {
             return;
         }
+        self.anchor = None;
         self.checkpoint(5);
         self.last_edit = None;
         if self.lines.len() == 1 {
@@ -838,6 +970,32 @@ mod tests {
         e.cx = e.line_len(0);
         e.newline();
         assert_eq!(e.lines, ["**Ask:**", ""]);
+    }
+
+    #[test]
+    fn a_selection_is_copied_replaced_and_indented() {
+        let mut e = md("alpha\nbeta\ngamma");
+        e.anchor = Some((0, 2));
+        (e.cy, e.cx) = (2, 3);
+        assert_eq!(e.selected_text().as_deref(), Some("pha\nbeta\ngam"));
+        e.insert_char('X');
+        assert_eq!(e.lines, ["alXma"]);
+        assert_eq!((e.cy, e.cx, e.anchor), (0, 3, None));
+        e.undo();
+        e.undo();
+        assert_eq!(e.lines, ["alpha", "beta", "gamma"]);
+
+        e.anchor = Some((0, 0));
+        (e.cy, e.cx) = (1, 2);
+        e.tab();
+        assert_eq!(e.lines, ["    alpha", "    beta", "gamma"]);
+        assert_eq!(e.selected_text().as_deref(), Some("    alpha\n    be"));
+        e.indent_lines(true);
+        assert_eq!(e.lines, ["alpha", "beta", "gamma"]);
+        e.backspace();
+        assert_eq!(e.lines, ["ta", "gamma"]);
+        e.select_all();
+        assert_eq!(e.selected_text().as_deref(), Some("ta\ngamma"));
     }
 
     #[test]

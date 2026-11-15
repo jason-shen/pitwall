@@ -59,6 +59,9 @@ pub struct Task {
     pid: Option<u32>,
     pub state: Mutex<TaskState>,
     pub term: Mutex<vt100::Parser<Titles>>,
+    /// Held while a message is typed in, so two arriving at once don't
+    /// interleave their keystrokes.
+    pub typing: tokio::sync::Mutex<()>,
     pub out_tx: broadcast::Sender<Vec<u8>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -320,6 +323,21 @@ fn claude_settings(exe: &Path) -> String {
     .to_string()
 }
 
+/// `-c` overrides that point Codex's hooks at muster.
+fn codex_hooks(exe: &Path) -> Vec<String> {
+    let cmd = format!(
+        "'{}' hook claude",
+        exe.display().to_string().replace('\'', "'\\''")
+    );
+    // A JSON string is a valid TOML basic string.
+    let cmd = serde_json::to_string(&cmd).unwrap_or_default();
+    vec![
+        format!("hooks.PreToolUse=[{{matcher=\".*\", hooks=[{{type=\"command\", command={cmd}, timeout=600}}]}}]"),
+        format!("hooks.PermissionRequest=[{{matcher=\".*\", hooks=[{{type=\"command\", command={cmd}, timeout=30}}]}}]"),
+        format!("hooks.Stop=[{{hooks=[{{type=\"command\", command={cmd}, timeout=30}}]}}]"),
+    ]
+}
+
 /// Where a task runs.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Place {
@@ -479,6 +497,14 @@ impl Task {
             cmd.arg("--append-system-prompt");
             cmd.arg(muster_core::agents::GUIDE);
         }
+        if agent_cfg.hooks.as_deref() == Some("codex") {
+            // Codex's hooks speak Claude's format, so the same bridge serves
+            // both. Codex asks you once to trust a hook it hasn't seen.
+            for c in codex_hooks(&exe) {
+                cmd.arg("-c");
+                cmd.arg(c);
+            }
+        }
         for a in agent_cfg.args.iter().chain(&req.args).chain(extra) {
             cmd.arg(a);
         }
@@ -582,6 +608,7 @@ impl Task {
                 5000,
                 Titles::default(),
             )),
+            typing: tokio::sync::Mutex::new(()),
             out_tx,
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
@@ -979,6 +1006,18 @@ mod tests {
         let got = super::proc_cwd(child.id()).map(|p| p.canonicalize().unwrap());
         let _ = child.kill();
         assert_eq!(got, Some(dir));
+    }
+
+    #[test]
+    fn codex_hook_overrides_are_valid_toml() {
+        let exe = std::path::Path::new("/Applications/It's Here/muster");
+        for c in super::codex_hooks(exe) {
+            let (key, value) = c.split_once('=').unwrap();
+            let doc: toml::Table = toml::from_str(&format!("v = {value}")).unwrap_or_else(|e| panic!("{c}: {e}"));
+            assert!(key.starts_with("hooks."), "{key}");
+            let cmd = &doc["v"][0]["hooks"][0]["command"];
+            assert_eq!(cmd.as_str(), Some("'/Applications/It'\\''s Here/muster' hook claude"));
+        }
     }
 
     #[test]

@@ -447,6 +447,60 @@ pub fn commit(dir: &Path, message: &str) -> Result<String> {
     Ok(format!("{}{}", out.trim(), head.trim()))
 }
 
+/// Bring an agent's work home: commit what it left uncommitted in its
+/// worktree, then merge its branch into `target` in the main checkout.
+pub fn accept(
+    root: &Path,
+    worktree: &Path,
+    branch: &str,
+    target: &str,
+    message: &str,
+) -> Result<String> {
+    if current_branch(root).as_deref() != Some(target) {
+        bail!(
+            "{} isn't on {target}; check it out, then accept again",
+            root.display()
+        );
+    }
+    let mut out = String::new();
+    if worktree.is_dir() && !status(worktree)?.is_empty() {
+        if message.trim().is_empty() {
+            bail!("the agent left uncommitted work; it needs a commit message");
+        }
+        stage_all(worktree)?;
+        out.push_str(&format!("committed {}; ", commit(worktree, message.trim())?));
+    }
+    out.push_str(&merge(root, branch)?);
+    Ok(out)
+}
+
+/// Files, added and removed lines between `base` and the working tree,
+/// untracked files included: the size of what an agent did.
+pub fn shortstat(dir: &Path, base: &str) -> Result<(usize, usize, usize)> {
+    let (mut files, mut add, mut del) = (0, 0, 0);
+    for l in run(dir, &["diff", "--numstat", base])?.lines() {
+        let mut f = l.split('\t');
+        // Binary files show `-` for both counts.
+        let a = f.next().and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+        let d = f.next().and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+        files += 1;
+        add += a;
+        del += d;
+    }
+    for p in run(dir, &["ls-files", "--others", "--exclude-standard"])?.lines() {
+        files += 1;
+        if let Ok(meta) = std::fs::metadata(dir.join(p)) {
+            // Counting a huge generated file's lines isn't worth the read.
+            if meta.len() < 1 << 20 {
+                add += std::fs::read(dir.join(p))
+                    .map(|b| b.iter().filter(|c| **c == b'\n').count())
+                    .unwrap_or(0);
+            }
+        }
+    }
+    Ok((files, add, del))
+}
+
 /// Merge `branch` into whatever is checked out in `repo_root`.
 pub fn merge(repo_root: &Path, branch: &str) -> Result<String> {
     let target = current_branch(repo_root).unwrap_or_else(|| "HEAD".into());
@@ -607,6 +661,34 @@ mod tests {
         run(&d, &["add", "."]).unwrap();
         run(&d, &["commit", "-qm", "init"]).unwrap();
         d
+    }
+
+    #[test]
+    fn accept_commits_the_agents_leftovers_and_merges_them_home() {
+        let d = repo();
+        let base = run(&d, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let wt = d.with_extension("wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        run(&d, &["worktree", "add", "-q", "-b", "muster/x", wt.to_str().unwrap(), &base]).unwrap();
+        // One change committed by the agent, two left lying around.
+        std::fs::write(wt.join("a.txt"), "changed\n").unwrap();
+        run(&wt, &["commit", "-qam", "agent work"]).unwrap();
+        std::fs::write(wt.join("b.txt"), "new\nfile\n").unwrap();
+        std::fs::write(wt.join("a.txt"), "changed again\n").unwrap();
+        assert_eq!(shortstat(&wt, &base).unwrap(), (2, 3, 15));
+
+        // Not on the target branch: refuse rather than merge somewhere else.
+        assert!(accept(&d, &wt, "muster/x", "release", "msg").is_err());
+        // Uncommitted work needs a message.
+        assert!(accept(&d, &wt, "muster/x", "main", "  ").is_err());
+
+        let out = accept(&d, &wt, "muster/x", "main", "Add b").unwrap();
+        assert!(out.contains("committed") && out.contains("merged muster/x into main"), "{out}");
+        assert_eq!(std::fs::read_to_string(d.join("a.txt")).unwrap(), "changed again\n");
+        assert_eq!(std::fs::read_to_string(d.join("b.txt")).unwrap(), "new\nfile\n");
+        assert!(status(&wt).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&wt);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

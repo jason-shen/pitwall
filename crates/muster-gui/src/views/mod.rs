@@ -1387,8 +1387,21 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
         0.0,
         egui::TextFormat::simple(FontId::proportional(13.0), if on { TEXT } else { MUTED }),
     );
+    // What it has changed so far, so a finished agent's size shows at a glance.
+    let mut right = text.right();
+    if let Some((files, add, del)) = app.diffstats.get(id).filter(|s| s.0 > 0) {
+        let mut job = egui::text::LayoutJob::default();
+        let f = |c| egui::TextFormat::simple(FontId::monospace(11.0), c);
+        job.append(&format!("{files} files "), 0.0, f(FAINT));
+        job.append(&format!("+{add} "), 0.0, f(GREEN.gamma_multiply(0.8)));
+        job.append(&format!("−{del}"), 0.0, f(RED.gamma_multiply(0.8)));
+        let g = ui.fonts_mut(|fo| fo.layout_job(job));
+        right -= g.size().x + 4.0;
+        p.galley(pos2(right + 4.0, top - g.size().y / 2.0), g, FAINT);
+    }
     let galley = ui.fonts_mut(|f| f.layout_job(line));
-    clip.galley(pos2(text.left(), top - galley.size().y / 2.0), galley, TEXT);
+    p.with_clip_rect(Rect::from_min_max(text.min, pos2(right, text.max.y)))
+        .galley(pos2(text.left(), top - galley.size().y / 2.0), galley, TEXT);
     let brief = t.brief.as_ref().and_then(|b| app.brief_entry(std::path::Path::new(b)));
     let what = match &t.status {
         TaskStatus::Waiting { reason } => Some((reason.clone(), AMBER)),
@@ -2311,15 +2324,15 @@ fn card(
     );
     if app.split() {
         if hb
-            .small_button("Close")
+            .small_button("✕ Close card")
             .on_hover_text(crate::keys::hint("close_card"))
             .clicked()
         {
             acts.push(Action::CloseSide(side));
         }
     } else if hb
-        .small_button("Split")
-        .on_hover_text(crate::keys::hint("split"))
+        .small_button("◫ New card")
+        .on_hover_text(format!("Open a second card beside this one  {}", crate::keys::hint("split")))
         .clicked()
     {
         acts.push(Action::Split);
@@ -3243,14 +3256,32 @@ fn editor_body(
     let h = ((body.height() - 4.0) / cell.y).floor().max(1.0) as usize;
     let w = ((body.width() - gutter - 8.0) / cell.x).floor().max(1.0) as usize;
 
-    // Mouse.
-    if resp.clicked() || resp.dragged() {
-        if let Some(pp) = resp.interact_pointer_pos() {
-            if body.contains(pp) {
-                let row = ((pp.y - body.top() - 2.0) / cell.y).floor().max(0.0) as usize;
-                let col = ((pp.x - body.left() - gutter) / cell.x).round().max(0.0) as usize;
-                e.click(row, col);
+    // Mouse: click places the cursor, drag selects, shift-click extends.
+    let cell_at = |pp: egui::Pos2| {
+        (
+            ((pp.y - body.top() - 2.0) / cell.y).floor().max(0.0) as usize,
+            ((pp.x - body.left() - gutter) / cell.x).round().max(0.0) as usize,
+        )
+    };
+    let shift = ui.input(|i| i.modifiers.shift);
+    if resp.drag_started() {
+        // Where the button went down, not where the drag was noticed.
+        if let Some(pp) = ui.input(|i| i.pointer.press_origin()).filter(|p| body.contains(*p)) {
+            let (row, col) = cell_at(pp);
+            e.click(row, col);
+            e.anchor = Some((e.cy, e.cx));
+        }
+    } else if resp.dragged() || resp.clicked() {
+        if let Some(pp) = resp.interact_pointer_pos().filter(|p| body.contains(*p)) {
+            if resp.clicked() {
+                if shift {
+                    e.anchor.get_or_insert((e.cy, e.cx));
+                } else {
+                    e.anchor = None;
+                }
             }
+            let (row, col) = cell_at(pp);
+            e.click(row, col);
         }
     }
     if resp.hovered() && ui.input(|i| i.pointer.hover_pos().is_some_and(|p| body.contains(p))) {
@@ -3275,11 +3306,20 @@ fn editor_body(
                     }
                 }
                 Event::Paste(s) => e.insert_str(&s),
-                Event::Copy => acts.push(Action::Copy(format!("{}\n", e.lines[e.cy]))),
-                Event::Cut => {
-                    acts.push(Action::Copy(format!("{}\n", e.lines[e.cy])));
-                    e.delete_line();
-                }
+                // With nothing selected, copy and cut take the whole line.
+                Event::Copy => acts.push(Action::Copy(
+                    e.selected_text().unwrap_or_else(|| format!("{}\n", e.lines[e.cy])),
+                )),
+                Event::Cut => match e.selected_text() {
+                    Some(t) => {
+                        acts.push(Action::Copy(t));
+                        e.delete_selection();
+                    }
+                    None => {
+                        acts.push(Action::Copy(format!("{}\n", e.lines[e.cy])));
+                        e.delete_line();
+                    }
+                },
                 Event::Key {
                     key,
                     pressed: true,
@@ -3292,7 +3332,30 @@ fn editor_body(
                     } else {
                         m.ctrl
                     };
+                    // Shift with a movement key grows the selection; without
+                    // it, moving drops the selection.
+                    let moves = matches!(
+                        key,
+                        Key::ArrowLeft
+                            | Key::ArrowRight
+                            | Key::ArrowUp
+                            | Key::ArrowDown
+                            | Key::Home
+                            | Key::End
+                            | Key::PageUp
+                            | Key::PageDown
+                    );
+                    if moves {
+                        if m.shift {
+                            e.anchor.get_or_insert((e.cy, e.cx));
+                        } else {
+                            e.anchor = None;
+                        }
+                    }
                     match key {
+                        Key::A if cmd => e.select_all(),
+                        Key::Escape if e.anchor.is_some() => e.anchor = None,
+                        Key::Tab if m.shift => e.indent_lines(true),
                         Key::S if cmd => saved = Some(e.save().map_err(|x| format!("{x:#}"))),
                         Key::Z if cmd && m.shift => e.redo(),
                         Key::Z if cmd => e.undo(),
@@ -3363,6 +3426,7 @@ fn editor_body(
     }
 
     // Paint.
+    let sel = e.selection();
     let painter = ui.painter_at(body);
     painter.rect_filled(body, 0.0, theme::term_bg(term::BG));
     let top = body.top() + 2.0;
@@ -3378,6 +3442,22 @@ fn editor_body(
                 0.0,
                 Color32::from_rgb(0x1a, 0x1e, 0x25),
             );
+        }
+        if let Some(((y0, x0), (y1, x1))) = sel.filter(|s| (s.0 .0..=s.1 .0).contains(&y)) {
+            let from = e.col_of(y, if y == y0 { x0 } else { 0 });
+            let len = e.lines[y].chars().count();
+            // A line the selection runs past gets a little extra for its newline.
+            let (to, extra) = if y == y1 {
+                (e.col_of(y, x1), 0.0)
+            } else {
+                (e.col_of(y, len), cell.x * 0.6)
+            };
+            let x = |c: usize| body.left() + gutter + (c as f32 - e.scroll_x as f32) * cell.x;
+            let r = Rect::from_min_max(
+                pos2(x(from).max(body.left() + gutter), py),
+                pos2(x(to) + extra, py + cell.y),
+            );
+            painter.rect_filled(r, 0.0, ACCENT.gamma_multiply(0.28));
         }
         painter.text(
             pos2(body.left() + gutter - cell.x, py),

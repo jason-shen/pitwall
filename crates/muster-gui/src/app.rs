@@ -264,6 +264,7 @@ pub enum Reply {
         result: Result<String, String>,
     },
     RemarksSent(String, Result<usize, String>),
+    Diffstats(Vec<(String, (usize, usize, usize))>),
 }
 
 pub struct GitData {
@@ -438,6 +439,10 @@ pub struct App {
     pub done_unseen: std::collections::HashSet<String>,
     git_inflight: bool,
     last_git: Instant,
+    /// Each agent's files and lines changed since it started, for the
+    /// AGENTS list; polled in the background.
+    pub diffstats: HashMap<String, (usize, usize, usize)>,
+    last_stats: Instant,
     /// Gap between git polls; grows when a repo is slow to scan.
     git_every: Duration,
     pub sidebar: bool,
@@ -568,6 +573,8 @@ impl App {
             daemon_outdated: false,
             git_inflight: false,
             last_git: Instant::now() - Duration::from_secs(60),
+            diffstats: HashMap::new(),
+            last_stats: Instant::now() - Duration::from_secs(60),
             git_every: Duration::from_millis(1500),
             sidebar: true,
             saved_settings: settings.clone(),
@@ -1537,6 +1544,9 @@ impl App {
         self.watch_config();
         self.save_layout();
         self.drain_notifications();
+        if self.last_stats.elapsed() > Duration::from_secs(8) {
+            self.refresh_diffstats();
+        }
         if self.frame.is_multiple_of(20) {
             self.daemon_outdated = daemon_outdated();
         }
@@ -1852,6 +1862,9 @@ impl App {
                 }
                 self.refresh_git_now();
                 self.reload_main();
+            }
+            Reply::Diffstats(v) => {
+                self.diffstats = v.into_iter().collect();
             }
             Reply::RemarksSent(id, r) => match r {
                 Ok(n) => {
@@ -2467,22 +2480,38 @@ impl App {
         ));
     }
 
+    /// What every agent with a worktree has changed since it started, so
+    /// finished agents can be told apart without opening each one.
+    fn refresh_diffstats(&mut self) {
+        self.last_stats = Instant::now();
+        let jobs: Vec<(String, PathBuf, String)> = self
+            .tasks
+            .values()
+            .filter(|t| t.branch.is_some() && !matches!(t.status, TaskStatus::Exited { .. }))
+            .filter_map(|t| Some((t.id.clone(), PathBuf::from(&t.cwd), t.base.clone()?)))
+            .collect();
+        if jobs.is_empty() {
+            self.diffstats.clear();
+            return;
+        }
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let v = jobs
+                .into_iter()
+                .filter_map(|(id, dir, base)| Some((id, git::shortstat(&dir, &base).ok()?)))
+                .collect();
+            let _ = tx.send(Ev::Reply(Reply::Diffstats(v)));
+            ctx.request_repaint();
+        });
+    }
+
     /// Every comment for this agent, typed into its prompt as one message.
     pub fn send_remarks(&mut self, id: &str) {
         let Some(list) = self.remarks.get(id).filter(|l| !l.is_empty()) else {
             return;
         };
         let n = list.len();
-        let mut text = String::from(
-            "Review comments on your changes. Address each one, then tell me what you changed:",
-        );
-        for (i, r) in list.iter().enumerate() {
-            let at = match r.line {
-                Some(l) => format!("{}:{l}", r.file),
-                None => r.file.clone(),
-            };
-            text.push_str(&format!(" ({}) {at}, on `{}`: {}", i + 1, r.quote, r.text.trim()));
-        }
+        let text = review_message(list);
         let id2 = id.to_string();
         self.call(
             Request::Prompt {
@@ -2654,7 +2683,7 @@ impl App {
                 self.notify(format!("accepting {id}…"), false);
                 let id2 = id.clone();
                 self.in_background(
-                    move || accept(&root, &worktree, &branch, &target, &message),
+                    move || git::accept(&root, &worktree, &branch, &target, &message).map_err(|e| format!("{e:#}")),
                     move |result| Reply::Accepted { id: id2, result },
                 );
             }
@@ -2755,30 +2784,19 @@ impl App {
     }
 }
 
-/// Commit what the agent left uncommitted in its worktree, then merge its
-/// branch into `target` in the main checkout.
-fn accept(
-    root: &Path,
-    worktree: &Path,
-    branch: &str,
-    target: &str,
-    message: &str,
-) -> Result<String, String> {
-    let e = |e: anyhow::Error| format!("{e:#}");
-    if git::current_branch(root).as_deref() != Some(target) {
-        return Err(format!(
-            "{} isn't on {target}; check it out, then accept again",
-            root.display()
-        ));
+/// Review comments as one message: the agent's prompt takes a single line.
+pub fn review_message(list: &[Remark]) -> String {
+    let mut text = String::from(
+        "Review comments on your changes. Address each one, then tell me what you changed:",
+    );
+    for (i, r) in list.iter().enumerate() {
+        let at = match r.line {
+            Some(l) => format!("{}:{l}", r.file),
+            None => r.file.clone(),
+        };
+        text.push_str(&format!(" ({}) {at}, on `{}`: {}", i + 1, r.quote, r.text.trim()));
     }
-    let mut out = String::new();
-    if worktree.is_dir() && !git::status(worktree).map_err(e)?.is_empty() {
-        git::stage_all(worktree).map_err(e)?;
-        let c = git::commit(worktree, message).map_err(e)?;
-        out.push_str(&format!("committed {c}; "));
-    }
-    out.push_str(&git::merge(root, branch).map_err(e)?);
-    Ok(out)
+    text
 }
 
 fn config_mtime() -> Option<std::time::SystemTime> {
@@ -2983,6 +3001,22 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn review_comments_go_as_one_numbered_line() {
+        let r = |file: &str, line, quote: &str, text: &str| super::Remark {
+            file: file.into(),
+            line,
+            quote: quote.into(),
+            text: text.into(),
+        };
+        let m = super::review_message(&[
+            r("src/a.rs", Some(42), "+ let x = 1;", " name it count\n"),
+            r("README.md", None, "+ hi", "drop this"),
+        ]);
+        assert!(m.contains("(1) src/a.rs:42, on `+ let x = 1;`: name it count"), "{m}");
+        assert!(m.contains("(2) README.md, on `+ hi`: drop this"), "{m}");
+    }
+
     use super::*;
 
     fn ch(path: &str) -> Change {

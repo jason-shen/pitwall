@@ -67,7 +67,7 @@ Terminals follow `cd`. A terminal that moves into another repo moves to that pro
 
 ### Agents
 
-AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. An agent handed a brief shows the brief's title and how many of its steps are ticked. Right-click for its Changes, its brief, Accept, kill or remove.
+AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. An agent with its own worktree shows how much it has changed so far (files, lines added and removed), so you can tell finished agents apart without opening each. An agent handed a brief shows the brief's title and how many of its steps are ticked. Right-click for its Changes, its brief, Accept, kill or remove.
 
 Any terminal running claude, codex, opencode, gemini, aider, goose, amp and other agent CLIs counts as an agent, whether muster started it or you typed it. When one is blocked on a numbered prompt, its choices show as buttons under it in the tree, so you can answer without opening it.
 
@@ -95,7 +95,7 @@ Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) write
 
 The project's file tree. Clicking a file opens it in the editor you choose in Settings:
 
-- the **built-in editor** (syntax highlighting, undo, find, go to line), which reloads live when an agent changes the file;
+- the **built-in editor** (syntax highlighting, selection, undo, find, go to line), which reloads live when an agent changes the file;
 - a **terminal editor** (nvim, vim, helix, micro, nano) running inside the card;
 - a **desktop editor** (VS Code, Cursor, Zed, Sublime, JetBrains IDEs) opened at the line, while the built-in editor follows along and reloads as you save;
 - or `$VISUAL` / `$EDITOR`.
@@ -128,15 +128,15 @@ Briefs are listed under their project and saved in `.muster/briefs/` in the proj
 
 Any Markdown file, briefs included, opens with **Edit** and **Preview**. Preview puts the rendered page next to the editor, and the two scroll together: scroll either one and the other follows. It renders headings, lists, task boxes, code blocks, quotes, tables and links; briefs open in Preview.
 
-Markdown is always edited in the built-in editor, the way inkterm does it. Lists, tasks and quotes carry on when you press Enter, and Enter on an empty item ends the list. **⌘T** turns the line into a task or ticks it, **⌘B** makes the word bold and **⌘E** makes it code (press again to undo either). A colon at the end of a line doesn't indent the next one.
+Markdown is always edited in the built-in editor, the way inkterm does it, with quiet colouring: headings, list markers and task boxes, bold, code and links stand out and the prose stays plain text; guide comments are dimmed. Lists, tasks and quotes carry on when you press Enter, and Enter on an empty item ends the list. **⌘T** turns the line into a task or ticks it, **⌘B** makes the word bold and **⌘E** makes it code (press again to undo either). A colon at the end of a line doesn't indent the next one.
 
 ### Approvals and undo
 
-muster hooks into Claude Code for that session only, through `--settings`. Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
+muster hooks into Claude Code for that session only, through `--settings`. Codex can be hooked the same way: set `hooks = "codex"` under `[agents.codex]` (it's off until you've tried it, since an older Codex that rejects the hook config won't start). Read-only commands run without asking, commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
 
 Finish with AI and agents rewriting an open file don't cost you your text: the version before is one ⌘Z away in the editor.
 
-Every agent also has a shadow-git timeline: a snapshot before each tool call, after file changes and at the end of each turn. Diff any step, revert to it, and undo a revert.
+Every agent also has a shadow-git timeline: a snapshot before each tool call that can change something (read-only commands like `ls` or `git log` are skipped), after file changes and at the end of each turn. Diff any step, revert to it, and undo a revert.
 
 ### Notifications
 
@@ -204,7 +204,7 @@ The keys inside a card (the terminal's, the editor's and Changes', below) are fi
 
 **Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `r` comment on the line · `d` discard the hunk · `m` accept (commit and merge) · undo history: `r` revert to here, `n` checkpoint.
 
-**Built-in editor:** ⌘S save · ⌘Z / ⌘⇧Z undo, redo · ⌘F find, ⌘G next · ⌘L go to line · ⌘K delete line · ⌘R reload from disk.
+**Built-in editor:** ⌘S save · ⌘Z / ⌘⇧Z undo, redo · ⇧ with the arrows, Home/End or a click selects, or drag; ⌘A all · ⌘C / ⌘X / ⌘V on the selection (the whole line when none) · Tab / ⇧Tab indent or dedent the selected lines · ⌘F find, ⌘G next · ⌘L go to line · ⌘K delete line · ⌘R reload from disk · in Markdown: ⌘T task, ⌘B bold, ⌘E code.
 
 ## Command line
 
@@ -280,13 +280,13 @@ crates/
 scripts/macos-app.sh
 ```
 
-`cargo test --workspace` runs 60 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor and its Markdown keys, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
+`cargo test --workspace` runs 67 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
 
 ## Known limitations
 
 - Terminals survive the app closing. When the daemon stops (`muster stop`, a reboot) their processes end; the next daemon starts them again in the same folders, and agents that had finished a turn resume their session (`resume_args` in each agent's config). A shell comes back as a fresh shell.
 - The approval bar works with Claude Code. Other agents' own prompts show as *waiting* and are answered in their tab.
-- The built-in editor has no multi-cursor and no text selection yet; copy and cut work on whole lines.
+- The built-in editor has no multi-cursor. With nothing selected, copy and cut take the whole line.
 - Card sizes reset when the app restarts.
 
 ## License

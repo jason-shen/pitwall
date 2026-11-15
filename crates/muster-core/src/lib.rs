@@ -6,6 +6,7 @@ pub mod client;
 pub mod config;
 pub mod editor;
 pub mod git;
+pub mod mdhl;
 pub mod hosts;
 pub mod paths;
 pub mod policy;
