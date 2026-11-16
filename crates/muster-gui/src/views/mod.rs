@@ -45,6 +45,7 @@ enum Action {
     StartRename(String),
     StartRenameTab(String),
     ToggleChild(Child),
+    ToggleSidebar,
     Rename(String, String),
     SetProject(String),
     OpenBar(bool),
@@ -361,7 +362,7 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         acts.push(Action::Split);
     }
     if k("toggle_sidebar") {
-        app.sidebar = !app.sidebar;
+        acts.push(Action::ToggleSidebar);
     }
     if k("show_changes") {
         app.toggle_child(Child::Changes);
@@ -1121,7 +1122,35 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
         }
     }
 
-    let area = Rect::from_min_max(strip.min, pos2(right - 8.0, strip.max.y));
+    // At the near end, so it's still there to bring the sidebar back.
+    let side = Rect::from_center_size(
+        pos2(strip.left() + 14.0, strip.center().y),
+        vec2(28.0, 24.0),
+    );
+    let b = ui
+        .put(
+            side,
+            egui::Button::selectable(false, "").frame_when_inactive(false),
+        )
+        .on_hover_text(format!(
+            "{} sidebar   {}",
+            if app.sidebar { "Hide" } else { "Show" },
+            crate::keys::hint("toggle_sidebar")
+        ));
+    sidebar_icon(
+        ui,
+        side.center(),
+        app.sidebar,
+        if b.hovered() { TEXT } else { MUTED },
+    );
+    if b.clicked() {
+        acts.push(Action::ToggleSidebar);
+    }
+
+    let area = Rect::from_min_max(
+        pos2(side.right() + 4.0, strip.top()),
+        pos2(right - 8.0, strip.max.y),
+    );
     let mut tabs = ui.new_child(
         egui::UiBuilder::new()
             .id_salt("tab-strip")
@@ -1157,6 +1186,38 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
                 acts.push(Action::NewShellIn(root));
             }
         });
+}
+
+/// A window with a pane down its left side, filled while the sidebar shows.
+/// Painted, since none of the bundled fonts has a glyph for it.
+fn sidebar_icon(ui: &Ui, at: egui::Pos2, shown: bool, color: Color32) {
+    let p = ui.painter();
+    let frame = Rect::from_center_size(at, vec2(15.0, 12.0));
+    let pane = Rect::from_min_max(frame.min, pos2(frame.left() + 5.0, frame.bottom()));
+    if shown {
+        p.rect_filled(
+            pane,
+            CornerRadius {
+                nw: 2,
+                sw: 2,
+                ..Default::default()
+            },
+            color,
+        );
+    }
+    p.rect_stroke(
+        frame,
+        2.0,
+        Stroke::new(1.2, color),
+        egui::StrokeKind::Inside,
+    );
+    p.line_segment(
+        [
+            pos2(pane.right(), frame.top()),
+            pos2(pane.right(), frame.bottom()),
+        ],
+        Stroke::new(1.2, color),
+    );
 }
 
 /// A tab drawn as keel draws its session tabs: fixed width, a status dot,
@@ -4945,6 +5006,7 @@ fn apply(app: &mut App, a: Action) {
             app.rename_in_tab = true;
         }
         Action::ToggleChild(c) => app.toggle_child(c),
+        Action::ToggleSidebar => app.sidebar = !app.sidebar,
         Action::Rename(id, text) => {
             app.renaming = None;
             let text = text.trim().to_string();

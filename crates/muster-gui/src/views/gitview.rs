@@ -409,7 +409,9 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
         // First, so a narrow pane clips the others instead.
         let staged = app.changes.iter().filter(|c| c.staged()).count();
         let label = if staged > 0 {
-            RichText::new(format!("commit {staged} staged")).color(ACCENT).strong()
+            RichText::new(format!("commit {staged} staged"))
+                .color(ACCENT)
+                .strong()
         } else {
             RichText::new("commit")
         };
