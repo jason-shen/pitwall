@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, split, select, size:WxH), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -155,6 +155,8 @@ impl DevShot {
                         }
                     }
                     "newbrief" => app.open_new_brief(),
+                    // A brief-sized task, to see the form stay on screen.
+                    "newagent" => app.open_new_agent(&"A step of a long brief.\n".repeat(80)),
                     "keys" => app.show_keys = true,
                     "submit" => app.submit_form(),
                     "swap" => app.swap_cards(0, 1),

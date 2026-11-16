@@ -3826,12 +3826,24 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                     NewKind::Brief => {}
                     NewKind::Agent => {
                         ui.label(tr("Task"));
-                        let r = ui.add(
-                            TextEdit::multiline(&mut f.task)
-                                .hint_text(tr("What should it do? (optional: you can tell it later)"))
-                                .desired_rows(3)
-                                .desired_width(380.0),
-                        );
+                        // A brief handed over fills this box; capped, it scrolls
+                        // instead of pushing the rest of the form off screen. The
+                        // 420 is the form's other rows plus its offset from the top.
+                        let max_h = (ui.ctx().content_rect().height() - 420.0).clamp(80.0, 420.0);
+                        let r = ScrollArea::vertical()
+                            .id_salt("new-agent-task")
+                            .max_height(max_h)
+                            // In a grid cell it otherwise drops to its 64pt minimum.
+                            .min_scrolled_height(max_h)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    TextEdit::multiline(&mut f.task)
+                                        .hint_text(tr("What should it do? (optional: you can tell it later)"))
+                                        .desired_rows(3)
+                                        .desired_width(380.0),
+                                )
+                            })
+                            .inner;
                         if r.changed() && !f.name_edited {
                             f.name = crate::app::suggest_name(&f.task);
                         }
