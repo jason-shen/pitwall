@@ -45,6 +45,13 @@ fn main() -> eframe::Result {
         .with_inner_size([1480.0, 920.0])
         .with_min_inner_size([760.0, 480.0])
         .with_transparent(transparent);
+    if transparent {
+        // Over a clear window, macOS 27 draws the title bar with no backing at
+        // all, so the content runs under it and paints the strip itself.
+        viewport = viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false);
+    }
     // Muster.app has its .icns; this is for running it any other way (Linux,
     // cargo run), where the window would otherwise get a blank icon.
     if let Ok(icon) =

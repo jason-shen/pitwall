@@ -12,6 +12,8 @@ const TITLES: [&str; 5] = [
     "Undo history",
 ];
 
+const STATUS_H: &str = "git-status-h";
+
 /// What selecting row `i` of `panel` shows on the diff side.
 fn source(app: &App, panel: Panel, i: usize, is_agent: bool) -> Option<MainSrc> {
     match panel {
@@ -120,7 +122,12 @@ pub(super) fn body(
         Panel::Snapshots => 2.0,
         Panel::Main => 0.0,
     };
-    let status_h = 64.0;
+    // As tall as its rows measured last frame. A fixed height cut the
+    // buttons off, commit included, at larger font sizes.
+    let status_h = ui
+        .ctx()
+        .memory(|m| m.data.get_temp::<f32>(Id::unique(STATUS_H)))
+        .unwrap_or(64.0);
     let gap = 4.0;
     let flex = left.height() - status_h - gap * (panels.len() - 1) as f32;
     let total: f32 = panels.iter().map(|p| weights(*p)).sum();
@@ -187,6 +194,13 @@ fn list_panel(
 
     if panel == Panel::Status {
         status_panel(ui, app, is_agent, acts);
+        // Plus the frame's title and bottom inset.
+        let want = (ui.min_rect().height() + 24.0).ceil();
+        let id = Id::unique(STATUS_H);
+        if ui.ctx().memory(|m| m.data.get_temp::<f32>(id)) != Some(want) {
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id, want));
+            ui.ctx().request_repaint();
+        }
         return;
     }
     if n == 0 {
@@ -392,6 +406,16 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
         );
     });
     ui.horizontal(|ui| {
+        // First, so a narrow pane clips the others instead.
+        let staged = app.changes.iter().filter(|c| c.staged()).count();
+        let label = if staged > 0 {
+            RichText::new(format!("commit {staged} staged")).color(ACCENT).strong()
+        } else {
+            RichText::new("commit")
+        };
+        if ui.small_button(label).on_hover_text("c").clicked() {
+            acts.push(Action::StartCommit);
+        }
         if is_agent
             && base_of(app).is_some()
             && ui
@@ -409,9 +433,6 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
                 path: None,
                 mode: DiffMode::Unstaged,
             }));
-        }
-        if ui.small_button("commit").on_hover_text("c").clicked() {
-            acts.push(Action::StartCommit);
         }
         let has_branch = app
             .tabs

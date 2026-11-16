@@ -533,6 +533,9 @@ pub struct App {
     pub font_error: Option<String>,
     /// Whether the window was created transparent (only possible at startup).
     pub transparent: bool,
+    /// Height of the title bar the content runs under, in points; 0 when
+    /// opaque or full screen.
+    pub titlebar: f32,
     applied_blur: Option<i64>,
     pub commit_msg: String,
     /// The commit message popup is open.
@@ -665,6 +668,7 @@ impl App {
             applied_font: Some(want),
             font_error,
             transparent,
+            titlebar: 0.0,
             applied_blur: None,
             commit_msg: String::new(),
             committing: false,
@@ -3367,6 +3371,53 @@ fn set_window_opaque(frame: &eframe::Frame, opaque: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_window_opaque(_frame: &eframe::Frame, _opaque: bool) {}
 
+/// How much of the window the title bar covers. Asked every frame because
+/// it changes going full screen, where the bar hides and this is 0.
+#[cfg(target_os = "macos")]
+fn titlebar_height(frame: &eframe::Frame) -> f32 {
+    use objc2::encode::{Encode, Encoding};
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    }
+    unsafe impl Encode for Rect {
+        const ENCODING: Encoding = Encoding::Struct(
+            "CGRect",
+            &[
+                Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]),
+                Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]),
+            ],
+        );
+    }
+    let Ok(handle) = frame.window_handle() else {
+        return 0.0;
+    };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+        return 0.0;
+    };
+    let view = h.ns_view.as_ptr() as *mut AnyObject;
+    unsafe {
+        let window: *mut AnyObject = objc2::msg_send![view, window];
+        if window.is_null() {
+            return 0.0;
+        }
+        let whole: Rect = objc2::msg_send![window, frame];
+        let below: Rect = objc2::msg_send![window, contentLayoutRect];
+        (whole.h - below.h).max(0.0) as f32
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn titlebar_height(_frame: &eframe::Frame) -> f32 {
+    0.0
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         if std::env::var_os("MUSTER_TRACE_REPAINT").is_some() {
@@ -3374,6 +3425,9 @@ impl eframe::App for App {
         }
         self.pump();
         self.apply_settings(ui, frame);
+        if self.transparent {
+            self.titlebar = titlebar_height(frame);
+        }
         if let Some(t) = theme::backdrop() {
             ui.painter().rect_filled(ui.max_rect(), 0.0, t);
         }

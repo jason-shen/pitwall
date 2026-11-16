@@ -202,6 +202,16 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
     let scheme_bg = theme::scheme(&app.settings.scheme).bg;
     let accent = project_color(app.project.as_deref().unwrap_or(""));
     let ground = theme::surface(theme::c::SIDEBAR, scheme_bg);
+    if app.titlebar > 0.0 {
+        // Under the see-through window's title bar: keeps the traffic lights
+        // and title off the content, and gives the bar something to sit on.
+        egui::Panel::top("titlebar")
+            .exact_size(app.titlebar)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(Frame::new().fill(ground))
+            .show(ui, |_| {});
+    }
     if app.sidebar {
         let tint = theme::surface(blend(PANEL, accent, 0.07), scheme_bg);
         egui::Panel::left("sidebar")
