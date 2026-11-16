@@ -33,9 +33,10 @@ vt100 = "0.18.1"
 # Window background blur; both already come in through winit.
 objc2 = "0.6.5"
 raw-window-handle = "0.6.2"
-# Notifications posted as Muster.app rather than through osascript.
+# Notifications posted as Muster.app rather than through osascript, and the
+# system's title bar double-click setting.
 block2 = "0.6.2"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSBundle", "NSError"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSBundle", "NSError", "NSUserDefaults"] }
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "block2"] }
 
 # The renderer: wgpu (Metal on macOS) by default; `--no-default-features

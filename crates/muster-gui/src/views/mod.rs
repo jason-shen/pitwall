@@ -210,7 +210,12 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
             .resizable(false)
             .show_separator_line(false)
             .frame(Frame::new().fill(ground))
-            .show(ui, |_| {});
+            .show(ui, |ui| {
+                let bar = ui.interact(ui.max_rect(), Id::unique("titlebar"), Sense::click());
+                if bar.double_clicked() {
+                    crate::app::titlebar_double_clicked(ui.ctx());
+                }
+            });
     }
     if app.sidebar {
         let tint = theme::surface(blend(PANEL, accent, 0.07), scheme_bg);

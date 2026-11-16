@@ -3443,6 +3443,30 @@ fn titlebar_height(_frame: &eframe::Frame) -> f32 {
     0.0
 }
 
+/// A double-click on the title bar we draw ourselves. winit's view takes the
+/// clicks there and never passes them on, so AppKit's own handling of it
+/// doesn't run. Follows System Settings → Desktop & Dock; "Fill" falls back to
+/// zoom.
+pub fn titlebar_double_clicked(ctx: &egui::Context) {
+    #[cfg(target_os = "macos")]
+    let action = {
+        use objc2_foundation::{NSString, NSUserDefaults};
+        NSUserDefaults::standardUserDefaults()
+            .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+            .map(|s| s.to_string())
+    };
+    #[cfg(not(target_os = "macos"))]
+    let action: Option<String> = None;
+    match action.as_deref() {
+        Some("None") => {}
+        Some("Minimize") => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+        _ => {
+            let zoomed = ctx.input(|i| i.viewport().maximized).unwrap_or(false);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!zoomed));
+        }
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         if std::env::var_os("MUSTER_TRACE_REPAINT").is_some() {
