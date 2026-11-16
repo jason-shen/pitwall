@@ -71,6 +71,8 @@ pub struct Settings {
     /// Post a system notification when an agent needs you or finishes while
     /// muster is in the background.
     pub system_notifications: bool,
+    /// UI language code ("en", "zh", "ko", "ja", "de", "es", "fr").
+    pub language: String,
     /// Every command's keys, written as `[keys]`.
     #[serde(skip)]
     pub keys: crate::keys::Keymap,
@@ -132,6 +134,7 @@ impl Default for Settings {
             tabs_bottom: false,
             snippets: vec![],
             system_notifications: true,
+            language: "en".into(),
             labels: Default::default(),
             folded_projects: Default::default(),
             hidden_projects: Default::default(),

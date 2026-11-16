@@ -12,12 +12,26 @@ use std::time::{Duration, Instant};
 use muster_core::config::AgentConfig;
 use serde_json::Value;
 
+use crate::i18n::{tr, trf};
+
 pub struct Template {
     pub key: &'static str,
     pub name: &'static str,
     pub icon: &'static str,
     pub blurb: &'static str,
     body: &'static str,
+}
+
+// `name` also goes into the prompt claude gets, so it stays English there and
+// is translated only where it's shown.
+impl Template {
+    pub fn shown_name(&self) -> &'static str {
+        tr(self.name)
+    }
+
+    pub fn shown_blurb(&self) -> &'static str {
+        tr(self.blurb)
+    }
 }
 
 pub const TEMPLATES: &[Template] = &[
@@ -412,7 +426,7 @@ pub fn finish(
     let child = Arc::new(Mutex::new(child));
     let stopped = Arc::new(AtomicBool::new(false));
     let run = Run {
-        status: "starting".into(),
+        status: tr("starting").into(),
         recorded: false,
         original: text.clone(),
         child: child.clone(),
@@ -437,7 +451,7 @@ pub fn finish(
                 Err(errs
                     .lines()
                     .rfind(|l| !l.trim().is_empty())
-                    .unwrap_or("claude exited before it finished")
+                    .unwrap_or(tr("claude exited before it finished"))
                     .to_string())
             }
         })));
@@ -469,7 +483,7 @@ fn stream(
                     Some("message_start") => cur.clear(),
                     Some("content_block_start") => match e["content_block"]["type"].as_str() {
                         Some("tool_use") => cur.clear(),
-                        Some("thinking") if !writing => send(Update::Status("thinking".into())),
+                        Some("thinking") if !writing => send(Update::Status(tr("thinking").into())),
                         _ => {}
                     },
                     Some("content_block_delta") if e["delta"]["type"] == "text_delta" => {
@@ -477,7 +491,7 @@ fn stream(
                         let Some(body) = body_of(&cur) else { continue };
                         if !writing {
                             writing = true;
-                            send(Update::Status("writing".into()));
+                            send(Update::Status(tr("writing").into()));
                         }
                         // Every delta would be a write per token; a few a
                         // second still reads as live.
@@ -511,8 +525,9 @@ fn stream(
                         r.to_string()
                     });
                 }
-                let body = body_of(r).ok_or("the reply had no brief in it (no `# ` title)")?;
-                write(path, head, body).map_err(|e| format!("couldn't write the brief: {e}"))?;
+                let body = body_of(r).ok_or(tr("the reply had no brief in it (no `# ` title)"))?;
+                write(path, head, body)
+                    .map_err(|e| trf!("couldn't write the brief: {e}", e = e))?;
                 return Ok(true);
             }
             _ => {}
@@ -563,13 +578,13 @@ fn describe(tool: &str, input: &Value) -> String {
     let d = match tool {
         "Read" => {
             let p = Path::new(s("file_path"));
-            format!(
-                "reading {}",
-                p.file_name().unwrap_or(p.as_os_str()).to_string_lossy()
+            trf!(
+                "reading {file}",
+                file = p.file_name().unwrap_or(p.as_os_str()).to_string_lossy()
             )
         }
-        "Grep" => format!("searching for {}", s("pattern")),
-        "Glob" => format!("looking for {}", s("pattern")),
+        "Grep" => trf!("searching for {pattern}", pattern = s("pattern")),
+        "Glob" => trf!("looking for {pattern}", pattern = s("pattern")),
         t => t.to_lowercase(),
     };
     if d.chars().count() > 48 {

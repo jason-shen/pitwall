@@ -335,7 +335,7 @@ pub fn available_weights(term: Option<&TermFont>) -> Vec<u16> {
 }
 
 pub fn weight_name(w: u16) -> &'static str {
-    match w {
+    crate::i18n::tr(match w {
         0..=149 => "Thin",
         150..=249 => "Extra Light",
         250..=349 => "Light",
@@ -345,7 +345,7 @@ pub fn weight_name(w: u16) -> &'static str {
         650..=749 => "Bold",
         750..=849 => "Extra Bold",
         _ => "Black",
-    }
+    })
 }
 
 /// The system monospace font muster falls back to, which also gets the weights.
@@ -381,6 +381,7 @@ const FALLBACK_CANDIDATES: &[&str] = &[
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
@@ -388,6 +389,36 @@ const FALLBACK_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 ];
+
+/// Han characters look different in Chinese and Japanese fonts, and the
+/// fallback list reaches the Japanese one first. For Chinese and Korean UI the
+/// matching system font moves ahead of the others in the UI family. The
+/// terminal chain is left alone.
+fn prefer_cjk(fonts: &mut FontDefinitions, lang: crate::i18n::Lang) {
+    use crate::i18n::Lang;
+    let first: &[&str] = match lang {
+        Lang::Zh => &[
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        ],
+        Lang::Ko => &["/System/Library/Fonts/AppleSDGothicNeo.ttc"],
+        _ => return,
+    };
+    let Some(chain) = fonts.families.get_mut(&FontFamily::Proportional) else {
+        return;
+    };
+    let names: Vec<String> = first
+        .iter()
+        .map(|p| format!("sys:{p}"))
+        .filter(|n| fonts.font_data.contains_key(n))
+        .collect();
+    chain.retain(|n| !names.contains(n));
+    let at = chain
+        .iter()
+        .position(|n| n.starts_with("sys:"))
+        .unwrap_or(chain.len());
+    chain.splice(at..at, names);
+}
 
 /// egui's built-in fonts plus system fallbacks, loaded once. `apply` layers the
 /// chosen terminal font on top whenever it changes.
@@ -430,8 +461,10 @@ impl FontSet {
         term: Option<&TermFont>,
         weight: u16,
         bold: u16,
+        lang: crate::i18n::Lang,
     ) -> Result<(), String> {
         let mut fonts = self.base.clone();
+        prefer_cjk(&mut fonts, lang);
         let fallback = fonts
             .families
             .get(&FontFamily::Monospace)
@@ -455,7 +488,13 @@ impl FontSet {
                     fonts.font_data.insert("term-font".into(), Arc::new(data));
                     chain.insert(0, "term-font".into());
                 }
-                Err(e) => result = Err(format!("Couldn't load {}: {e}", path.display())),
+                Err(e) => {
+                    result = Err(crate::i18n::trf!(
+                        "Couldn't load {path}: {e}",
+                        path = path.display(),
+                        e = e
+                    ))
+                }
             }
             // Only a face that's actually heavier counts; one that would come
             // out the same as regular leaves bold to the thickening fallback.
@@ -485,7 +524,8 @@ impl FontSet {
 
 fn read_font(path: &std::path::Path, index: u32) -> Result<FontData, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    skrifa::FontRef::from_index(&bytes, index).map_err(|e| format!("not a usable font ({e})"))?;
+    skrifa::FontRef::from_index(&bytes, index)
+        .map_err(|e| crate::i18n::trf!("not a usable font ({e})", e = e))?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     Ok(data)
@@ -494,12 +534,13 @@ fn read_font(path: &std::path::Path, index: u32) -> Result<FontData, String> {
 /// Parse a font file the user pointed at by hand, naming it from its own metadata.
 pub fn term_font_from_path(path: &std::path::Path) -> Result<TermFont, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let file = skrifa::raw::FileRef::new(&bytes).map_err(|e| format!("not a font file ({e})"))?;
+    let file = skrifa::raw::FileRef::new(&bytes)
+        .map_err(|e| crate::i18n::trf!("not a font file ({e})", e = e))?;
     let font = file
         .fonts()
         .next()
         .and_then(|f| f.ok())
-        .ok_or("no usable face in file")?;
+        .ok_or(crate::i18n::tr("no usable face in file"))?;
     let name = family_name(&font).unwrap_or_else(|| {
         path.file_stem()
             .unwrap_or_default()

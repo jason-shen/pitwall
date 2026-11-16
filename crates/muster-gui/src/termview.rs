@@ -2,6 +2,7 @@
 //! encoding. Shared with keel (its terminal.rs); the daemon owns the PTY here,
 //! so this only draws what it's fed and hands back what to send.
 
+use crate::i18n::{tr, trf};
 use crate::settings::{CursorStyle, Settings};
 use crate::theme::Scheme;
 use egui::{pos2, vec2, Align2, Color32, Event, FontId, Key, Modifiers, Rect, Sense, Stroke};
@@ -1419,7 +1420,7 @@ impl TerminalView {
             }
         }
         if scrolled {
-            let txt = format!("⬆ {} lines", screen.scrollback());
+            let txt = trf!("⬆ {n} lines", n = screen.scrollback());
             // Left of the pane's corner buttons (split, snippets), not on top of them.
             let pos = rect.right_top() + vec2(-86.0, 8.0);
             let g = painter.layout_no_wrap(txt, FontId::proportional(12.0), Color32::WHITE);
@@ -1472,7 +1473,7 @@ impl TerminalView {
                 ui.horizontal(|ui| {
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut f.query)
-                            .hint_text("Find in scrollback")
+                            .hint_text(tr("Find in scrollback"))
                             .desired_width(170.0),
                     );
                     if f.want_focus {
@@ -1493,20 +1494,28 @@ impl TerminalView {
                     }
                     let count = match (f.matches.len(), f.query.is_empty()) {
                         (_, true) => String::new(),
-                        (0, false) => "No matches".into(),
-                        (n, false) => format!("{} of {n}", f.current + 1),
+                        (0, false) => tr("No matches").into(),
+                        (n, false) => trf!("{i} of {n}", i = f.current + 1, n = n),
                     };
                     ui.label(egui::RichText::new(count).small().color(c::TEXT_DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("×").on_hover_text("Close (Esc)").clicked() {
+                        if ui
+                            .small_button("×")
+                            .on_hover_text(tr("Close (Esc)"))
+                            .clicked()
+                        {
                             act = Some(Act::Close);
                         }
-                        if ui.small_button("⏷").on_hover_text("Next (Enter)").clicked() {
+                        if ui
+                            .small_button("⏷")
+                            .on_hover_text(tr("Next (Enter)"))
+                            .clicked()
+                        {
                             act = Some(Act::Step(true));
                         }
                         if ui
                             .small_button("⏶")
-                            .on_hover_text("Previous (Shift+Enter)")
+                            .on_hover_text(tr("Previous (Shift+Enter)"))
                             .clicked()
                         {
                             act = Some(Act::Step(false));

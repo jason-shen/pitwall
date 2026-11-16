@@ -2,14 +2,17 @@
 
 use std::path::Path;
 
+use crate::i18n::{tr, trf};
+
 /// macOS: the Finder's own Trash (NSFileManager), so Put Back works.
 #[cfg(target_os = "macos")]
 pub fn trash(path: &Path) -> std::io::Result<()> {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     let fail = |what: &str| {
-        std::io::Error::other(format!(
-            "couldn't move {} to the Trash: {what}",
-            path.display()
+        std::io::Error::other(trf!(
+            "couldn't move {file} to the Trash: {why}",
+            file = path.display(),
+            why = tr(what)
         ))
     };
     let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
@@ -46,7 +49,7 @@ pub fn trash(path: &Path) -> std::io::Result<()> {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share")))
-        .ok_or_else(|| std::io::Error::other("no home folder"))?
+        .ok_or_else(|| std::io::Error::other(tr("no home folder")))?
         .join("Trash");
     let (files, info) = (base.join("files"), base.join("info"));
     std::fs::create_dir_all(&files)?;

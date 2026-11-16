@@ -17,6 +17,7 @@ use crate::app::{
     agent_kind, is_agent, item_project, project_item, task_dir, App, Child, CmdBar, Confirm,
     MainSrc, MdMode, SettingsUi, Target,
 };
+use crate::i18n::{tr, trf};
 use crate::settings::{self as cfg, CursorStyle};
 use crate::{term, termview, theme};
 
@@ -191,7 +192,7 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
         + app.approvals.len();
     let here = project_title(app, app.project.as_deref().unwrap_or(""));
     let title = if need > 0 {
-        format!("muster — {here} · {need} need you")
+        format!("muster — {here} · {}", trf!("{need} need you", need = need))
     } else {
         format!("muster — {here}")
     };
@@ -379,7 +380,7 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     if k("next_attention") {
         acts.push(Action::NextAttention);
     }
-    if k("approve") {
+    if k(tr("approve")) {
         app.decide_first(true);
     }
     if k("reject") {
@@ -389,9 +390,9 @@ fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         app.broadcast = !app.broadcast;
         app.notify(
             if app.broadcast {
-                "broadcasting: typing goes to every terminal card"
+                tr("broadcasting: typing goes to every terminal card")
             } else {
-                "broadcast off"
+                tr("broadcast off")
             },
             false,
         );
@@ -575,7 +576,7 @@ fn item_title(app: &App, id: &str) -> String {
     }
     match app.tasks.get(id) {
         Some(t) => app.label(t),
-        None => format!("{id} (ended)"),
+        None => trf!("{id} (ended)", id = id),
     }
 }
 
@@ -626,9 +627,12 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         .show(ui, |ui| {
             let omni = ui.add(
                 egui::Button::new(
-                    RichText::new(format!("⌕  Search or start a task      {}", crate::keys::hint("command_bar")))
+                    RichText::new(format!("⌕  {}      {}", tr("Search or start a task"), crate::keys::hint("command_bar")))
                         .color(MUTED),
                 )
+                // German and French run long enough to wrap the shortcut
+                // onto a second line otherwise.
+                .truncate()
                 .min_size(vec2(ui.available_width(), 30.0))
                 .fill(Color32::from_white_alpha(12))
                 .corner_radius(CornerRadius::same(8)),
@@ -645,24 +649,24 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.label(
-                            RichText::new("The daemon is running an older build of muster. Restart it so terminals follow cd and agents started in them (like claude) show as agents.")
+                            RichText::new(tr("The daemon is running an older build of muster. Restart it so terminals follow cd and agents started in them (like claude) show as agents."))
                                 .small()
                                 .color(AMBER),
                         );
-                        if ui.small_button("Restart daemon…").clicked() {
+                        if ui.small_button(tr("Restart daemon…")).clicked() {
                             app.confirm = Some(Confirm::RestartDaemon {
-                                text: "Restart the muster daemon? Every running terminal and agent ends (worktrees and snapshots are kept).".into(),
+                                text: tr("Restart the muster daemon? Every running terminal and agent ends (worktrees and snapshots are kept).").into(),
                             });
                         }
                     });
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                section_label(ui, "PROJECTS");
+                section_label(ui, tr("PROJECTS"));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
-                        .on_hover_text("New project: open a folder")
+                        .on_hover_text(tr("New project: open a folder"))
                         .clicked()
                     {
                         acts.push(Action::NewProject);
@@ -746,7 +750,7 @@ fn project_header(
         let g = p.text(
             pos2(right, y),
             Align2::RIGHT_CENTER,
-            format!("{need} waiting"),
+            trf!("{need} waiting", need = need),
             FontId::proportional(11.5),
             AMBER,
         );
@@ -769,7 +773,7 @@ fn project_header(
     let r = r.on_hover_text(format!(
         "{}   {}",
         if root.is_empty() {
-            "Terminals outside any repo".to_string()
+            tr("Terminals outside any repo").to_string()
         } else {
             tilde(std::path::Path::new(root))
         },
@@ -781,7 +785,11 @@ fn project_header(
     let root = root.to_string();
     r.context_menu(|ui| {
         if ui
-            .button(format!("New agent   {}", crate::keys::hint("new_agent")))
+            .button(format!(
+                "{}   {}",
+                tr("New agent"),
+                crate::keys::hint("new_agent")
+            ))
             .clicked()
         {
             acts.push(Action::SetProject(root.clone()));
@@ -790,7 +798,8 @@ fn project_header(
         }
         if ui
             .button(format!(
-                "New terminal   {}",
+                "{}   {}",
+                tr("New terminal"),
                 crate::keys::hint("new_terminal")
             ))
             .clicked()
@@ -800,13 +809,13 @@ fn project_header(
             ui.close();
         }
         ui.separator();
-        if ui.button("Copy path").clicked() {
+        if ui.button(tr("Copy path")).clicked() {
             acts.push(Action::Copy(root.clone()));
             ui.close();
         }
         ui.separator();
         if ui
-            .button(RichText::new("Remove project…").color(RED))
+            .button(RichText::new(tr("Remove project…")).color(RED))
             .clicked()
         {
             acts.push(Action::RemoveProject(root.clone()));
@@ -829,7 +838,7 @@ fn project_body(ui: &mut Ui, app: &mut App, root: &str, acts: &mut Vec<Action>) 
     let shells: Vec<String> = shells.into_iter().map(|t| t.id.clone()).collect();
     project_rows(ui, app, root, acts);
     if shells.is_empty() {
-        ui.label(RichText::new("No terminals yet.").small().color(MUTED));
+        ui.label(RichText::new(tr("No terminals yet.")).small().color(MUTED));
     }
     for id in &shells {
         task_rows(ui, app, id, acts);
@@ -839,15 +848,19 @@ fn project_body(ui: &mut Ui, app: &mut App, root: &str, acts: &mut Vec<Action>) 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (label, tip, act) in [
-            ("+ Agent", crate::keys::hint("new_agent"), Action::NewAgent),
             (
-                "+ Terminal",
+                tr("+ Agent"),
+                crate::keys::hint("new_agent"),
+                Action::NewAgent,
+            ),
+            (
+                tr("+ Terminal"),
                 crate::keys::hint("new_terminal"),
                 Action::NewShellIn(root.to_string()),
             ),
             (
-                "+ Brief",
-                "A doc to plan the work, then hand to an agent".to_string(),
+                tr("+ Brief"),
+                tr("A doc to plan the work, then hand to an agent").to_string(),
                 Action::NewBrief,
             ),
         ] {
@@ -873,9 +886,16 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
     let count = (app.ctx_root.as_deref() == Some(std::path::Path::new(root))).then(|| {
         let n = app.changes.len();
         if n == 0 {
-            ("clean".to_string(), MUTED)
+            (tr("clean").to_string(), MUTED)
         } else {
-            (format!("{n} file{}", if n == 1 { "" } else { "s" }), AMBER)
+            (
+                if n == 1 {
+                    tr("1 file").to_string()
+                } else {
+                    trf!("{n} files", n = n)
+                },
+                AMBER,
+            )
         }
     });
     let row = |ui: &mut Ui,
@@ -927,8 +947,8 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
         }
         r
     };
-    row(ui, Child::Changes, "±", "Changes", count, acts);
-    row(ui, Child::Files, "▤", "Files", None, acts);
+    row(ui, Child::Changes, "±", tr("Changes"), count, acts);
+    row(ui, Child::Files, "▤", tr("Files"), None, acts);
     for entry in app.briefs(root) {
         let (path, title) = (entry.path.clone(), entry.title.clone());
         let on = is_shown(app, &item, &Child::File(path.clone()));
@@ -950,7 +970,7 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
         // Filling in, then whoever is building it and how far they've got.
         let steps = (entry.steps > 0).then(|| format!("{}/{}", entry.done, entry.steps));
         let status = if app.brief_runs.contains_key(&path) {
-            Some(("✦ filling in".to_string(), ACCENT))
+            Some((tr("✦ filling in").to_string(), ACCENT))
         } else if let Some(t) = app.brief_agent(&path) {
             let (state, color) = state_label(t);
             Some((
@@ -992,22 +1012,22 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
             acts.push(Action::OpenBrief(path.clone()));
         }
         r.context_menu(|ui| {
-            if ui.button("✦ Finish with AI").clicked() {
+            if ui.button(tr("✦ Finish with AI")).clicked() {
                 acts.push(Action::OpenBrief(path.clone()));
                 acts.push(Action::FinishBrief(path.clone()));
                 ui.close();
             }
-            if ui.button("Hand to agent  →").clicked() {
+            if ui.button(tr("Hand to agent  →")).clicked() {
                 acts.push(Action::HandOffBrief(path.clone()));
                 ui.close();
             }
             ui.separator();
-            if ui.button("Copy path").clicked() {
+            if ui.button(tr("Copy path")).clicked() {
                 acts.push(Action::Copy(path.display().to_string()));
                 ui.close();
             }
             if ui
-                .button(RichText::new("Move to Trash…").color(RED))
+                .button(RichText::new(tr("Move to Trash…")).color(RED))
                 .clicked()
             {
                 acts.push(Action::TrashFile(path.clone()));
@@ -1025,17 +1045,17 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
                 .on_hover_text(tilde(path));
             let (item, path) = (item.clone(), path.clone());
             r.context_menu(|ui| {
-                if ui.button("Close").clicked() {
+                if ui.button(tr("Close")).clicked() {
                     acts.push(Action::CloseFile(item.clone(), path.clone()));
                     ui.close();
                 }
-                if ui.button("Copy path").clicked() {
+                if ui.button(tr("Copy path")).clicked() {
                     acts.push(Action::Copy(path.display().to_string()));
                     ui.close();
                 }
                 ui.separator();
                 if ui
-                    .button(RichText::new("Move to Trash…").color(RED))
+                    .button(RichText::new(tr("Move to Trash…")).color(RED))
                     .clicked()
                 {
                     acts.push(Action::TrashFile(path.clone()));
@@ -1086,14 +1106,14 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
     let target = app.target().cloned();
     let changes = match &target {
         Some(_) if app.ctx_root.is_some() && !app.changes.is_empty() => {
-            format!("± Changes  {}", app.changes.len())
+            format!("{}  {}", tr("± Changes"), app.changes.len())
         }
-        _ => "± Changes".to_string(),
+        _ => tr("± Changes").to_string(),
     };
     let mut right = strip.right();
     let mut toggles = vec![];
     for (label, child, key) in [
-        ("▤ Files".to_string(), Child::Files, "show_files"),
+        (tr("▤ Files").to_string(), Child::Files, "show_files"),
         (changes, Child::Changes, "show_changes"),
     ] {
         let w = ui
@@ -1133,8 +1153,12 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
             egui::Button::selectable(false, "").frame_when_inactive(false),
         )
         .on_hover_text(format!(
-            "{} sidebar   {}",
-            if app.sidebar { "Hide" } else { "Show" },
+            "{}   {}",
+            if app.sidebar {
+                tr("Hide sidebar")
+            } else {
+                tr("Show sidebar")
+            },
             crate::keys::hint("toggle_sidebar")
         ));
     sidebar_icon(
@@ -1178,7 +1202,8 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
                         .min_size(vec2(28.0, TAB_H - 6.0)),
                 )
                 .on_hover_text(format!(
-                    "New terminal   {}",
+                    "{}   {}",
+                    tr("New terminal"),
                     crate::keys::hint("new_terminal")
                 ))
                 .clicked()
@@ -1340,7 +1365,7 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
             c::TEXT_DIM,
         );
     }
-    if cr.is_some_and(|c| c.on_hover_text("Close terminal").clicked())
+    if cr.is_some_and(|c| c.on_hover_text(tr("Close terminal")).clicked())
         || (shell && r.middle_clicked())
     {
         acts.push(Action::CloseTerminal(id.to_string()));
@@ -1356,17 +1381,17 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
     }
     let tid = id.to_string();
     r.context_menu(|ui| {
-        if ui.button("Rename…").clicked() {
+        if ui.button(tr("Rename…")).clicked() {
             acts.push(Action::StartRenameTab(tid.clone()));
             ui.close();
         }
-        if ui.button("Open beside").clicked() {
+        if ui.button(tr("Open beside")).clicked() {
             acts.push(Action::OpenBeside(tid.clone()));
             ui.close();
         }
         if shell {
             ui.separator();
-            if ui.button("Close terminal").clicked() {
+            if ui.button(tr("Close terminal")).clicked() {
                 acts.push(Action::CloseTerminal(tid.clone()));
                 ui.close();
             }
@@ -1409,12 +1434,13 @@ fn agents_section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     let ids: Vec<String> = agents.into_iter().map(|t| t.id.clone()).collect();
     let here = project_title(app, app.project.as_deref().unwrap_or(""));
     ui.horizontal(|ui| {
-        section_label(ui, "AGENTS");
+        section_label(ui, tr("AGENTS"));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
                 .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
                 .on_hover_text(format!(
-                    "New agent in {here}   {}",
+                    "{}   {}",
+                    trf!("New agent in {here}", here = here),
                     crate::keys::hint("new_agent")
                 ))
                 .clicked()
@@ -1422,13 +1448,13 @@ fn agents_section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                 acts.push(Action::NewAgent);
             }
             let by = if app.settings.agents_by_recent {
-                "recent"
+                tr("recent")
             } else {
-                "priority"
+                tr("priority")
             };
             if ui
                 .add(egui::Button::new(RichText::new(by).small().color(MUTED)).frame(false))
-                .on_hover_text("Sort by what needs you, or by latest activity")
+                .on_hover_text(tr("Sort by what needs you, or by latest activity"))
                 .clicked()
             {
                 acts.push(Action::ToggleAgentSort);
@@ -1441,7 +1467,7 @@ fn agents_section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         .show(ui, |ui| {
             if ids.is_empty() {
                 ui.label(
-                    RichText::new("No agents running. + starts one in this project.")
+                    RichText::new(tr("No agents running. + starts one in this project."))
                         .small()
                         .color(MUTED),
                 );
@@ -1493,7 +1519,11 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     if let Some((files, add, del)) = app.diffstats.get(id).filter(|s| s.0 > 0) {
         let mut job = egui::text::LayoutJob::default();
         let f = |c| egui::TextFormat::simple(FontId::monospace(11.0), c);
-        job.append(&format!("{files} files "), 0.0, f(FAINT));
+        job.append(
+            &format!("{} ", trf!("{files} files", files = files)),
+            0.0,
+            f(FAINT),
+        );
         job.append(&format!("+{add} "), 0.0, f(GREEN.gamma_multiply(0.8)));
         job.append(&format!("−{del}"), 0.0, f(RED.gamma_multiply(0.8)));
         let g = ui.fonts_mut(|fo| fo.layout_job(job));
@@ -1509,7 +1539,7 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
         .and_then(|b| app.brief_entry(std::path::Path::new(b)));
     let what = match &t.status {
         TaskStatus::Waiting { reason } => Some((reason.clone(), AMBER)),
-        _ if t.pending_approvals > 0 => Some(("wants to run a command".into(), AMBER)),
+        _ if t.pending_approvals > 0 => Some((tr("wants to run a command").into(), AMBER)),
         _ => match &brief {
             Some(b) if b.steps > 0 => {
                 Some((format!("✎ {} · {}/{}", b.title, b.done, b.steps), FAINT))
@@ -1532,16 +1562,16 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     }
     let tid = id.to_string();
     r.context_menu(|ui| {
-        if ui.button("Rename…").clicked() {
+        if ui.button(tr("Rename…")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             acts.push(Action::StartRenameTab(tid.clone()));
             ui.close();
         }
-        if ui.button("Open beside").clicked() {
+        if ui.button(tr("Open beside")).clicked() {
             acts.push(Action::OpenBeside(tid.clone()));
             ui.close();
         }
-        if ui.button("Changes").clicked() {
+        if ui.button(tr("Changes")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             acts.push(Action::Show(Target {
                 item: tid.clone(),
@@ -1550,28 +1580,28 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             ui.close();
         }
         if let Some(b) = &t.brief {
-            if ui.button("Open its brief").clicked() {
+            if ui.button(tr("Open its brief")).clicked() {
                 acts.push(Action::OpenBrief(std::path::PathBuf::from(b)));
                 ui.close();
             }
         }
-        if t.branch.is_some() && ui.button("Accept: commit and merge…").clicked() {
+        if t.branch.is_some() && ui.button(tr("Accept: commit and merge…")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             acts.push(Action::Accept);
             ui.close();
         }
         ui.separator();
         if t.agent == "shell" {
-            if ui.button("Close terminal").clicked() {
+            if ui.button(tr("Close terminal")).clicked() {
                 acts.push(Action::CloseTerminal(tid.clone()));
                 ui.close();
             }
         } else {
-            if ui.button("Kill process").clicked() {
+            if ui.button(tr("Kill process")).clicked() {
                 acts.push(Action::Kill(tid.clone()));
                 ui.close();
             }
-            if ui.button(RichText::new("Remove…").color(RED)).clicked() {
+            if ui.button(RichText::new(tr("Remove…")).color(RED)).clicked() {
                 acts.push(Action::Remove(tid.clone()));
                 ui.close();
             }
@@ -1593,12 +1623,12 @@ fn urgency(t: &TaskInfo) -> u8 {
 
 fn state_label(t: &TaskInfo) -> (&'static str, Color32) {
     match &t.status {
-        _ if t.pending_approvals > 0 => ("approve", AMBER),
-        TaskStatus::Waiting { .. } => ("blocked", AMBER),
-        TaskStatus::Running => ("working", GREEN),
-        TaskStatus::Idle if t.attention => ("done", ACCENT),
-        TaskStatus::Exited { .. } => ("exited", MUTED),
-        _ => ("idle", MUTED),
+        _ if t.pending_approvals > 0 => (tr("approve"), AMBER),
+        TaskStatus::Waiting { .. } => (tr("blocked"), AMBER),
+        TaskStatus::Running => (tr("working"), GREEN),
+        TaskStatus::Idle if t.attention => (tr("done"), ACCENT),
+        TaskStatus::Exited { .. } => (tr("exited"), MUTED),
+        _ => (tr("idle"), MUTED),
     }
 }
 
@@ -1658,7 +1688,7 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
                                 .truncate()
                                 .sense(Sense::click()),
                             )
-                            .on_hover_text("Double-click to rename");
+                            .on_hover_text(tr("Double-click to rename"));
                         if r.double_clicked() {
                             toggled = true;
                             acts.push(Action::StartRename(id.to_string()));
@@ -1676,7 +1706,7 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             });
             let sub = match &t.status {
                 TaskStatus::Waiting { reason } => reason.clone(),
-                _ if t.pending_approvals > 0 => "wants to run a command".into(),
+                _ if t.pending_approvals > 0 => tr("wants to run a command").into(),
                 // An agent typed into a terminal: say which, and where.
                 _ if shell => match agent_kind(t) {
                     Some(kind) => [kind.to_string(), where_in(app, t)]
@@ -1709,15 +1739,15 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
         acts.push(Action::StartRename(tid.clone()));
     }
     resp.context_menu(|ui| {
-        if ui.button("Open").clicked() {
+        if ui.button(tr("Open")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             ui.close();
         }
-        if ui.button("Rename…").clicked() {
+        if ui.button(tr("Rename…")).clicked() {
             acts.push(Action::StartRename(tid.clone()));
             ui.close();
         }
-        if ui.button("Changes").clicked() {
+        if ui.button(tr("Changes")).clicked() {
             acts.push(Action::Show(Target {
                 item: tid.clone(),
                 child: Child::Changes,
@@ -1725,28 +1755,28 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             ui.close();
         }
         if let Some(b) = &t.brief {
-            if ui.button("Open its brief").clicked() {
+            if ui.button(tr("Open its brief")).clicked() {
                 acts.push(Action::OpenBrief(std::path::PathBuf::from(b)));
                 ui.close();
             }
         }
-        if t.branch.is_some() && ui.button("Accept: commit and merge…").clicked() {
+        if t.branch.is_some() && ui.button(tr("Accept: commit and merge…")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             acts.push(Action::Accept);
             ui.close();
         }
         ui.separator();
         if shell {
-            if ui.button("Close terminal").clicked() {
+            if ui.button(tr("Close terminal")).clicked() {
                 acts.push(Action::CloseTerminal(tid.clone()));
                 ui.close();
             }
         } else {
-            if ui.button("Kill process").clicked() {
+            if ui.button(tr("Kill process")).clicked() {
                 acts.push(Action::Kill(tid.clone()));
                 ui.close();
             }
-            if ui.button(RichText::new("Remove…").color(RED)).clicked() {
+            if ui.button(RichText::new(tr("Remove…")).color(RED)).clicked() {
                 acts.push(Action::Remove(tid.clone()));
                 ui.close();
             }
@@ -1792,14 +1822,14 @@ fn side_footer(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         if ui
-            .add(egui::Button::new(RichText::new("⚙ Settings").color(MUTED)).frame(false))
+            .add(egui::Button::new(RichText::new(tr("⚙ Settings")).color(MUTED)).frame(false))
             .on_hover_text(crate::keys::hint("settings"))
             .clicked()
         {
             acts.push(Action::Settings);
         }
         if ui
-            .add(egui::Button::new(RichText::new("? Shortcuts").color(MUTED)).frame(false))
+            .add(egui::Button::new(RichText::new(tr("? Shortcuts")).color(MUTED)).frame(false))
             .on_hover_text(crate::keys::hint("shortcuts"))
             .clicked()
         {
@@ -1807,14 +1837,14 @@ fn side_footer(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let (dot, label) = if app.client.is_some() {
-                (GREEN, "daemon")
+                (GREEN, tr("daemon"))
             } else {
-                (RED, "connecting…")
+                (RED, tr("connecting…"))
             };
             ui.label(RichText::new(label).small().color(MUTED))
-                .on_hover_text(
+                .on_hover_text(tr(
                     "The daemon keeps agents and terminals running while this window is closed",
-                );
+                ));
             ui.label(RichText::new("●").small().color(dot));
         });
     });
@@ -1827,7 +1857,7 @@ fn files(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     ui.horizontal(|ui| {
-        section_label(ui, "FILES");
+        section_label(ui, tr("FILES"));
         ui.add(egui::Label::new(RichText::new(&name).small().color(MUTED)).truncate())
             .on_hover_text(ctx.display().to_string());
     });
@@ -1895,25 +1925,25 @@ fn files(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                 if !r.is_dir {
                     let rel = r.rel.clone();
                     resp.context_menu(|ui| {
-                        if ui.button("Open").clicked() {
+                        if ui.button(tr("Open")).clicked() {
                             acts.push(Action::OpenFile(rel.clone(), None));
                             ui.close();
                         }
-                        if ui.button("Open in external editor").clicked() {
+                        if ui.button(tr("Open in external editor")).clicked() {
                             acts.push(Action::External(ctx.join(&rel), 1));
                             ui.close();
                         }
-                        if ui.button("Diff").clicked() {
+                        if ui.button(tr("Diff")).clicked() {
                             acts.push(Action::OpenDiff(Some(rel.clone())));
                             ui.close();
                         }
-                        if ui.button("Copy path").clicked() {
+                        if ui.button(tr("Copy path")).clicked() {
                             acts.push(Action::Copy(ctx.join(&rel).display().to_string()));
                             ui.close();
                         }
                         ui.separator();
                         if ui
-                            .button(RichText::new("Move to Trash…").color(RED))
+                            .button(RichText::new(tr("Move to Trash…")).color(RED))
                             .clicked()
                         {
                             acts.push(Action::TrashFile(ctx.join(&rel)));
@@ -1981,7 +2011,7 @@ fn stage(ui: &mut Ui, app: &mut App, accent: Color32, acts: &mut Vec<Action>) {
                 ui.painter().text(
                     z.center(),
                     Align2::CENTER_CENTER,
-                    "Drop to tile beside",
+                    tr("Drop to tile beside"),
                     FontId::proportional(15.0),
                     TEXT,
                 );
@@ -2011,7 +2041,7 @@ fn stage(ui: &mut Ui, app: &mut App, accent: Color32, acts: &mut Vec<Action>) {
                 ui.painter().text(
                     z.center(),
                     Align2::CENTER_CENTER,
-                    "Drop to swap",
+                    tr("Drop to swap"),
                     FontId::proportional(15.0),
                     TEXT,
                 );
@@ -2143,26 +2173,29 @@ fn welcome(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
     ui.vertical_centered(|ui| {
         ui.add_space(ui.available_height() * 0.3);
         ui.label(
-            RichText::new("Nothing running here yet")
+            RichText::new(tr("Nothing running here yet"))
                 .size(18.0)
                 .color(TEXT),
         );
         ui.add_space(6.0);
         ui.label(
-            RichText::new(format!(
-                "Start an agent with a task, or open a project. {} finds anything.",
-                crate::keys::hint("command_bar")
+            RichText::new(trf!(
+                "Start an agent with a task, or open a project. {key} finds anything.",
+                key = crate::keys::hint("command_bar")
             ))
             .color(MUTED),
         );
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() - 290.0).max(0.0) / 2.0);
-            if ui.button(RichText::new("✦ New agent").size(14.5)).clicked() {
+            if ui
+                .button(RichText::new(tr("✦ New agent")).size(14.5))
+                .clicked()
+            {
                 acts.push(Action::NewAgent);
             }
             if ui
-                .button(RichText::new("+ New project").size(14.5))
+                .button(RichText::new(tr("+ New project")).size(14.5))
                 .clicked()
             {
                 acts.push(Action::NewProject);
@@ -2171,9 +2204,9 @@ fn welcome(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         if app.client.is_none() {
             ui.add_space(10.0);
             ui.label(
-                RichText::new(format!(
-                    "starting daemon… (log: {})",
-                    paths::daemon_log().display()
+                RichText::new(trf!(
+                    "starting daemon… (log: {log})",
+                    log = paths::daemon_log().display()
                 ))
                 .small()
                 .color(AMBER),
@@ -2186,13 +2219,13 @@ fn child_label(app: &App, t: &Target) -> String {
     match &t.child {
         Child::Terminal => {
             if !app.tasks.get(&t.item).is_some_and(is_agent) {
-                "Terminal".into()
+                tr("Terminal").into()
             } else {
-                "Agent".into()
+                tr("Agent").into()
             }
         }
-        Child::Changes => "Changes".into(),
-        Child::Files => "Files".into(),
+        Child::Changes => tr("Changes").into(),
+        Child::Files => tr("Files").into(),
         Child::File(p) => {
             let dir = app.item_dir(&t.item);
             p.strip_prefix(&dir).unwrap_or(p).display().to_string()
@@ -2202,7 +2235,7 @@ fn child_label(app: &App, t: &Target) -> String {
 
 fn editor_name(app: &App) -> String {
     match crate::editors::resolve(&app.settings.editor) {
-        crate::editors::Kind::Builtin => "the built-in editor".into(),
+        crate::editors::Kind::Builtin => tr("the built-in editor").into(),
         crate::editors::Kind::Terminal(c) | crate::editors::Kind::Gui(c) => c,
     }
 }
@@ -2378,9 +2411,9 @@ fn card(
                 .button(format!(
                     "{}{}",
                     if zoom {
-                        "Restore cards"
+                        tr("Restore cards")
                     } else {
-                        "Maximize card"
+                        tr("Maximize card")
                     },
                     max_key
                 ))
@@ -2390,7 +2423,7 @@ fn card(
                 acts.push(Action::ToggleZoom);
                 ui.close();
             }
-            ui.menu_button("Swap with", |ui| {
+            ui.menu_button(tr("Swap with"), |ui| {
                 for (i, name) in &others {
                     if ui.button(name).clicked() {
                         acts.push(Action::SwapCards(side, *i));
@@ -2399,9 +2432,9 @@ fn card(
                 }
                 ui.label(
                     RichText::new(if swap_keys.is_empty() {
-                        "or drag the title bar".to_string()
+                        tr("or drag the title bar").to_string()
                     } else {
-                        format!("or drag the title bar · {}", swap_keys.join(" "))
+                        format!("{} · {}", tr("or drag the title bar"), swap_keys.join(" "))
                     })
                     .small()
                     .color(MUTED),
@@ -2409,9 +2442,9 @@ fn card(
             });
             if ui
                 .button(if broadcast {
-                    "Stop broadcasting input"
+                    tr("Stop broadcasting input")
                 } else {
-                    "Broadcast input to all terminal cards"
+                    tr("Broadcast input to all terminal cards")
                 })
                 .clicked()
             {
@@ -2419,12 +2452,15 @@ fn card(
                 ui.close();
             }
             ui.separator();
-            if ui.button(format!("Close card{close_key}")).clicked() {
+            if ui
+                .button(format!("{}{close_key}", tr("Close card")))
+                .clicked()
+            {
                 acts.push(Action::CloseSide(side));
                 ui.close();
             }
         } else if ui
-            .button(format!("Split   {}", crate::keys::hint("split")))
+            .button(format!("{}   {}", tr("Split"), crate::keys::hint("split")))
             .clicked()
         {
             acts.push(Action::Split);
@@ -2438,16 +2474,17 @@ fn card(
     );
     if app.split() {
         if hb
-            .small_button("✕ Close card")
+            .small_button(tr("✕ Close card"))
             .on_hover_text(crate::keys::hint("close_card"))
             .clicked()
         {
             acts.push(Action::CloseSide(side));
         }
     } else if hb
-        .small_button("◫ New card")
+        .small_button(tr("◫ New card"))
         .on_hover_text(format!(
-            "Open a second card beside this one  {}",
+            "{}  {}",
+            tr("Open a second card beside this one"),
             crate::keys::hint("split")
         ))
         .clicked()
@@ -2455,21 +2492,21 @@ fn card(
         acts.push(Action::Split);
     }
     if app.broadcast && t.child == Child::Terminal {
-        hb.label(RichText::new("broadcasting").small().color(AMBER))
-            .on_hover_text(format!(
-                "Typing goes to every terminal card ({} turns it off)",
-                crate::keys::hint("broadcast")
+        hb.label(RichText::new(tr("broadcasting")).small().color(AMBER))
+            .on_hover_text(trf!(
+                "Typing goes to every terminal card ({key} turns it off)",
+                key = crate::keys::hint("broadcast")
             ));
     }
     if matches!(t.child, Child::Files | Child::File(_)) {
         if hb
-            .add(egui::Button::new(RichText::new("change").small().color(ACCENT)).frame(false))
+            .add(egui::Button::new(RichText::new(tr("change")).small().color(ACCENT)).frame(false))
             .clicked()
         {
             acts.push(Action::Settings);
         }
         hb.label(
-            RichText::new(format!("opens in {}", editor_name(app)))
+            RichText::new(trf!("opens in {editor}", editor = editor_name(app)))
                 .small()
                 .color(MUTED),
         );
@@ -2511,21 +2548,26 @@ fn card(
                     .max_rect(strip.shrink2(vec2(12.0, 6.0)))
                     .layout(Layout::left_to_right(Align::Center)),
             );
-            s.label(RichText::new("Run this command?").color(AMBER));
+            s.label(RichText::new(tr("Run this command?")).color(AMBER));
             s.add(egui::Label::new(RichText::new(&a.command).monospace().color(TEXT)).truncate())
                 .on_hover_text(&a.reason);
             s.with_layout(Layout::right_to_left(Align::Center), |s| {
                 if s.button(
-                    RichText::new(format!("Approve  {}", crate::keys::hint("approve")))
-                        .color(GREEN)
-                        .strong(),
+                    RichText::new(format!(
+                        "{}  {}",
+                        tr("Approve"),
+                        crate::keys::hint(tr("approve"))
+                    ))
+                    .color(GREEN)
+                    .strong(),
                 )
                 .clicked()
                 {
                     acts.push(Action::Decide(a.id, true));
                 }
                 if s.button(
-                    RichText::new(format!("Reject  {}", crate::keys::hint("reject"))).color(RED),
+                    RichText::new(format!("{}  {}", tr("Reject"), crate::keys::hint("reject")))
+                        .color(RED),
                 )
                 .clicked()
                 {
@@ -2533,7 +2575,7 @@ fn card(
                 }
                 if pending.len() > 1 {
                     s.label(
-                        RichText::new(format!("+{} more", pending.len() - 1))
+                        RichText::new(trf!("+{n} more", n = pending.len() - 1))
                             .small()
                             .color(MUTED),
                     );
@@ -2551,7 +2593,7 @@ fn card(
         ui.painter().text(
             body.center(),
             Align2::CENTER_CENTER,
-            "Click to show",
+            tr("Click to show"),
             FontId::proportional(13.0),
             MUTED,
         );
@@ -2648,9 +2690,9 @@ fn md_toolbar(
     // From the cached brief list: this runs every frame.
     let entry = brief.then(|| app.brief_entry(path)).flatten();
     let (icon, name) = match entry.as_ref().and_then(|e| e.template) {
-        Some(t) => (t.icon, format!("{} brief", t.name)),
-        None if brief => ("✎", "Brief".to_string()),
-        None => ("¶", "Markdown".to_string()),
+        Some(t) => (t.icon, trf!("{name} brief", name = t.shown_name())),
+        None if brief => ("✎", tr("Brief").to_string()),
+        None => ("¶", tr("Markdown").to_string()),
     };
     bar.label(
         RichText::new(icon)
@@ -2667,13 +2709,13 @@ fn md_toolbar(
         if let Some(t) = builder {
             // Handed off: what's next is reviewing what the agent built.
             let review = egui::Button::new(
-                RichText::new("Review  →").color(theme::c::ON_ACCENT).strong(),
+                RichText::new(tr("Review  →")).color(theme::c::ON_ACCENT).strong(),
             )
             .fill(ACCENT)
             .corner_radius(CornerRadius::same(6));
             if bar
                 .add(review)
-                .on_hover_text(format!("{}'s changes, to comment on and accept", app.label(t)))
+                .on_hover_text(trf!("{name}'s changes, to comment on and accept", name = app.label(t)))
                 .clicked()
             {
                 acts.push(Action::OpenTerm(t.id.clone()));
@@ -2682,13 +2724,13 @@ fn md_toolbar(
                     child: Child::Changes,
                 }));
             }
-            if bar.small_button("Show agent").clicked() {
+            if bar.small_button(tr("Show agent")).clicked() {
                 acts.push(Action::OpenBeside(t.id.clone()));
             }
             let (state, color) = state_label(t);
             let (done, all) = entry.as_ref().map_or((0, 0), |e| (e.done, e.steps));
             let steps = if all > 0 {
-                format!(" · {done}/{all} steps")
+                format!(" · {}", trf!("{done}/{all} steps", done = done, all = all))
             } else {
                 String::new()
             };
@@ -2697,11 +2739,11 @@ fn md_toolbar(
                     .small()
                     .color(color),
             )
-            .on_hover_text("The agent ticks the brief's steps as it finishes them");
+            .on_hover_text(tr("The agent ticks the brief's steps as it finishes them"));
             bar.add_space(8.0);
         } else if brief {
             let go = egui::Button::new(
-                RichText::new(if compact { "Hand off  →" } else { "Hand to agent  →" })
+                RichText::new(if compact { tr("Hand off  →") } else { tr("Hand to agent  →") })
                     .color(theme::c::ON_ACCENT)
                     .strong(),
             )
@@ -2709,32 +2751,32 @@ fn md_toolbar(
             .corner_radius(CornerRadius::same(6));
             if bar
                 .add(go)
-                .on_hover_text("Start a new agent in this project with the brief as its task")
+                .on_hover_text(tr("Start a new agent in this project with the brief as its task"))
                 .clicked()
             {
                 acts.push(Action::HandOffBrief(path.to_path_buf()));
             }
             match app.brief_runs.get(path) {
                 Some(run) => {
-                    if bar.small_button("Stop").clicked() {
+                    if bar.small_button(tr("Stop")).clicked() {
                         acts.push(Action::StopBrief(path.to_path_buf()));
                     }
                     bar.label(
-                        RichText::new(format!("✦ filling in · {}", run.status))
+                        RichText::new(format!("{} · {}", tr("✦ filling in"), run.status))
                             .small()
                             .color(GREEN),
                     )
-                    .on_hover_text("claude is reading the code and writing into this brief");
+                    .on_hover_text(tr("claude is reading the code and writing into this brief"));
                 }
                 None => {
-                    let label = if compact { "✦ Finish" } else { "✦ Finish with AI" };
+                    let label = if compact { tr("✦ Finish") } else { tr("✦ Finish with AI") };
                     if bar
                         .add(
                             egui::Button::new(RichText::new(label).color(TEXT))
                                 .corner_radius(CornerRadius::same(6)),
                         )
                         .on_hover_text(
-                            "An agent reads the code and fills in the rest; you'll see it write here",
+                            tr("An agent reads the code and fills in the rest; you'll see it write here"),
                         )
                         .clicked()
                     {
@@ -2745,7 +2787,7 @@ fn md_toolbar(
             bar.add_space(8.0);
         }
         // Edit | Preview, as one segmented control.
-        for (m, label) in [(MdMode::Preview, "Preview"), (MdMode::Edit, "Edit")] {
+        for (m, label) in [(MdMode::Preview, tr("Preview")), (MdMode::Edit, tr("Edit"))] {
             if bar
                 .add(egui::Button::selectable(mode == m, RichText::new(label).size(12.5)))
                 .clicked()
@@ -2859,7 +2901,8 @@ fn remark_dialog(ctx: &egui::Context, app: &mut App) {
         Some(l) => format!("{}:{l}", r.file),
         None => r.file.clone(),
     };
-    egui::Window::new(format!("Comment for {id}"))
+    egui::Window::new(trf!("Comment for {id}", id = id))
+        .id(Id::unique("comment-window"))
         .collapsible(false)
         .resizable(false)
         .default_width(480.0)
@@ -2870,7 +2913,7 @@ fn remark_dialog(ctx: &egui::Context, app: &mut App) {
             ui.add_space(6.0);
             let edit = ui.add(
                 egui::TextEdit::multiline(&mut r.text)
-                    .hint_text("What should change here?")
+                    .hint_text(tr("What should change here?"))
                     .desired_rows(3)
                     .desired_width(f32::INFINITY),
             );
@@ -2880,12 +2923,14 @@ fn remark_dialog(ctx: &egui::Context, app: &mut App) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let ok = !r.text.trim().is_empty();
-                if ui.add_enabled(ok, egui::Button::new("Add  ⌘↵")).clicked()
+                if ui
+                    .add_enabled(ok, egui::Button::new(tr("Add  ⌘↵")))
+                    .clicked()
                     || (ok && ui.input(|i| i.key_pressed(Key::Enter) && i.modifiers.command))
                 {
                     add = true;
                 }
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                if ui.button(tr("Cancel")).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
                     close = true;
                 }
             });
@@ -2904,18 +2949,18 @@ fn remark_dialog(ctx: &egui::Context, app: &mut App) {
 /// Pick a template and a title for a new brief.
 fn brief_picker(ui: &mut Ui, f: &mut crate::app::NewForm, create: &mut bool) {
     ui.label(
-        RichText::new(
+        RichText::new(tr(
             "Write down what you want. Finish it yourself, let an agent fill in the rest, \
              then hand it to an agent to build.",
-        )
+        ))
         .size(12.5)
         .color(MUTED),
     );
     ui.add_space(12.0);
-    ui.label(RichText::new("Title").size(12.5).color(MUTED));
+    ui.label(RichText::new(tr("Title")).size(12.5).color(MUTED));
     let r = ui.add(
         TextEdit::singleline(&mut f.name)
-            .hint_text("Fix the login redirect loop")
+            .hint_text(tr("Fix the login redirect loop"))
             .font(FontId::proportional(15.0))
             .desired_width(f32::INFINITY),
     );
@@ -2927,7 +2972,7 @@ fn brief_picker(ui: &mut Ui, f: &mut crate::app::NewForm, create: &mut bool) {
         *create = true;
     }
     ui.add_space(14.0);
-    ui.label(RichText::new("Template").size(12.5).color(MUTED));
+    ui.label(RichText::new(tr("Template")).size(12.5).color(MUTED));
     ui.add_space(4.0);
     let gap = 10.0;
     let w = (ui.available_width() - gap * 2.0) / 3.0;
@@ -2966,12 +3011,12 @@ fn brief_picker(ui: &mut Ui, f: &mut crate::app::NewForm, create: &mut bool) {
                 p.text(
                     rect.left_top() + vec2(36.0, 20.0),
                     Align2::LEFT_CENTER,
-                    t.name,
+                    t.shown_name(),
                     FontId::proportional(14.0),
                     TEXT,
                 );
                 let g = p.layout(
-                    t.blurb.to_string(),
+                    t.shown_blurb().to_string(),
                     FontId::proportional(11.5),
                     MUTED,
                     w - 28.0,
@@ -3042,8 +3087,8 @@ fn file_editor(
             } else {
                 center(
                     ui,
-                    format!("{cmd} isn't running for this task"),
-                    Some(format!("Open in {cmd}")),
+                    trf!("{cmd} isn't running for this task", cmd = cmd),
+                    Some(trf!("Open in {cmd}", cmd = cmd)),
                     acts,
                 );
             }
@@ -3058,7 +3103,7 @@ fn file_editor(
                 .unwrap_or(app.cur);
             let it = &mut app.tabs[ti];
             let Some(i) = it.files.iter().position(|e| e.path == path) else {
-                center(ui, rel.clone(), Some("Open".into()), acts);
+                center(ui, rel.clone(), Some(tr("Open").into()), acts);
                 return;
             };
             it.file = i;
@@ -3073,14 +3118,17 @@ fn file_editor(
                         .layout(Layout::left_to_right(Align::Center)),
                 );
                 s.label(
-                    RichText::new(format!(
-                        "Open in {cmd}. This view follows along and reloads when you save."
+                    RichText::new(trf!(
+                        "Open in {cmd}. This view follows along and reloads when you save.",
+                        cmd = cmd
                     ))
                     .small()
                     .color(MUTED),
                 );
                 s.with_layout(Layout::right_to_left(Align::Center), |s| {
-                    if s.small_button(format!("Open in {cmd} again")).clicked() {
+                    if s.small_button(trf!("Open in {cmd} again", cmd = cmd))
+                        .clicked()
+                    {
                         acts.push(Action::OpenFile(rel.clone(), None));
                     }
                 });
@@ -3132,11 +3180,11 @@ fn overlays(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                                 .map(|t| app.label(t))
                                 .unwrap_or(task_id.clone()),
                             ApprovalSource::Ops { session, .. } => {
-                                format!("investigation #{session}")
+                                trf!("investigation #{session}", session = session)
                             }
                         };
                         ui.label(
-                            RichText::new(format!("{who} wants to run"))
+                            RichText::new(trf!("{who} wants to run", who = who))
                                 .small()
                                 .color(AMBER),
                         );
@@ -3145,14 +3193,17 @@ fn overlays(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                                 .truncate(),
                         );
                         ui.horizontal(|ui| {
-                            if ui.button(RichText::new("Approve").color(GREEN)).clicked() {
+                            if ui
+                                .button(RichText::new(tr("Approve")).color(GREEN))
+                                .clicked()
+                            {
                                 acts.push(Action::Decide(a.id, true));
                             }
-                            if ui.button(RichText::new("Reject").color(RED)).clicked() {
+                            if ui.button(RichText::new(tr("Reject")).color(RED)).clicked() {
                                 acts.push(Action::Decide(a.id, false));
                             }
                             if let ApprovalSource::Task { task_id, .. } = &a.source {
-                                if ui.small_button("view").clicked() {
+                                if ui.small_button(tr("view")).clicked() {
                                     acts.push(Action::OpenTerm(task_id.clone()));
                                 }
                             }
@@ -3209,7 +3260,7 @@ fn term_body(
         ui.painter().text(
             body.center(),
             Align2::CENTER_CENTER,
-            "attaching…",
+            tr("attaching…"),
             FontId::proportional(13.0),
             MUTED,
         );
@@ -3241,7 +3292,7 @@ fn term_body(
         resp.context_menu(|ui| {
             let sel = t.view.selection_text();
             if ui
-                .add_enabled(sel.is_some(), egui::Button::new("Copy"))
+                .add_enabled(sel.is_some(), egui::Button::new(tr("Copy")))
                 .clicked()
             {
                 if let Some(text) = sel {
@@ -3249,13 +3300,13 @@ fn term_body(
                 }
                 ui.close();
             }
-            if ui.button("Paste").clicked() {
+            if ui.button(tr("Paste")).clicked() {
                 if let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
                     actions.push(termview::TermAction::Paste(text));
                 }
                 ui.close();
             }
-            if ui.button("Select all").clicked() {
+            if ui.button(tr("Select all")).clicked() {
                 t.view.select_all();
                 ui.close();
             }
@@ -3263,7 +3314,7 @@ fn term_body(
             if ui
                 .add_enabled(
                     out.is_some(),
-                    egui::Button::new("Copy last command's output"),
+                    egui::Button::new(tr("Copy last command's output")),
                 )
                 .clicked()
             {
@@ -3273,7 +3324,7 @@ fn term_body(
                 ui.close();
             }
             if !snippets.is_empty() {
-                ui.menu_button("Run snippet", |ui| {
+                ui.menu_button(tr("Run snippet"), |ui| {
                     for (i, sn) in snippets.iter().enumerate() {
                         if ui.button(&sn.name).on_hover_text(&sn.body).clicked() {
                             run_snippet = Some(i);
@@ -3283,12 +3334,19 @@ fn term_body(
                 });
             }
             ui.separator();
-            if ui.button(format!("Find…   {}F", cmd_label())).clicked() {
+            if ui
+                .button(format!("{}   {}F", tr("Find…"), cmd_label()))
+                .clicked()
+            {
                 t.view.open_find();
                 ui.close();
             }
             if ui
-                .button(format!("Clear   {}", crate::keys::hint("clear_terminal")))
+                .button(format!(
+                    "{}   {}",
+                    tr("Clear"),
+                    crate::keys::hint("clear_terminal")
+                ))
                 .clicked()
             {
                 t.view.clear_scrollback();
@@ -3342,7 +3400,11 @@ fn editor_body(
                 .layout(Layout::left_to_right(Align::Center)),
         );
         let is_find = app.find.is_some();
-        let label = if is_find { "Find" } else { "Go to line" };
+        let label = if is_find {
+            tr("Find")
+        } else {
+            tr("Go to line")
+        };
         child.label(RichText::new(label).small().color(MUTED));
         let val = if is_find {
             app.find.as_mut().unwrap()
@@ -3368,7 +3430,11 @@ fn editor_body(
     if let Some((is_find, v)) = bar_action {
         if is_find {
             if !e.find_next(&v) {
-                app.notice = Some((format!("`{v}` not found"), std::time::Instant::now(), true));
+                app.notice = Some((
+                    trf!("`{v}` not found", v = v),
+                    std::time::Instant::now(),
+                    true,
+                ));
             }
             e.follow = true;
         } else if let Ok(n) = v.trim().parse::<usize>() {
@@ -3540,11 +3606,15 @@ fn editor_body(
         if let Some(r) = saved {
             app.notice = Some(match r {
                 Ok(_) => (
-                    format!("saved {}", e.name()),
+                    trf!("saved {name}", name = e.name()),
                     std::time::Instant::now(),
                     false,
                 ),
-                Err(x) => (format!("save failed: {x}"), std::time::Instant::now(), true),
+                Err(x) => (
+                    trf!("save failed: {x}", x = x),
+                    std::time::Instant::now(),
+                    true,
+                ),
             });
             app.refresh_git_now();
         }
@@ -3685,7 +3755,10 @@ fn editor_body(
         }
     }
     if e.stale {
-        let msg = " changed on disk: ⌘R loads it (drops your edits), ⌘S twice keeps yours ";
+        let msg = format!(
+            " {} ",
+            tr("changed on disk: ⌘R loads it (drops your edits), ⌘S twice keeps yours")
+        );
         let r = Rect::from_min_size(
             pos2(body.left(), body.bottom() - 22.0),
             vec2(body.width(), 22.0),
@@ -3731,9 +3804,9 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
     let mut create = cmd_enter;
     let mut cancel = esc;
     let title = match kind {
-        NewKind::Agent => "New agent",
-        NewKind::Project => "New project",
-        NewKind::Brief => "New brief",
+        NewKind::Agent => tr("New agent"),
+        NewKind::Project => tr("New project"),
+        NewKind::Brief => tr("New brief"),
     };
     let id = Id::unique("new-form");
     egui::Modal::new(id)
@@ -3752,10 +3825,10 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                 .show(ui, |ui| match kind {
                     NewKind::Brief => {}
                     NewKind::Agent => {
-                        ui.label("Task");
+                        ui.label(tr("Task"));
                         let r = ui.add(
                             TextEdit::multiline(&mut f.task)
-                                .hint_text("What should it do? (optional: you can tell it later)")
+                                .hint_text(tr("What should it do? (optional: you can tell it later)"))
                                 .desired_rows(3)
                                 .desired_width(380.0),
                         );
@@ -3767,7 +3840,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                             f.focus_set = true;
                         }
                         ui.end_row();
-                        ui.label("Name");
+                        ui.label(tr("Name"));
                         let r = ui.add(
                             TextEdit::singleline(&mut f.name)
                                 .hint_text("fix-login-redirect")
@@ -3780,7 +3853,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                             create = true;
                         }
                         ui.end_row();
-                        ui.label("Agent");
+                        ui.label(tr("Agent"));
                         egui::ComboBox::from_id_salt("new-agent-kind")
                             .selected_text(f.agent.clone())
                             .show_ui(ui, |ui| {
@@ -3789,10 +3862,10 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                                 }
                             });
                         ui.end_row();
-                        ui.label("Folder");
+                        ui.label(tr("Folder"));
                         ui.horizontal(|ui| {
                             ui.add(TextEdit::singleline(&mut f.dir).desired_width(290.0));
-                            if ui.button("Choose…").clicked() {
+                            if ui.button(tr("Choose…")).clicked() {
                                 if let Some(p) = pick_folder(&f.dir) {
                                     f.dir = tilde(&p);
                                 }
@@ -3802,18 +3875,18 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                         ui.label("");
                         let id = crate::app::slugify(&f.name);
                         let label = if in_repo {
-                            format!(
-                                "Own branch and worktree (muster/{})",
-                                if id.is_empty() { "<name>" } else { &id }
+                            trf!(
+                                "Own branch and worktree ({branch})",
+                                branch = format!("muster/{}", if id.is_empty() { "<name>" } else { &id })
                             )
                         } else {
-                            "Own branch and worktree (the folder isn't a git repo)".into()
+                            tr("Own branch and worktree (the folder isn't a git repo)").into()
                         };
                         ui.add_enabled(in_repo, egui::Checkbox::new(&mut f.worktree, label));
                         ui.end_row();
                     }
                     NewKind::Project => {
-                        ui.label("Folder");
+                        ui.label(tr("Folder"));
                         let (r, picked) = ui
                             .horizontal(|ui| {
                                 let r = ui.add(
@@ -3822,7 +3895,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                                         .desired_width(290.0),
                                 );
                                 let mut picked = false;
-                                if ui.button("Choose…").clicked() {
+                                if ui.button(tr("Choose…")).clicked() {
                                     if let Some(p) = pick_folder(&f.dir) {
                                         f.dir = tilde(&p);
                                         picked = true;
@@ -3846,7 +3919,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                             create = true;
                         }
                         ui.end_row();
-                        ui.label("Name");
+                        ui.label(tr("Name"));
                         let r = ui.add(TextEdit::singleline(&mut f.name).desired_width(380.0));
                         if r.changed() {
                             f.name_edited = true;
@@ -3858,7 +3931,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                         ui.label("");
                         ui.label(
                             RichText::new(
-                                "Opens a terminal there; the project shows in the sidebar under this name.",
+                                tr("Opens a terminal there; the project shows in the sidebar under this name."),
                             )
                             .small()
                             .color(MUTED),
@@ -3869,9 +3942,9 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let label = match kind {
-                    NewKind::Agent => "Start agent",
-                    NewKind::Project => "Create project",
-                    NewKind::Brief => "Create brief",
+                    NewKind::Agent => tr("Start agent"),
+                    NewKind::Project => tr("Create project"),
+                    NewKind::Brief => tr("Create brief"),
                 };
                 if ui
                     .add_enabled(
@@ -3884,7 +3957,7 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                 {
                     create = true;
                 }
-                if ui.button("Cancel").on_hover_text("Esc").clicked() {
+                if ui.button(tr("Cancel")).on_hover_text("Esc").clicked() {
                     cancel = true;
                 }
                 if let Some(p) = &problem {
@@ -3923,7 +3996,7 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
             ui.label(RichText::new(text).size(14.0));
             if let Some(Confirm::Accept { message, .. }) = app.confirm.as_mut() {
                 ui.add_space(8.0);
-                ui.label(RichText::new("Commit message").small().color(MUTED));
+                ui.label(RichText::new(tr("Commit message")).small().color(MUTED));
                 ui.add(
                     egui::TextEdit::multiline(message)
                         .desired_rows(2)
@@ -3936,14 +4009,14 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                 let enter =
                     ui.input(|i| i.key_pressed(Key::Enter) && (!careful || i.modifiers.command));
                 let yes = match (accept, careful) {
-                    (true, _) => "Accept  ⌘↵",
-                    (false, true) => "Yes  ⌘↵",
-                    _ => "Yes",
+                    (true, _) => tr("Accept  ⌘↵"),
+                    (false, true) => tr("Yes  ⌘↵"),
+                    _ => tr("Yes"),
                 };
                 if ui.button(RichText::new(yes).strong()).clicked() || enter {
                     answer = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel")).clicked() {
                     answer = Some(false);
                 }
             });
@@ -3963,16 +4036,18 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         let mut commit = false;
         let mut close = false;
         let staged = app.changes.iter().filter(|c| c.staged()).count();
-        egui::Window::new("Commit")
+        egui::Window::new(tr("Commit"))
+            .id(Id::unique("commit-window"))
             .collapsible(false)
             .resizable(false)
             .default_width(480.0)
             .anchor(Align2::CENTER_TOP, vec2(0.0, 140.0))
             .show(ctx, |ui| {
                 ui.label(
-                    RichText::new(format!(
-                        "{staged} staged file(s) on {}",
-                        app.branch.clone().unwrap_or_default()
+                    RichText::new(trf!(
+                        "{staged} staged file(s) on {branch}",
+                        staged = staged,
+                        branch = app.branch.clone().unwrap_or_default()
                     ))
                     .small()
                     .color(MUTED),
@@ -3981,7 +4056,7 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                     TextEdit::multiline(&mut app.commit_msg)
                         .desired_rows(3)
                         .desired_width(f32::INFINITY)
-                        .hint_text("Commit message"),
+                        .hint_text(tr("Commit message")),
                 );
                 r.request_focus();
                 // Enter commits, Shift+Enter is a new line, like lazygit.
@@ -4004,17 +4079,17 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                     if ui
                         .add_enabled(
                             staged > 0,
-                            egui::Button::new(RichText::new("Commit").strong()),
+                            egui::Button::new(RichText::new(tr("Commit")).strong()),
                         )
                         .clicked()
                     {
                         commit = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr("Cancel")).clicked() {
                         close = true;
                     }
                     ui.label(
-                        RichText::new("Enter commits · Shift+Enter new line · Esc cancels")
+                        RichText::new(tr("Enter commits · Shift+Enter new line · Esc cancels"))
                             .small()
                             .color(MUTED),
                     );
@@ -4077,9 +4152,9 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
     let mut out = vec![];
     let agent = app.settings.default_agent.clone();
     let iso = if app.settings.worktree {
-        "own branch + worktree"
+        tr("own branch + worktree")
     } else {
-        "in the project folder"
+        tr("in the project folder")
     };
     let mut files: Vec<(usize, &String)> = app
         .tree
@@ -4096,10 +4171,10 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
         files.sort_by_key(|(s, f)| (*s, f.len()));
         for (_, f) in files.into_iter().take(8) {
             out.push(BarOpt {
-                group: "Files",
+                group: tr("Files"),
                 icon: "▤".into(),
                 text: f.clone(),
-                hint: format!("opens in {}", editor_name(app)),
+                hint: trf!("opens in {editor}", editor = editor_name(app)),
                 act: BarAct::File(f.clone()),
             });
         }
@@ -4114,13 +4189,13 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
     for t in tasks.into_iter().take(8) {
         let (state, _) = state_label(t);
         out.push(BarOpt {
-            group: "Agents and terminals",
+            group: tr("Agents and terminals"),
             icon: status_mark(t, app.frame).0.into(),
             text: app.label(t),
             hint: format!(
                 "{} · {}",
                 project_title(app, &app.project_of(t)),
-                if is_agent(t) { state } else { "terminal" }
+                if is_agent(t) { state } else { tr("terminal") }
             ),
             act: BarAct::Item(t.id.clone()),
         });
@@ -4128,7 +4203,7 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
     for (i, sn) in app.settings.snippets.iter().enumerate() {
         if !q.is_empty() && fuzzy(q, &sn.name).is_some() {
             out.push(BarOpt {
-                group: "Snippets",
+                group: tr("Snippets"),
                 icon: "»".into(),
                 text: sn.name.clone(),
                 hint: sn.body.lines().next().unwrap_or_default().to_string(),
@@ -4138,40 +4213,42 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
     }
     if q.split_whitespace().count() >= 2 {
         out.push(BarOpt {
-            group: "New agent",
+            group: tr("New agent"),
             icon: "✦".into(),
-            text: format!("Start {agent}: “{q}”"),
+            text: trf!("Start {agent}: “{q}”", agent = agent, q = q),
             hint: iso.into(),
             act: BarAct::Start(q.to_string()),
         });
     }
     let cmds: [(&str, &str, BarFn); 11] = [
-        ("New agent", "✦", |_, a| a.push(Action::NewAgent)),
-        ("New terminal", "❯", |app, a| {
+        (tr("New agent"), "✦", |_, a| a.push(Action::NewAgent)),
+        (tr("New terminal"), "❯", |app, a| {
             a.push(new_terminal_action(app))
         }),
-        ("New project…", "+", |_, a| a.push(Action::NewProject)),
-        ("New brief…", "✎", |_, a| a.push(Action::NewBrief)),
-        ("Show changes", "±", |app, _| app.show_git()),
-        ("Browse files", "▤", |app, _| {
+        (tr("New project…"), "+", |_, a| a.push(Action::NewProject)),
+        (tr("New brief…"), "✎", |_, a| a.push(Action::NewBrief)),
+        (tr("Show changes"), "±", |app, _| app.show_git()),
+        (tr("Browse files"), "▤", |app, _| {
             app.toggle_child(Child::Files)
         }),
-        ("Commit staged changes", "c", |_, a| {
+        (tr("Commit staged changes"), "c", |_, a| {
             a.push(Action::StartCommit)
         }),
-        ("Accept agent: commit and merge", "✓", |_, a| {
+        (tr("Accept agent: commit and merge"), "✓", |_, a| {
             a.push(Action::Accept)
         }),
-        ("Split view", "◫", |_, a| a.push(Action::Split)),
-        ("Settings: editor, font, theme", "⚙", |_, a| {
+        (tr("Split view"), "◫", |_, a| a.push(Action::Split)),
+        (tr("Settings: editor, font, theme"), "⚙", |_, a| {
             a.push(Action::Settings)
         }),
-        ("Keyboard shortcuts", "?", |_, a| a.push(Action::Shortcuts)),
+        (tr("Keyboard shortcuts"), "?", |_, a| {
+            a.push(Action::Shortcuts)
+        }),
     ];
     for (text, icon, f) in cmds {
         if fuzzy(q, text).is_some() {
             out.push(BarOpt {
-                group: "Commands",
+                group: tr("Commands"),
                 icon: icon.into(),
                 text: text.into(),
                 hint: String::new(),
@@ -4216,7 +4293,7 @@ fn command_bar(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         )
         .show(ctx, |ui| {
             ui.set_width(600.0);
-            let hint = "Open a file, jump to an agent, or describe a task";
+            let hint = tr("Open a file, jump to an agent, or describe a task");
             let r = Frame::new()
                 .inner_margin(Margin::symmetric(16, 14))
                 .show(ui, |ui| {
@@ -4293,8 +4370,11 @@ fn command_bar(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                 }
                 if opts.is_empty() {
                     ui.label(
-                        RichText::new("   No matches. Type a sentence to start an agent with it.")
-                            .color(MUTED),
+                        RichText::new(format!(
+                            "   {}",
+                            tr("No matches. Type a sentence to start an agent with it.")
+                        ))
+                        .color(MUTED),
                     );
                 }
                 ui.add_space(6.0);
@@ -4302,7 +4382,7 @@ fn command_bar(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
             ui.horizontal(|ui| {
                 ui.add_space(14.0);
                 ui.label(
-                    RichText::new("↑↓ choose   ↵ open   esc close")
+                    RichText::new(tr("↑↓ choose   ↵ open   esc close"))
                         .small()
                         .color(MUTED),
                 );
@@ -4336,25 +4416,32 @@ fn shortcuts_sheet(ctx: &egui::Context, app: &mut App) {
     let c = cmd_label();
     // Keys inside the terminal, the editor and Changes, which stay as they are.
     let fixed: Vec<(String, &str)> = vec![
-        (format!("{c}F"), "Terminal: find in scrollback"),
+        (format!("{c}F"), tr("Terminal: find in scrollback")),
         (
             format!("{c}↑  /  {c}↓"),
-            "Terminal: previous / next command",
+            tr("Terminal: previous / next command"),
         ),
-        (format!("{c}-click"), "Terminal: open a link or a file path"),
-        ("Shift+PageUp / Down".into(), "Terminal: scroll back"),
+        (
+            trf!("{c}-click", c = c),
+            tr("Terminal: open a link or a file path"),
+        ),
+        ("Shift+PageUp / Down".into(), tr("Terminal: scroll back")),
         (
             format!("{c}S  {c}Z  {c}F  {c}L"),
-            "Editor: save, undo, find, go to line",
+            tr("Editor: save, undo, find, go to line"),
         ),
-        ("j  k".into(), "Changes: move (the diff follows)"),
-        ("space  a".into(), "Changes: stage the file / everything"),
-        ("e  c  d".into(), "Changes: edit / commit / discard"),
-        ("s  u".into(), "Diff: stage / unstage the hunk"),
+        ("j  k".into(), tr("Changes: move (the diff follows)")),
+        (
+            "space  a".into(),
+            tr("Changes: stage the file / everything"),
+        ),
+        ("e  c  d".into(), tr("Changes: edit / commit / discard")),
+        ("s  u".into(), tr("Diff: stage / unstage the hunk")),
     ];
     let keys = &app.settings.keys;
     let mut open = true;
-    egui::Window::new("Keyboard shortcuts")
+    egui::Window::new(tr("Keyboard shortcuts"))
+        .id(Id::unique("shortcuts-window"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -4362,9 +4449,10 @@ fn shortcuts_sheet(ctx: &egui::Context, app: &mut App) {
         .anchor(Align2::CENTER_TOP, vec2(0.0, 60.0))
         .show(ctx, |ui| {
             ui.label(
-                RichText::new(format!(
-                    "Change any of these in Settings → Shortcuts ({c},), or in [keys] in {}.",
-                    tilde(&muster_core::paths::config())
+                RichText::new(trf!(
+                    "Change any of these in Settings → Shortcuts ({c},), or in [keys] in {file}.",
+                    c = c,
+                    file = tilde(&muster_core::paths::config())
                 ))
                 .small()
                 .color(MUTED),
@@ -4384,7 +4472,7 @@ fn shortcuts_sheet(ctx: &egui::Context, app: &mut App) {
                             if cmd.group != group {
                                 group = cmd.group;
                                 ui.label(
-                                    RichText::new(group.to_uppercase())
+                                    RichText::new(cmd.shown_group().to_uppercase())
                                         .small()
                                         .strong()
                                         .color(MUTED),
@@ -4393,10 +4481,15 @@ fn shortcuts_sheet(ctx: &egui::Context, app: &mut App) {
                             }
                             let k: Vec<String> = chords.iter().map(|c| c.label()).collect();
                             ui.label(RichText::new(k.join("  /  ")).monospace().color(TEXT));
-                            ui.label(RichText::new(cmd.label).color(MUTED));
+                            ui.label(RichText::new(cmd.shown_label()).color(MUTED));
                             ui.end_row();
                         }
-                        ui.label(RichText::new("INSIDE A CARD").small().strong().color(MUTED));
+                        ui.label(
+                            RichText::new(tr("INSIDE A CARD"))
+                                .small()
+                                .strong()
+                                .color(MUTED),
+                        );
                         ui.end_row();
                         for (k, what) in &fixed {
                             ui.label(RichText::new(k).monospace().color(TEXT));
@@ -4434,7 +4527,7 @@ fn save_open(app: &mut App, path: &std::path::Path) -> anyhow::Result<()> {
 /// The system folder picker, starting at what's typed when that's a folder.
 /// It's modal and blocks the frame, as the macOS sheet does anyway.
 fn pick_folder(typed: &str) -> Option<PathBuf> {
-    let mut d = rfd::FileDialog::new().set_title("Choose a folder");
+    let mut d = rfd::FileDialog::new().set_title(tr("Choose a folder"));
     let start = paths::expand(typed.trim());
     let start = if start.is_dir() {
         Some(start)
@@ -4496,7 +4589,8 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
     let capturing = &mut app.capturing;
     let font_error = app.font_error.as_deref();
     let started_transparent = app.transparent;
-    egui::Window::new("Settings")
+    egui::Window::new(tr("Settings"))
+        .id(Id::unique("settings-window"))
         .anchor(Align2::CENTER_TOP, vec2(0.0, 50.0))
         .open(&mut open)
         .collapsible(false)
@@ -4506,18 +4600,29 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
         .default_height(620.0)
         .show(ctx, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                settings_heading(ui, "Editor");
+                settings_heading(ui, tr("Language"));
+                ui.horizontal_wrapped(|ui| {
+                    let current = crate::i18n::Lang::from_code(&s.language);
+                    for lang in crate::i18n::Lang::ALL {
+                        if ui.selectable_label(current == lang, lang.native_name()).clicked() {
+                            s.language = lang.code().to_string();
+                        }
+                    }
+                });
+
+                ui.add_space(8.0);
+                settings_heading(ui, tr("Editor"));
                 ui.label(
-                    RichText::new("What happens when you click a file in Files or Changes, or press e in Changes.")
+                    RichText::new(tr("What happens when you click a file in Files or Changes, or press e in Changes."))
                         .small()
                         .color(MUTED),
                 );
                 for (group, kinds) in [
-                    ("Built in", &["builtin"][..]),
-                    ("Terminal editors, run inside muster", &["nvim", "hx", "vim", "micro", "nano", "$EDITOR"][..]),
-                    ("Desktop apps", &["code", "cursor", "zed", "subl"][..]),
+                    (tr("Built in"), &["builtin"][..]),
+                    (tr("Terminal editors, run inside muster"), &["nvim", "hx", "vim", "micro", "nano", "$EDITOR"][..]),
+                    (tr("Desktop apps"), &["code", "cursor", "zed", "subl"][..]),
                 ] {
-                    ui.label(RichText::new(group).color(MUTED));
+                    ui.label(RichText::new(tr(group)).color(MUTED));
                     ui.horizontal_wrapped(|ui| {
                         for k in kinds {
                             let label = crate::editors::PRESETS
@@ -4525,6 +4630,9 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                                 .find(|(v, _)| v == k)
                                 .map(|(_, l)| *l)
                                 .unwrap_or(k);
+                            // The rest are product names; "Cursor" would pick up
+                            // the cursor-style heading's translation.
+                            let label = if *k == "builtin" { tr(label) } else { label };
                             if ui.selectable_label(s.editor == *k, label).clicked() {
                                 s.editor = k.to_string();
                             }
@@ -4532,7 +4640,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     });
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Or a command");
+                    ui.label(tr("Or a command"));
                     let preset = crate::editors::PRESETS.iter().any(|(v, _)| *v == s.editor);
                     let mut custom = if preset { String::new() } else { s.editor.clone() };
                     if ui
@@ -4543,9 +4651,9 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     }
                 });
                 let what = match crate::editors::resolve(&s.editor) {
-                    crate::editors::Kind::Builtin => "Clicking a file opens it in the card, in muster's own editor. It reloads when an agent edits the file.".to_string(),
-                    crate::editors::Kind::Terminal(c) => format!("Clicking a file runs `{c}` inside the card, one per agent or terminal. Opening another file sends it to the same {c}. Markdown still opens in muster's own editor."),
-                    crate::editors::Kind::Gui(c) => format!("Clicking a file opens it in `{c}` at the right line. muster shows it read-only alongside and reloads on save. Markdown still opens in muster's own editor."),
+                    crate::editors::Kind::Builtin => tr("Clicking a file opens it in the card, in muster's own editor. It reloads when an agent edits the file.").to_string(),
+                    crate::editors::Kind::Terminal(c) => trf!("Clicking a file runs `{c}` inside the card, one per agent or terminal. Opening another file sends it to the same {c}. Markdown still opens in muster's own editor.", c = c),
+                    crate::editors::Kind::Gui(c) => trf!("Clicking a file opens it in `{c}` at the right line. muster shows it read-only alongside and reloads on save. Markdown still opens in muster's own editor.", c = c),
                 };
                 Frame::new()
                     .fill(Color32::from_black_alpha(60))
@@ -4557,9 +4665,9 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     });
 
                 ui.add_space(8.0);
-                settings_heading(ui, "New agents");
+                settings_heading(ui, tr("New agents"));
                 ui.horizontal(|ui| {
-                    ui.label("Agent");
+                    ui.label(tr("Agent"));
                     egui::ComboBox::from_id_salt("default-agent")
                         .selected_text(s.default_agent.clone())
                         .show_ui(ui, |ui| {
@@ -4568,23 +4676,23 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                             }
                         });
                 });
-                ui.checkbox(&mut s.worktree, "Give each agent its own branch and worktree");
+                ui.checkbox(&mut s.worktree, tr("Give each agent its own branch and worktree"));
                 ui.checkbox(
                     &mut s.system_notifications,
-                    "Notify me when an agent needs me or finishes while muster is in the background",
+                    tr("Notify me when an agent needs me or finishes while muster is in the background"),
                 );
 
                 ui.add_space(8.0);
-                settings_heading(ui, "Font");
+                settings_heading(ui, tr("Font"));
                 ui.horizontal(|ui| {
-                    ui.label("Font");
-                    let current = s.font.as_ref().map_or("System monospace", |f| f.name.as_str()).to_owned();
+                    ui.label(tr("Font"));
+                    let current = s.font.as_ref().map_or(tr("System monospace"), |f| f.name.as_str()).to_owned();
                     egui::ComboBox::from_id_salt("term-font")
                         .selected_text(current)
                         .width(260.0)
                         .height(360.0)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut s.font, None, "System monospace");
+                            ui.selectable_value(&mut s.font, None, tr("System monospace"));
                             match &sui.mono_fonts {
                                 Some(list) => {
                                     for f in list {
@@ -4592,13 +4700,13 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                                     }
                                 }
                                 None => {
-                                    ui.label(RichText::new("Scanning installed fonts…").color(MUTED));
+                                    ui.label(RichText::new(tr("Scanning installed fonts…")).color(MUTED));
                                 }
                             }
                         });
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Or a font file");
+                    ui.label(tr("Or a font file"));
                     let r = ui.add(
                         TextEdit::singleline(&mut sui.font_path)
                             .desired_width(260.0)
@@ -4606,11 +4714,11 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     );
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     let mut chosen = false;
-                    if ui.button("Choose…").clicked() {
+                    if ui.button(tr("Choose…")).clicked() {
                         let start = paths::expand(sui.font_path.trim());
                         let mut d = rfd::FileDialog::new()
-                            .set_title("Choose a font file")
-                            .add_filter("Fonts", &["ttf", "otf", "ttc"]);
+                            .set_title(tr("Choose a font file"))
+                            .add_filter(tr("Fonts"), &["ttf", "otf", "ttc"]);
                         if let Some(dir) = start.parent().filter(|d| d.is_dir()) {
                             d = d.set_directory(dir);
                         }
@@ -4619,7 +4727,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                             chosen = true;
                         }
                     }
-                    if (chosen || ui.button("Use").clicked() || enter)
+                    if (chosen || ui.button(tr("Use")).clicked() || enter)
                         && !sui.font_path.trim().is_empty()
                     {
                         match theme::term_font_from_path(&paths::expand(sui.font_path.trim())) {
@@ -4637,7 +4745,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 let weights = sui.font_weights.as_ref().map(|(_, w)| w.clone()).unwrap_or_default();
                 ui.horizontal_wrapped(|ui| {
                     let show = |w: u16| format!("{} {w}", theme::weight_name(w));
-                    ui.label("Weight");
+                    ui.label(tr("Weight"));
                     egui::ComboBox::from_id_salt("font-weight")
                         .selected_text(show(s.font_weight))
                         .show_ui(ui, |ui| {
@@ -4646,7 +4754,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                             }
                         });
                     ui.add_space(12.0);
-                    ui.label("Bold text");
+                    ui.label(tr("Bold text"));
                     egui::ComboBox::from_id_salt("bold-weight")
                         .selected_text(show(s.bold_weight))
                         .show_ui(ui, |ui| {
@@ -4657,7 +4765,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 });
                 if weights.iter().all(|&w| w <= s.font_weight) {
                     ui.label(
-                        RichText::new("This font has nothing heavier, so bold text is thickened instead.")
+                        RichText::new(tr("This font has nothing heavier, so bold text is thickened instead."))
                             .small()
                             .color(MUTED),
                     );
@@ -4666,7 +4774,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     ui.label(RichText::new(e).small().color(RED));
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Size");
+                    ui.label(tr("Size"));
                     if ui.small_button("−").on_hover_text(crate::keys::hint("font_smaller")).clicked() {
                         s.bump_font(-1.0);
                     }
@@ -4674,19 +4782,19 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     if ui.small_button("+").on_hover_text(crate::keys::hint("font_bigger")).clicked() {
                         s.bump_font(1.0);
                     }
-                    if s.font_size != cfg::FONT_SIZE_DEFAULT && ui.small_button("Reset").clicked() {
+                    if s.font_size != cfg::FONT_SIZE_DEFAULT && ui.small_button(tr("Reset")).clicked() {
                         s.font_size = cfg::FONT_SIZE_DEFAULT;
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Line height");
+                    ui.label(tr("Line height"));
                     ui.add(egui::Slider::new(&mut s.line_height, 1.0..=1.8).step_by(0.05));
                 });
-                ui.checkbox(&mut s.bold_is_bright, "Draw bold text in bright colours");
-                ui.checkbox(&mut s.copy_on_select, "Copy text when you select it");
+                ui.checkbox(&mut s.bold_is_bright, tr("Draw bold text in bright colours"));
+                ui.checkbox(&mut s.copy_on_select, tr("Copy text when you select it"));
                 if cfg!(target_os = "macos") {
-                    ui.checkbox(&mut s.option_meta, "Option key sends Meta (Esc+key)")
-                        .on_hover_text("For Claude Code's Option shortcuts and readline's word keys. Characters your layout types with Option, like @ or {, still type.");
+                    ui.checkbox(&mut s.option_meta, tr("Option key sends Meta (Esc+key)"))
+                        .on_hover_text(tr("For Claude Code's Option shortcuts and readline's word keys. Characters your layout types with Option, like @ or {, still type."));
                 }
                 let sch = theme::scheme(&s.scheme);
                 Frame::new()
@@ -4710,26 +4818,26 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     });
 
                 ui.add_space(8.0);
-                settings_heading(ui, "Cursor");
+                settings_heading(ui, tr("Cursor"));
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut s.cursor, CursorStyle::Block, "Block");
-                    ui.selectable_value(&mut s.cursor, CursorStyle::Underline, "Underline");
-                    ui.selectable_value(&mut s.cursor, CursorStyle::Bar, "Bar");
+                    ui.selectable_value(&mut s.cursor, CursorStyle::Block, tr("Block"));
+                    ui.selectable_value(&mut s.cursor, CursorStyle::Underline, tr("Underline"));
+                    ui.selectable_value(&mut s.cursor, CursorStyle::Bar, tr("Bar"));
                     ui.add_space(12.0);
-                    ui.checkbox(&mut s.cursor_blink, "Blink");
+                    ui.checkbox(&mut s.cursor_blink, tr("Blink"));
                 });
 
                 ui.add_space(8.0);
-                settings_heading(ui, "Snippets");
+                settings_heading(ui, tr("Snippets"));
                 ui.label(
-                    RichText::new("Commands you run often. Run one from the command bar or a terminal's right-click menu; while broadcasting it goes to every terminal card.")
+                    RichText::new(tr("Commands you run often. Run one from the command bar or a terminal's right-click menu; while broadcasting it goes to every terminal card."))
                         .small()
                         .color(MUTED),
                 );
                 let mut remove = None;
                 for (i, sn) in s.snippets.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        ui.add(TextEdit::singleline(&mut sn.name).hint_text("name").desired_width(140.0));
+                        ui.add(TextEdit::singleline(&mut sn.name).hint_text(tr("name")).desired_width(140.0));
                         ui.add(
                             TextEdit::multiline(&mut sn.body)
                                 .hint_text("cargo test -p muster")
@@ -4737,7 +4845,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                                 .desired_rows(1)
                                 .desired_width(ui.available_width() - 40.0),
                         );
-                        if ui.small_button("×").on_hover_text("Delete").clicked() {
+                        if ui.small_button("×").on_hover_text(tr("Delete")).clicked() {
                             remove = Some(i);
                         }
                     });
@@ -4745,21 +4853,21 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 if let Some(i) = remove {
                     s.snippets.remove(i);
                 }
-                if ui.button("+ Add snippet").clicked() {
+                if ui.button(tr("+ Add snippet")).clicked() {
                     s.snippets.push(cfg::Snippet::default());
                 }
 
                 ui.add_space(8.0);
-                settings_heading(ui, "Tabs and cards");
+                settings_heading(ui, tr("Tabs and cards"));
                 ui.horizontal(|ui| {
-                    ui.label("Tabs along the");
-                    ui.selectable_value(&mut s.tabs_bottom, false, "Top");
-                    ui.selectable_value(&mut s.tabs_bottom, true, "Bottom");
+                    ui.label(tr("Tabs along the"));
+                    ui.selectable_value(&mut s.tabs_bottom, false, tr("Top"));
+                    ui.selectable_value(&mut s.tabs_bottom, true, tr("Bottom"));
                 });
                 ui.add_space(8.0);
-                settings_heading(ui, "Shortcuts");
+                settings_heading(ui, tr("Shortcuts"));
                 ui.label(
-                    RichText::new("Click a shortcut and press the new keys. Esc cancels; Backspace leaves the command without one. They're kept in [keys] in config.toml, where a command can have more than one.")
+                    RichText::new(tr("Click a shortcut and press the new keys. Esc cancels; Backspace leaves the command without one. They're kept in [keys] in config.toml, where a command can have more than one."))
                         .small()
                         .color(MUTED),
                 );
@@ -4767,7 +4875,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 if !clashes.is_empty() {
                     let names: Vec<String> = clashes
                         .iter()
-                        .map(|(ch, ids)| format!("{} is on {}", ch.label(), ids.join(" and ")))
+                        .map(|(ch, ids)| trf!("{keys} is on {commands}", keys = ch.label(), commands = ids.iter().map(|i| crate::keys::shown_label(i)).collect::<Vec<_>>().join(tr(" and "))))
                         .collect();
                     ui.label(RichText::new(names.join(" · ")).small().color(AMBER));
                 }
@@ -4780,18 +4888,18 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                         for cmd in crate::keys::COMMANDS {
                             if cmd.group != group {
                                 group = cmd.group;
-                                ui.label(RichText::new(group).strong().color(TEXT));
+                                ui.label(RichText::new(cmd.shown_group()).strong().color(TEXT));
                                 ui.end_row();
                             }
                             ui.add(
-                                egui::Label::new(RichText::new(cmd.label).color(MUTED)).wrap(),
+                                egui::Label::new(RichText::new(cmd.shown_label()).color(MUTED)).wrap(),
                             );
                             let waiting = *capturing == Some(cmd.id);
                             let clash = clashes.iter().any(|(_, ids)| ids.contains(&cmd.id));
                             let shown: Vec<String> =
                                 s.keys.chords(cmd.id).iter().map(|c| c.label()).collect();
                             let text = if waiting {
-                                "press keys…".to_string()
+                                tr("press keys…").to_string()
                             } else if shown.is_empty() {
                                 "—".to_string()
                             } else {
@@ -4814,7 +4922,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                             if !s.keys.is_default(cmd.id) {
                                 if ui
                                     .small_button("↺")
-                                    .on_hover_text("Back to the default")
+                                    .on_hover_text(tr("Back to the default"))
                                     .clicked()
                                 {
                                     s.keys.reset(cmd.id);
@@ -4825,16 +4933,16 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                             ui.end_row();
                         }
                     });
-                if ui.button("Reset every shortcut").clicked() {
+                if ui.button(tr("Reset every shortcut")).clicked() {
                     for cmd in crate::keys::COMMANDS {
                         s.keys.reset(cmd.id);
                     }
                 }
                 ui.add_space(8.0);
-                settings_heading(ui, "Config file");
+                settings_heading(ui, tr("Config file"));
                 let path = muster_core::paths::config();
                 ui.label(
-                    RichText::new("Everything here, and the daemon's settings (agents, the command policy, hosts), is in one file. Edits made there show up here within a couple of seconds.")
+                    RichText::new(tr("Everything here, and the daemon's settings (agents, the command policy, hosts), is in one file. Edits made there show up here within a couple of seconds."))
                         .small()
                         .color(MUTED),
                 );
@@ -4842,28 +4950,28 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     egui::Label::new(RichText::new(tilde(&path)).monospace().color(TEXT)).wrap(),
                 );
                 ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
+                    if ui.small_button(tr("Open")).clicked() {
                         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
                         let _ = std::process::Command::new(opener).arg(&path).spawn();
                     }
-                    if ui.small_button("Copy path").clicked() {
+                    if ui.small_button(tr("Copy path")).clicked() {
                         ui.ctx().copy_text(path.display().to_string());
                     }
                 });
                 ui.add_space(8.0);
-                settings_heading(ui, "Shell integration");
+                settings_heading(ui, tr("Shell integration"));
                 ui.label(
-                    RichText::new("Each command you run gets a mark in the terminal's margin (⌘↑ / ⌘↓ jump between them). Paste this into ~/.zshrc or ~/.bashrc and the marks turn green or red with the command's exit status.")
+                    RichText::new(tr("Each command you run gets a mark in the terminal's margin (⌘↑ / ⌘↓ jump between them). Paste this into ~/.zshrc or ~/.bashrc and the marks turn green or red with the command's exit status."))
                         .small()
                         .color(MUTED),
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Copy snippet").clicked() {
+                    if ui.button(tr("Copy snippet")).clicked() {
                         ui.ctx().copy_text(crate::find::SHELL_INTEGRATION.to_string());
                     }
                 });
                 ui.add_space(8.0);
-                settings_heading(ui, "Colours");
+                settings_heading(ui, tr("Colours"));
                 let gap = 8.0;
                 let ncols = ((ui.available_width() + gap) / (160.0 + gap)).floor().max(1.0) as usize;
                 let cw = (ui.available_width() - gap * (ncols - 1) as f32) / ncols as f32;
@@ -4893,12 +5001,12 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 }
 
                 ui.add_space(8.0);
-                settings_heading(ui, "Window");
+                settings_heading(ui, tr("Window"));
                 if ui
-                    .checkbox(&mut s.see_through, "See-through window")
+                    .checkbox(&mut s.see_through, tr("See-through window"))
                     .on_hover_text(
-                        "The system has to blend whatever is behind the window, which costs some GPU. \
-                         The window has no shadow then, and turns opaque while another app is in front.",
+                        tr("The system has to blend whatever is behind the window, which costs some GPU. \
+                         The window has no shadow then, and turns opaque while another app is in front."),
                     )
                     .changed()
                     && s.see_through
@@ -4908,11 +5016,11 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     s.opacity = 0.85;
                 }
                 if s.see_through != started_transparent {
-                    ui.label(RichText::new("Restart muster to apply this.").small().color(AMBER));
+                    ui.label(RichText::new(tr("Restart muster to apply this.")).small().color(AMBER));
                 }
                 ui.add_enabled_ui(s.see_through, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Background opacity");
+                        ui.label(tr("Background opacity"));
                         ui.add(
                             egui::Slider::new(&mut s.opacity, 0.3..=1.0)
                                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
@@ -4920,13 +5028,13 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                     });
                     if cfg!(target_os = "macos") {
                         ui.horizontal(|ui| {
-                            ui.label("Blur");
+                            ui.label(tr("Blur"));
                             ui.add(egui::Slider::new(&mut s.blur, 0.0..=cfg::BLUR_MAX).step_by(1.0).suffix(" px"));
                         });
                     }
                 });
                 ui.label(
-                    RichText::new("How much of the colour theme's background covers the desktop. Dialogs stay solid, and so do cells a program colours itself.")
+                    RichText::new(tr("How much of the colour theme's background covers the desktop. Dialogs stay solid, and so do cells a program colours itself."))
                         .small()
                         .color(MUTED),
                 );
@@ -5054,7 +5162,7 @@ fn apply(app: &mut App, a: Action) {
         Action::CloseFile(item, path) => {
             let it = app.item_mut(&item);
             if it.files.iter().any(|e| e.path == path && e.dirty) {
-                app.notify("save or revert the file before closing it", true);
+                app.notify(tr("save or revert the file before closing it"), true);
                 return;
             }
             it.opened.retain(|p| *p != path);
@@ -5077,7 +5185,7 @@ fn apply(app: &mut App, a: Action) {
         Action::NewBrief => app.open_new_brief(),
         Action::OpenBrief(p) => app.open_brief(&p),
         Action::FinishBrief(p) | Action::HandOffBrief(p) if save_open(app, &p).is_err() => {
-            app.notify("couldn't save the brief first", true);
+            app.notify(tr("couldn't save the brief first"), true);
         }
         Action::FinishBrief(p) => app.finish_brief(&p),
         Action::StopBrief(p) => app.stop_brief(&p),
@@ -5085,9 +5193,9 @@ fn apply(app: &mut App, a: Action) {
         Action::RemoveProject(root) => app.remove_project_prompt(&root),
         Action::TrashFile(p) => app.trash_prompt(&p),
         Action::DiscardHunk(h) => {
-            let text = format!(
-                "Throw away this hunk of {}?\n\nIt's undone in the working tree. The agent's snapshots still have it.",
-                h.file
+            let text = trf!(
+                "Throw away this hunk of {file}?\n\nIt's undone in the working tree. The agent's snapshots still have it.",
+                file = h.file
             );
             app.confirm = Some(Confirm::DiscardHunk {
                 dir: app.ctx_dir(),
@@ -5127,26 +5235,27 @@ fn apply(app: &mut App, a: Action) {
         Action::Remove(id) => {
             let prune = app.tasks.get(&id).and_then(|t| t.branch.as_ref()).is_some();
             let text = if prune {
-                format!(
-                    "Remove {id} and delete its worktree?\nIts branch and undo snapshots are kept."
+                trf!(
+                    "Remove {id} and delete its worktree?\nIts branch and undo snapshots are kept.",
+                    id = id
                 )
             } else {
-                format!("Remove {id}?")
+                trf!("Remove {id}?", id = id)
             };
             app.confirm = Some(Confirm::Remove { id, prune, text });
         }
         Action::Accept => app.accept_prompt(),
         Action::Stage(p) => {
-            app.git_op(move |d| git::stage_file(d, &p).map(|_| format!("staged {p}")))
+            app.git_op(move |d| git::stage_file(d, &p).map(|_| trf!("staged {file}", file = p)))
         }
         Action::Unstage(p) => {
-            app.git_op(move |d| git::unstage_file(d, &p).map(|_| format!("unstaged {p}")))
+            app.git_op(move |d| git::unstage_file(d, &p).map(|_| trf!("unstaged {file}", file = p)))
         }
         Action::StageAll => {
-            app.git_op(move |d| git::stage_all(d).map(|_| "staged everything".into()))
+            app.git_op(move |d| git::stage_all(d).map(|_| tr("staged everything").into()))
         }
         Action::UnstageAll => {
-            app.git_op(move |d| git::unstage_file(d, ".").map(|_| "unstaged everything".into()))
+            app.git_op(move |d| git::unstage_file(d, ".").map(|_| tr("unstaged everything").into()))
         }
         Action::StartCommit => {
             if app.changes.iter().any(|c| c.staged()) {
@@ -5154,20 +5263,22 @@ fn apply(app: &mut App, a: Action) {
                 app.focus_pane = false;
             } else {
                 app.notify(
-                    "nothing staged: space stages a file, a stages everything",
+                    tr("nothing staged: space stages a file, a stages everything"),
                     true,
                 );
             }
         }
         Action::Commit => {
             let msg = app.commit_msg.trim().to_string();
-            app.git_op(move |d| git::commit(d, &msg).map(|m| format!("committed {m}")));
+            app.git_op(move |d| {
+                git::commit(d, &msg).map(|m| trf!("committed {commit}", commit = m))
+            });
             if app.notice.as_ref().is_some_and(|n| !n.2) {
                 app.commit_msg.clear();
             }
         }
         Action::Discard(c) => {
-            let text = format!("Discard all changes to {}?\n(muster's undo timeline still has them if this is an agent worktree.)", c.path);
+            let text = trf!("Discard all changes to {file}?\n(muster's undo timeline still has them if this is an agent worktree.)", file = c.path);
             app.confirm = Some(Confirm::Discard {
                 dir: app.ctx_dir(),
                 change: c,
@@ -5178,7 +5289,7 @@ fn apply(app: &mut App, a: Action) {
         Action::Decide(id, allow) => app.decide(id, allow),
         Action::NextAttention => app.next_attention(),
         Action::Revert(task, s) => {
-            let text = format!("Revert {task}'s files to #{} \"{}\"?\nA safety snapshot is taken first, so you can undo this.", s.seq, s.label);
+            let text = trf!("Revert {task}'s files to #{seq} \"{label}\"?\nA safety snapshot is taken first, so you can undo this.", task = task, seq = s.seq, label = s.label);
             app.confirm = Some(Confirm::Revert {
                 task,
                 snapshot: s.id,
@@ -5187,18 +5298,22 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::Checkpoint(task) => app.checkpoint(&task),
         Action::StageHunk(h) => {
-            app.git_op(move |d| git::stage_hunk(d, &h).map(|_| "staged hunk".into()))
+            app.git_op(move |d| git::stage_hunk(d, &h).map(|_| tr("staged hunk").into()))
         }
         Action::UnstageHunk(h) => {
-            app.git_op(move |d| git::unstage_hunk(d, &h).map(|_| "unstaged hunk".into()))
+            app.git_op(move |d| git::unstage_hunk(d, &h).map(|_| tr("unstaged hunk").into()))
         }
         Action::StageFileFromDiff(f) => {
             let rel = rel_from_repo(app, &f);
-            app.git_op(move |d| git::stage_file(d, &rel).map(|_| format!("staged {rel}")));
+            app.git_op(move |d| {
+                git::stage_file(d, &rel).map(|_| trf!("staged {file}", file = rel))
+            });
         }
         Action::UnstageFileFromDiff(f) => {
             let rel = rel_from_repo(app, &f);
-            app.git_op(move |d| git::unstage_file(d, &rel).map(|_| format!("unstaged {rel}")));
+            app.git_op(move |d| {
+                git::unstage_file(d, &rel).map(|_| trf!("unstaged {file}", file = rel))
+            });
         }
         Action::Input(id, data) => app.send_input(&id, data),
         Action::Typed(id, data) => {
@@ -5224,7 +5339,7 @@ fn apply(app: &mut App, a: Action) {
                 child: Child::Terminal,
             }) = app.target().cloned()
             else {
-                return app.notify("focus a terminal to run a snippet in it", true);
+                return app.notify(tr("focus a terminal to run a snippet in it"), true);
             };
             for to in typing_targets(app, &item) {
                 let mut b = app
@@ -5266,7 +5381,7 @@ fn apply(app: &mut App, a: Action) {
         Action::ToggleBroadcast => app.broadcast = !app.broadcast,
         Action::Copy(text) => {
             app.ctx.copy_text(text);
-            app.notify("copied", false);
+            app.notify(tr("copied"), false);
         }
         Action::External(path, line) => app.open_external(&path, line),
         Action::ToggleDir(rel) => app.tree.toggle(&rel),

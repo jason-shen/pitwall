@@ -19,6 +19,27 @@ const fn cmd(id: &'static str, group: &'static str, label: &'static str) -> Comm
     Command { id, label, group }
 }
 
+// `label` and `group` stay English: group changes are detected by comparing
+// them, and they're the translation keys.
+impl Command {
+    pub fn shown_label(&self) -> &'static str {
+        crate::i18n::tr(self.label)
+    }
+
+    pub fn shown_group(&self) -> &'static str {
+        crate::i18n::tr(self.group)
+    }
+}
+
+/// A command's label in the current language, or the id if there's no such command.
+pub fn shown_label(id: &str) -> &str {
+    COMMANDS
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.shown_label())
+        .unwrap_or(id)
+}
+
 /// In the order they're listed in Settings and written to the file.
 pub const COMMANDS: &[Command] = &[
     cmd(

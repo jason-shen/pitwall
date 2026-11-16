@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::app::Panel;
+use crate::i18n::{tr, trf};
 
 const TITLES: [&str; 5] = [
     "Status",
@@ -81,7 +82,7 @@ pub(super) fn body(
         ui.painter().text(
             body.center(),
             Align2::CENTER_CENTER,
-            "not a git repository",
+            tr("not a git repository"),
             FontId::proportional(14.0),
             MUTED,
         );
@@ -180,8 +181,8 @@ fn list_panel(
     let sel = gv.sel[pi];
     let n = len_of(app, panel);
     let title = match panel {
-        Panel::Files => format!("[2] Changed files  {n}"),
-        _ => format!("[{}] {}", pi + 1, TITLES[pi]),
+        Panel::Files => format!("[2] {}  {n}", tr(TITLES[pi])),
+        _ => format!("[{}] {}", pi + 1, tr(TITLES[pi])),
     };
     let inner = frame_for(ui, r, &title, active && focused);
     let mut child = ui.new_child(
@@ -205,8 +206,8 @@ fn list_panel(
     }
     if n == 0 {
         let empty = match panel {
-            Panel::Files => "working tree clean",
-            Panel::Snapshots => "no snapshots yet",
+            Panel::Files => tr("working tree clean"),
+            Panel::Snapshots => tr("no snapshots yet"),
             _ => "",
         };
         ui.label(RichText::new(empty).small().color(MUTED));
@@ -266,20 +267,20 @@ fn list_panel(
                     painter.text(pos2(x + 24.0, y), Align2::LEFT_CENTER, &c.path, prop, TEXT);
                     let cc = c.clone();
                     resp.context_menu(|ui| {
-                        if ui.button("Open in editor").clicked() {
+                        if ui.button(tr("Open in editor")).clicked() {
                             acts.push(Action::OpenFile(cc.path.clone(), None));
                             ui.close();
                         }
-                        if ui.button("Stage").clicked() {
+                        if ui.button(tr("Stage")).clicked() {
                             acts.push(Action::Stage(cc.path.clone()));
                             ui.close();
                         }
-                        if ui.button("Unstage").clicked() {
+                        if ui.button(tr("Unstage")).clicked() {
                             acts.push(Action::Unstage(cc.path.clone()));
                             ui.close();
                         }
                         if ui
-                            .button(RichText::new("Discard changes…").color(RED))
+                            .button(RichText::new(tr("Discard changes…")).color(RED))
                             .clicked()
                         {
                             acts.push(Action::Discard(cc.clone()));
@@ -354,7 +355,7 @@ fn list_panel(
                     );
                     let (task, snap) = (app.tabs[app.cur].id.clone(), s.clone());
                     resp.context_menu(|ui| {
-                        if i > 0 && ui.button("Revert files to here…").clicked() {
+                        if i > 0 && ui.button(tr("Revert files to here…")).clicked() {
                             acts.push(Action::Revert(task.clone(), snap.clone()));
                             ui.close();
                         }
@@ -395,9 +396,10 @@ fn list_panel(
 }
 
 fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) {
-    let mut b = app.branch.clone().unwrap_or_else(|| "detached".into());
+    let mut b = app.branch.clone().unwrap_or_else(|| tr("detached").into());
     if let Some(n) = app.ahead.filter(|n| *n > 0) {
-        b.push_str(&format!("  ↑{n} since start"));
+        b.push_str("  ");
+        b.push_str(&trf!("↑{n} since start", n = n));
     }
     ui.horizontal(|ui| {
         ui.label(RichText::new(b).color(GREEN));
@@ -409,11 +411,11 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
         // First, so a narrow pane clips the others instead.
         let staged = app.changes.iter().filter(|c| c.staged()).count();
         let label = if staged > 0 {
-            RichText::new(format!("commit {staged} staged"))
+            RichText::new(trf!("commit {staged} staged", staged = staged))
                 .color(ACCENT)
                 .strong()
         } else {
-            RichText::new("commit")
+            RichText::new(tr("commit"))
         };
         if ui.small_button(label).on_hover_text("c").clicked() {
             acts.push(Action::StartCommit);
@@ -421,8 +423,8 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
         if is_agent
             && base_of(app).is_some()
             && ui
-                .small_button("vs base")
-                .on_hover_text("Everything this agent changed (b)")
+                .small_button(tr("vs base"))
+                .on_hover_text(tr("Everything this agent changed (b)"))
                 .clicked()
         {
             acts.push(Action::ShowMain(MainSrc::Changes {
@@ -430,7 +432,7 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
                 mode: DiffMode::Base(base_of(app).unwrap()),
             }));
         }
-        if ui.small_button("all changes").clicked() {
+        if ui.small_button(tr("all changes")).clicked() {
             acts.push(Action::ShowMain(MainSrc::Changes {
                 path: None,
                 mode: DiffMode::Unstaged,
@@ -454,22 +456,22 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
                 .collect::<Vec<_>>()
                 .join("\n");
             if ui
-                .small_button(format!("💬 send {} to agent", list.len()))
+                .small_button(trf!("💬 send {n} to agent", n = list.len()))
                 .on_hover_text(all)
                 .clicked()
             {
                 acts.push(Action::SendRemarks(id.clone()));
             }
-            if ui.small_button("clear").clicked() {
+            if ui.small_button(tr("clear")).clicked() {
                 acts.push(Action::ClearRemarks(id.clone()));
             }
         }
         if has_branch
             && ui
-                .small_button("✓ accept…")
-                .on_hover_text(
+                .small_button(tr("✓ accept…"))
+                .on_hover_text(tr(
                     "Commit the agent's work and merge it into the branch it came from (m)",
-                )
+                ))
                 .clicked()
         {
             acts.push(Action::Accept);
@@ -495,7 +497,7 @@ fn main_panel(
     let src = gv.main.clone();
     let d = &mut gv.diff;
     let title = if d.loading && d.title.is_empty() {
-        "loading…".to_string()
+        tr("loading…").to_string()
     } else {
         d.title.clone()
     };
@@ -531,7 +533,7 @@ fn main_panel(
                 (DiffMode::Unstaged, "Unstaged"),
                 (DiffMode::Staged, "Staged"),
             ] {
-                if ui.selectable_label(*mode == m, label).clicked() {
+                if ui.selectable_label(*mode == m, tr(label)).clicked() {
                     acts.push(Action::ShowMain(MainSrc::Changes {
                         path: path.clone(),
                         mode: m,
@@ -542,12 +544,18 @@ fn main_panel(
         }
         match (&mode, &cur_hunk) {
             (Some(DiffMode::Unstaged), Some(h))
-                if ui.small_button("stage hunk").on_hover_text("s").clicked() =>
+                if ui
+                    .small_button(tr("stage hunk"))
+                    .on_hover_text("s")
+                    .clicked() =>
             {
                 acts.push(Action::StageHunk(h.clone()));
             }
             (Some(DiffMode::Staged), Some(h))
-                if ui.small_button("unstage hunk").on_hover_text("u").clicked() =>
+                if ui
+                    .small_button(tr("unstage hunk"))
+                    .on_hover_text("u")
+                    .clicked() =>
             {
                 acts.push(Action::UnstageHunk(h.clone()));
             }
@@ -557,8 +565,8 @@ fn main_panel(
         // the agent's hunks can be thrown away on its own.
         if let (Some(DiffMode::Unstaged | DiffMode::Base(_)), Some(h)) = (&mode, &cur_hunk) {
             if ui
-                .small_button("discard hunk")
-                .on_hover_text("d: undo this hunk in the working tree")
+                .small_button(tr("discard hunk"))
+                .on_hover_text(tr("d: undo this hunk in the working tree"))
                 .clicked()
             {
                 acts.push(Action::DiscardHunk(h.clone()));
@@ -567,18 +575,18 @@ fn main_panel(
         if let Some(l) = &cur_line {
             if let Some(f) = &l.file {
                 if ui
-                    .small_button("edit")
-                    .on_hover_text("e: open at this line")
+                    .small_button(tr("edit"))
+                    .on_hover_text(tr("e: open at this line"))
                     .clicked()
                 {
                     acts.push(Action::OpenFile(f.clone(), Some(l.new_line.unwrap_or(1))));
                 }
                 if is_agent
                     && ui
-                        .small_button("💬 comment")
-                        .on_hover_text(
+                        .small_button(tr("💬 comment"))
+                        .on_hover_text(tr(
                             "r: a review comment on this line, sent to the agent with the others",
-                        )
+                        ))
                         .clicked()
                 {
                     acts.push(Action::Remark);
@@ -592,9 +600,14 @@ fn main_panel(
             .iter()
             .fold((0, 0), |acc, f| (acc.0 + f.1, acc.1 + f.2));
         ui.label(
-            RichText::new(format!("{files} file(s)  +{a} −{rm}"))
-                .small()
-                .color(MUTED),
+            RichText::new(trf!(
+                "{files} file(s)  +{a} −{rm}",
+                files = files,
+                a = a,
+                rm = rm
+            ))
+            .small()
+            .color(MUTED),
         );
     });
 
@@ -604,7 +617,7 @@ fn main_panel(
     }
     if d.parsed.lines.is_empty() {
         if !d.loading {
-            ui.label(RichText::new("No changes").color(MUTED));
+            ui.label(RichText::new(tr("No changes")).color(MUTED));
         }
         return;
     }

@@ -7,6 +7,7 @@ mod devshot;
 mod editors;
 mod emoji;
 mod find;
+mod i18n;
 mod keys;
 mod layout;
 mod markdown;
@@ -39,6 +40,7 @@ fn main() -> eframe::Result {
     // Read before the window exists: transparency can't be switched on later.
     let (settings, config_problems) = settings::Settings::load();
     let transparent = settings.see_through;
+    i18n::set(i18n::Lang::from_code(&settings.language));
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("muster")
         .with_app_id("muster")

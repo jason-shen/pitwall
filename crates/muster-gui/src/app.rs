@@ -14,6 +14,7 @@ use muster_core::proto::{
 };
 use muster_core::tree::Tree;
 
+use crate::i18n::{tr, trf};
 use crate::net::{self, Ev};
 use crate::settings::{Settings, TermFont};
 use crate::theme::{self, FontSet};
@@ -529,7 +530,7 @@ pub struct App {
     pub capturing: Option<&'static str>,
     pub settings_ui: Option<SettingsUi>,
     fonts: FontSet,
-    applied_font: Option<(Option<TermFont>, u16, u16)>,
+    applied_font: Option<(Option<TermFont>, u16, u16, crate::i18n::Lang)>,
     pub font_error: Option<String>,
     /// Whether the window was created transparent (only possible at startup).
     pub transparent: bool,
@@ -596,8 +597,11 @@ impl App {
             settings.font.clone(),
             settings.font_weight,
             settings.bold_weight,
+            crate::i18n::current(),
         );
-        let font_error = fonts.apply(&ctx, want.0.as_ref(), want.1, want.2).err();
+        let font_error = fonts
+            .apply(&ctx, want.0.as_ref(), want.1, want.2, want.3)
+            .err();
         App {
             rt,
             client: None,
@@ -919,7 +923,7 @@ impl App {
             if let Some(e) = it.files.iter().find(|e| e.dirty) {
                 self.confirm = Some(Confirm::CloseDirty {
                     tab: idx,
-                    text: format!("{} has unsaved changes. Close anyway?", e.name()),
+                    text: trf!("{name} has unsaved changes. Close anyway?", name = e.name()),
                 });
                 return;
             }
@@ -1215,7 +1219,11 @@ impl App {
         it.git.diff.loading = true;
         let (item, gen) = (it.id.clone(), it.git.gen);
         if let MainSrc::Snapshot(snap) = &src {
-            let title = format!("snapshot #{}: {}", snap.seq, snap.label);
+            let title = trf!(
+                "snapshot #{seq}: {label}",
+                seq = snap.seq,
+                label = snap.label
+            );
             let item2 = item.clone();
             self.call(
                 Request::Diff {
@@ -1230,7 +1238,7 @@ impl App {
                         title,
                         result: match r {
                             Ok(Response::Diff(text)) => Ok(git::parse(&text)),
-                            Ok(_) => Err("unexpected reply".into()),
+                            Ok(_) => Err(tr("unexpected reply").into()),
                             Err(e) => Err(e),
                         },
                     })
@@ -1243,10 +1251,10 @@ impl App {
         self.rt.spawn_blocking(move || {
             let (title, text) = match &src {
                 MainSrc::Changes { path, mode } => {
-                    let what = path.clone().unwrap_or_else(|| "all files".into());
+                    let what = path.clone().unwrap_or_else(|| tr("all files").into());
                     let label = match mode {
-                        DiffMode::Base(_) => "everything since the agent started".to_string(),
-                        m => m.label().to_string(),
+                        DiffMode::Base(_) => tr("everything since the agent started").to_string(),
+                        m => tr(m.label()).to_string(),
                     };
                     (
                         format!("{what} · {label}"),
@@ -1254,7 +1262,7 @@ impl App {
                     )
                 }
                 MainSrc::Commit(h) => (
-                    format!("commit {}", &h[..h.len().min(10)]),
+                    trf!("commit {hash}", hash = &h[..h.len().min(10)]),
                     git::show(&dir, h),
                 ),
                 MainSrc::Snapshot(_) => unreachable!(),
@@ -1331,7 +1339,11 @@ impl App {
             let name = self.tasks.get(&id).map(|t| self.label(t)).unwrap_or(id);
             // Said out loud, so a program can't swap the clipboard unseen.
             self.notify(
-                format!("{name} copied {n} characters to the clipboard"),
+                trf!(
+                    "{name} copied {n} characters to the clipboard",
+                    name = name,
+                    n = n
+                ),
                 false,
             );
         }
@@ -1513,7 +1525,10 @@ impl App {
                 }
                 Ev::Disconnected => {
                     self.client = None;
-                    self.notify("lost connection to the muster daemon — reconnecting…", true);
+                    self.notify(
+                        tr("lost connection to the muster daemon — reconnecting…"),
+                        true,
+                    );
                 }
                 Ev::Push(p) => self.on_push(p),
                 Ev::Reply(r) => self.on_reply(r),
@@ -1698,7 +1713,10 @@ impl App {
         }
         if !reloaded.is_empty() {
             self.notify(
-                format!("reloaded {} (changed on disk)", reloaded.join(", ")),
+                trf!(
+                    "reloaded {files} (changed on disk)",
+                    files = reloaded.join(", ")
+                ),
                 false,
             );
         }
@@ -1800,7 +1818,7 @@ impl App {
                 {
                     self.done_unseen.insert(t.id.clone());
                     let name = self.label(&t);
-                    self.notify_away(&name, "finished its turn");
+                    self.notify_away(&name, tr("finished its turn"));
                 }
                 if !is_agent(&t) {
                     self.done_unseen.remove(&t.id);
@@ -1809,11 +1827,14 @@ impl App {
                 if t.attention && !was && is_agent(&t) && !self.watching(&t.id) {
                     let why = match &t.status {
                         TaskStatus::Waiting { reason } => reason.clone(),
-                        TaskStatus::Idle => "finished its turn".into(),
-                        other => other.label(),
+                        TaskStatus::Idle => tr("finished its turn").into(),
+                        other => tr(&other.label()).to_string(),
                     };
                     let name = self.label(&t);
-                    self.notify(format!("{name} needs you: {why}"), false);
+                    self.notify(
+                        trf!("{name} needs you: {why}", name = name, why = why),
+                        false,
+                    );
                     self.notify_away(&name, &why);
                     self.ctx
                         .send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
@@ -1858,7 +1879,7 @@ impl App {
             Push::Message { from, to, text } => {
                 let short: String = text.chars().take(80).collect();
                 self.notify(
-                    format!("{} → {to}: {short}", from.as_deref().unwrap_or("you")),
+                    format!("{} → {to}: {short}", from.as_deref().unwrap_or(tr("you"))),
                     false,
                 );
             }
@@ -1966,8 +1987,8 @@ impl App {
                     let branch = self.tasks[&id].branch.clone();
                     self.notify(
                         match branch {
-                            Some(b) => format!("started {id} on {b}"),
-                            None => format!("started {id}"),
+                            Some(b) => trf!("started {id} on {branch}", id = id, branch = b),
+                            None => trf!("started {id}", id = id),
                         },
                         false,
                     );
@@ -1991,9 +2012,9 @@ impl App {
             Reply::RemarksSent(id, r) => match r {
                 Ok(n) => {
                     self.remarks.remove(&id);
-                    self.notify(format!("sent {n} comment(s) to {id}"), false);
+                    self.notify(trf!("sent {n} comment(s) to {id}", n = n, id = id), false);
                 }
-                Err(e) => self.notify(format!("couldn't send the comments: {e}"), true),
+                Err(e) => self.notify(trf!("couldn't send the comments: {e}", e = e), true),
             },
             Reply::Accepted { id, result } => {
                 self.refresh_git_now();
@@ -2005,9 +2026,10 @@ impl App {
                     Ok(m) => {
                         self.notify(m, false);
                         self.confirm = Some(Confirm::Remove {
-                            text: format!(
+                            text: trf!(
                                 "{id} is merged. Remove it, its worktree and branch?\n\n\
-                                 Its snapshots go too."
+                                 Its snapshots go too.",
+                                id = id
                             ),
                             id,
                             prune: true,
@@ -2128,26 +2150,35 @@ impl App {
             .collect();
         let agents = live.iter().filter(|t| t.agent != "shell").count();
         let terms = live.len() - agents;
-        let mut text = format!("Remove {name} from muster?\n\nThe folder isn't touched.");
-        if !live.is_empty() {
+        let text = if live.is_empty() {
+            trf!(
+                "Remove {name} from muster?\n\nThe folder isn't touched.",
+                name = name
+            )
+        } else {
             let mut what = vec![];
             if terms > 0 {
-                what.push(format!(
-                    "{terms} terminal{}",
-                    if terms == 1 { "" } else { "s" }
-                ));
+                what.push(match terms {
+                    1 => tr("1 terminal").to_string(),
+                    n => trf!("{n} terminals", n = n),
+                });
             }
             if agents > 0 {
-                what.push(format!(
-                    "{agents} agent{}",
-                    if agents == 1 { "" } else { "s" }
-                ));
+                what.push(match agents {
+                    1 => tr("1 agent").to_string(),
+                    n => trf!("{n} agents", n = n),
+                });
             }
-            text.push_str(&format!(
-                " Its {} close; agents' worktrees and branches stay.",
-                what.join(" and ")
-            ));
-        }
+            let what = match what.as_slice() {
+                [a, b] => trf!("{a} and {b}", a = a, b = b),
+                _ => what.concat(),
+            };
+            trf!(
+                "Remove {name} from muster?\n\nThe folder isn't touched. Its {what} close; agents' worktrees and branches stay.",
+                name = name,
+                what = what
+            )
+        };
         self.confirm = Some(Confirm::RemoveProject {
             root: root.to_string(),
             text,
@@ -2162,7 +2193,7 @@ impl App {
             .find(|t| t.id == item)
             .and_then(|t| t.files.iter().find(|e| e.dirty))
         {
-            return self.notify(format!("save or revert {} first", e.name()), true);
+            return self.notify(trf!("save or revert {name} first", name = e.name()), true);
         }
         let ids: Vec<String> = self
             .tasks
@@ -2188,7 +2219,7 @@ impl App {
             self.active = 0;
         }
         let name = root.rsplit('/').next().unwrap_or(root);
-        self.notify(format!("removed {name} from muster"), false);
+        self.notify(trf!("removed {name} from muster", name = name), false);
     }
 
     /// Ask before moving a file to the Trash.
@@ -2202,9 +2233,10 @@ impl App {
             .iter()
             .flat_map(|t| &t.files)
             .any(|e| e.path == path && e.dirty);
-        let mut text = format!("Move {name} to the Trash?");
+        let mut text = trf!("Move {name} to the Trash?", name = name);
         if unsaved {
-            text.push_str("\n\nIt has unsaved changes, which go too.");
+            text.push_str("\n\n");
+            text.push_str(tr("It has unsaved changes, which go too."));
         }
         self.confirm = Some(Confirm::TrashFile {
             path: path.to_path_buf(),
@@ -2241,7 +2273,7 @@ impl App {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        self.notify(format!("moved {name} to the Trash"), false);
+        self.notify(trf!("moved {name} to the Trash", name = name), false);
     }
 
     /// A brief that's gone: its open run, if any, has nothing to write into.
@@ -2277,7 +2309,7 @@ impl App {
         };
         let Some(agent) = self.cfg.agents.get("claude") else {
             return self.notify(
-                "Finish with AI runs claude: add [agents.claude] to config.toml",
+                tr("Finish with AI runs claude: add [agents.claude] to config.toml"),
                 true,
             );
         };
@@ -2290,7 +2322,10 @@ impl App {
             Ok(run) => {
                 self.brief_runs.insert(path.to_path_buf(), run);
             }
-            Err(e) => self.notify(format!("couldn't start {}: {e}", agent.command), true),
+            Err(e) => self.notify(
+                trf!("couldn't start {cmd}: {e}", cmd = agent.command, e = e),
+                true,
+            ),
         }
     }
 
@@ -2333,17 +2368,20 @@ impl App {
         }
         if let Some(Err(e)) = restored {
             return self.notify(
-                format!("couldn't put the brief back as it was ({e}); ⌘Z in its editor has it"),
+                trf!(
+                    "couldn't put the brief back as it was ({e}); ⌘Z in its editor has it",
+                    e = e
+                ),
                 true,
             );
         }
         match result {
-            Some(Ok(())) => self.notify("brief filled in", false),
+            Some(Ok(())) => self.notify(tr("brief filled in"), false),
             Some(Err(e)) => self.notify(
-                format!("couldn't finish the brief: {e}; it's as you left it"),
+                trf!("couldn't finish the brief: {e}; it's as you left it", e = e),
                 true,
             ),
-            None => self.notify("stopped; the brief is as you left it", false),
+            None => self.notify(tr("stopped; the brief is as you left it"), false),
         }
     }
 
@@ -2352,7 +2390,7 @@ impl App {
     pub fn hand_off_brief(&mut self, path: &Path) {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
-            Err(e) => return self.notify(format!("couldn't read the brief: {e}"), true),
+            Err(e) => return self.notify(trf!("couldn't read the brief: {e}", e = e), true),
         };
         let title = crate::briefs::title_of(path, &text);
         self.open_new_agent(&crate::briefs::handoff_prompt(path, &text));
@@ -2386,31 +2424,31 @@ impl App {
             NewKind::Agent => {
                 let id = slugify(&f.name);
                 if id.is_empty() {
-                    Some("Give it a name".into())
+                    Some(tr("Give it a name").into())
                 } else if self.tasks.contains_key(&id) {
-                    Some(format!("{id} is already taken"))
+                    Some(trf!("{id} is already taken", id = id))
                 } else if !muster_core::paths::expand(f.dir.trim()).is_dir() {
-                    Some("That folder doesn't exist".into())
+                    Some(tr("That folder doesn't exist").into())
                 } else {
                     None
                 }
             }
             NewKind::Brief => {
                 if f.name.trim().is_empty() {
-                    Some("Give it a title".into())
+                    Some(tr("Give it a title").into())
                 } else if f.dir.is_empty() {
-                    Some("Open a project first".into())
+                    Some(tr("Open a project first").into())
                 } else {
                     None
                 }
             }
             NewKind::Project => {
                 if f.dir.trim().is_empty() {
-                    Some("Pick a folder".into())
+                    Some(tr("Pick a folder").into())
                 } else if !muster_core::paths::expand(f.dir.trim()).is_dir() {
-                    Some("That folder doesn't exist".into())
+                    Some(tr("That folder doesn't exist").into())
                 } else if f.name.trim().is_empty() {
-                    Some("Give it a name".into())
+                    Some(tr("Give it a name").into())
                 } else {
                     None
                 }
@@ -2447,7 +2485,7 @@ impl App {
                             }
                         }
                     }
-                    Err(e) => self.notify(format!("couldn't write the brief: {e}"), true),
+                    Err(e) => self.notify(trf!("couldn't write the brief: {e}", e = e), true),
                 }
             }
             NewKind::Agent => {
@@ -2606,8 +2644,12 @@ impl App {
             }
             crate::editors::Kind::Gui(cmd) => {
                 match crate::editors::open_gui(&cmd, &path, line.unwrap_or(1)) {
-                    Ok(()) => self.notify(format!("opened {rel} in {cmd}"), false),
-                    Err(e) => self.notify(format!("couldn't start `{cmd}`: {e}"), true),
+                    Ok(()) => {
+                        self.notify(trf!("opened {file} in {cmd}", file = rel, cmd = cmd), false)
+                    }
+                    Err(e) => {
+                        self.notify(trf!("couldn't start `{cmd}`: {e}", cmd = cmd, e = e), true)
+                    }
                 }
                 // Also shown read-along in the built-in editor, which reloads
                 // as the other editor saves.
@@ -2651,7 +2693,10 @@ impl App {
             match crate::editors::reopen_keys(cmd, path, line) {
                 Some(keys) => self.send_input(&id, keys),
                 None => self.notify(
-                    format!("{cmd} is already open in this tab; quit it to open another file"),
+                    trf!(
+                        "{cmd} is already open in this tab; quit it to open another file",
+                        cmd = cmd
+                    ),
                     true,
                 ),
             }
@@ -2726,7 +2771,7 @@ impl App {
         };
         if let Err(e) = r {
             self.notify(
-                format!("couldn't open external editor: {e} (set $VISUAL)"),
+                trf!("couldn't open external editor: {e} (set $VISUAL)", e = e),
                 true,
             );
         }
@@ -2738,14 +2783,14 @@ impl App {
             return;
         };
         if !self.tasks.get(&it.id).is_some_and(|t| t.agent != "shell") {
-            return self.notify("comments go to an agent; open an agent's Changes", true);
+            return self.notify(tr("comments go to an agent; open an agent's Changes"), true);
         }
         let d = &it.git.diff;
         let Some(l) = d.parsed.lines.get(d.cursor) else {
             return;
         };
         let Some(file) = l.file.clone() else {
-            return self.notify("put the cursor on a line of the diff", true);
+            return self.notify(tr("put the cursor on a line of the diff"), true);
         };
         let quote: String = l.text.trim().chars().take(100).collect();
         self.remarking = Some((
@@ -2813,11 +2858,11 @@ impl App {
             .and_then(|id| self.tasks.get(id))
             .cloned()
         else {
-            return self.notify("select an agent with its own branch", true);
+            return self.notify(tr("select an agent with its own branch"), true);
         };
         let (Some(branch), Some(root)) = (t.branch.clone(), t.repo.clone()) else {
             return self.notify(
-                "this agent works in place: there's no branch to merge",
+                tr("this agent works in place: there's no branch to merge"),
                 true,
             );
         };
@@ -2838,21 +2883,29 @@ impl App {
             })
             .or_else(|| t.title.clone())
             .unwrap_or_else(|| t.name.clone());
-        let mut text = format!("Accept {}?", t.id);
+        let mut text = trf!("Accept {id}?", id = t.id);
         let pending = self.changes.len();
         if pending > 0 {
-            text.push_str(&format!(
-                "\n\n• Commit its {pending} uncommitted change(s) on {branch} with this message"
+            text.push_str("\n\n");
+            text.push_str(&trf!(
+                "• Commit its {pending} uncommitted change(s) on {branch} with this message",
+                pending = pending,
+                branch = branch
             ));
         }
-        text.push_str(&format!(
-            "\n• Merge {branch} into {target} in {}",
-            root.display()
+        text.push('\n');
+        text.push_str(&trf!(
+            "• Merge {branch} into {target} in {dir}",
+            branch = branch,
+            target = target,
+            dir = root.display()
         ));
         if here.as_deref() != Some(target.as_str()) {
-            text.push_str(&format!(
-                "\n\nYour checkout is on {}, not {target}. Check out {target} first.",
-                here.as_deref().unwrap_or("a detached HEAD")
+            text.push_str("\n\n");
+            text.push_str(&trf!(
+                "Your checkout is on {here}, not {target}. Check out {target} first.",
+                here = here.as_deref().unwrap_or(tr("a detached HEAD")),
+                target = target
             ));
         }
         self.confirm = Some(Confirm::Accept {
@@ -2910,9 +2963,9 @@ impl App {
         // you haven't seen.
         match pick {
             Some(id) => self.decide(id, allow),
-            None if self.approvals.is_empty() => self.notify("no pending approvals", false),
+            None if self.approvals.is_empty() => self.notify(tr("no pending approvals"), false),
             None => self.notify(
-                "this agent has nothing to approve; ⌘⇧A goes to the one waiting",
+                tr("this agent has nothing to approve; ⌘⇧A goes to the one waiting"),
                 false,
             ),
         }
@@ -2933,7 +2986,7 @@ impl App {
                 return;
             }
         }
-        self.notify("nothing needs you", false);
+        self.notify(tr("nothing needs you"), false);
     }
 
     pub fn kill(&mut self, id: &str) {
@@ -2950,10 +3003,10 @@ impl App {
             },
             |r| match r {
                 Ok(Response::Snapshot(Some(s))) => {
-                    Some(Reply::Notice(format!("checkpoint #{}", s.seq), false))
+                    Some(Reply::Notice(trf!("checkpoint #{seq}", seq = s.seq), false))
                 }
                 Ok(_) => Some(Reply::Notice(
-                    "nothing changed since the last snapshot".into(),
+                    tr("nothing changed since the last snapshot").into(),
                     false,
                 )),
                 Err(e) => Some(Reply::Notice(e, true)),
@@ -2972,7 +3025,7 @@ impl App {
                 message,
                 ..
             } => {
-                self.notify(format!("accepting {id}…"), false);
+                self.notify(trf!("accepting {id}…", id = id), false);
                 let id2 = id.clone();
                 self.in_background(
                     move || {
@@ -2997,10 +3050,14 @@ impl App {
                         .await
                     {
                         Ok(Response::Snapshot(Some(s))) => Reply::Notice(
-                            format!("{} (#{}; revert that to undo)", s.label, s.seq),
+                            trf!(
+                                "{label} (#{seq}; revert that to undo)",
+                                label = s.label,
+                                seq = s.seq
+                            ),
                             false,
                         ),
-                        Ok(_) => Reply::Notice("reverted".into(), false),
+                        Ok(_) => Reply::Notice(tr("reverted").into(), false),
                         Err(e) => Reply::Notice(format!("{e:#}"), true),
                     };
                     let _ = tx.send(Ev::Reply(reply));
@@ -3020,7 +3077,7 @@ impl App {
                         prune_worktree: prune,
                     },
                     move |r| match r {
-                        Ok(_) => Some(Reply::Notice(format!("removed {id}"), false)),
+                        Ok(_) => Some(Reply::Notice(trf!("removed {id}", id = id), false)),
                         Err(e) => Some(Reply::Notice(e, true)),
                     },
                 );
@@ -3028,17 +3085,19 @@ impl App {
             Confirm::RemoveProject { root, .. } => self.remove_project(&root),
             Confirm::TrashFile { path, .. } => self.trash_file(&path),
             Confirm::DiscardHunk { dir, hunk, .. } => self.git_op(move |_| {
-                git::discard_hunk(&dir, &hunk).map(|_| format!("discarded a hunk of {}", hunk.file))
+                git::discard_hunk(&dir, &hunk)
+                    .map(|_| trf!("discarded a hunk of {file}", file = hunk.file))
             }),
             Confirm::Discard { dir, change, .. } => self.git_op(move |_| {
-                git::discard_file(&dir, &change).map(|_| format!("discarded {}", change.path))
+                git::discard_file(&dir, &change)
+                    .map(|_| trf!("discarded {file}", file = change.path))
             }),
             Confirm::CloseDirty { tab, .. } => self.close_tab(tab, true),
             Confirm::RestartDaemon { .. } => {
                 // The connection loop notices the daemon is gone and starts
                 // the one built alongside this app.
                 self.call(Request::Shutdown, |_| None);
-                self.notify("restarting the daemon…", false);
+                self.notify(tr("restarting the daemon…"), false);
             }
         }
     }
@@ -3048,11 +3107,13 @@ impl App {
     /// Fonts, backdrop and blur from the settings, then persist any change.
     fn apply_settings(&mut self, ui: &egui::Ui, frame: &eframe::Frame) {
         let s = &self.settings;
-        let want = (s.font.clone(), s.font_weight, s.bold_weight);
+        let lang = crate::i18n::Lang::from_code(&s.language);
+        crate::i18n::set(lang);
+        let want = (s.font.clone(), s.font_weight, s.bold_weight, lang);
         if self.applied_font.as_ref() != Some(&want) {
             self.font_error = self
                 .fonts
-                .apply(ui.ctx(), want.0.as_ref(), want.1, want.2)
+                .apply(ui.ctx(), want.0.as_ref(), want.1, want.2, want.3)
                 .err();
             self.applied_font = Some(want);
         }
@@ -3092,7 +3153,7 @@ impl App {
                 Err(e) => {
                     // Don't retry every frame; the next change tries again.
                     self.saved_settings = self.settings.clone();
-                    self.notify(format!("couldn't save settings: {e}"), true);
+                    self.notify(trf!("couldn't save settings: {e}", e = e), true);
                 }
             }
         }
@@ -3144,7 +3205,7 @@ impl App {
         self.settings = s.clone();
         self.saved_settings = s;
         if problems.is_empty() {
-            self.notify("reloaded config.toml", false);
+            self.notify(tr("reloaded config.toml"), false);
         }
         for p in problems {
             self.notify(p, true);
