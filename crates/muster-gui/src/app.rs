@@ -3152,29 +3152,54 @@ impl App {
     }
 }
 
-/// A string literal for AppleScript: backslashes and quotes escaped.
-fn applescript_string(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+/// A Notification Center notification from Muster.app. osascript was used
+/// before, but macOS files those under Script Editor, which then opens when
+/// one is clicked. Without a bundle (`cargo run`) there's nothing to post as,
+/// and UNUserNotificationCenter throws, so it's skipped there.
+#[cfg(target_os = "macos")]
+fn notify_system(title: &str, body: &str) {
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSBundle, NSError, NSString};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationRequest,
+        UNUserNotificationCenter,
+    };
+
+    if NSBundle::mainBundle().bundleIdentifier().is_none() {
+        return;
+    }
+    let content = UNMutableNotificationContent::new();
+    content.setTitle(&NSString::from_str(title));
+    content.setBody(&NSString::from_str(body));
+    // A repeated identifier replaces the earlier notification.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+        &NSString::from_str(&format!("muster-{stamp}")),
+        &content,
+        None,
+    );
+    let center = UNUserNotificationCenter::currentNotificationCenter();
+    // Asks only the first time; after that it answers with the user's choice
+    // from System Settings straight away.
+    let post = block2::RcBlock::new({
+        let center = center.clone();
+        move |granted: Bool, _: *mut NSError| {
+            if granted.as_bool() {
+                center.addNotificationRequest_withCompletionHandler(&request, None);
+            }
+        }
+    });
+    center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert, &post);
 }
 
-/// A Notification Center / desktop notification. muster can run as a bare
-/// binary without an app bundle, which the native APIs need, so macOS goes
-/// through osascript and Linux through notify-send (as keel does).
+/// A desktop notification through notify-send, as keel does.
+#[cfg(not(target_os = "macos"))]
 fn notify_system(title: &str, body: &str) {
-    let mut c = if cfg!(target_os = "macos") {
-        let mut c = std::process::Command::new("osascript");
-        c.arg("-e").arg(format!(
-            "display notification {} with title {}",
-            applescript_string(body),
-            applescript_string(&format!("muster · {title}"))
-        ));
-        c
-    } else {
-        let mut c = std::process::Command::new("notify-send");
-        c.args(["--app-name=muster", title, body]);
-        c
-    };
-    let _ = c
+    let _ = std::process::Command::new("notify-send")
+        .args(["--app-name=muster", title, body])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
