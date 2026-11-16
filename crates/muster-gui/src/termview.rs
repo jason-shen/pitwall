@@ -711,6 +711,10 @@ impl TerminalView {
                             self.input_typed(&mut actions, vec![0x16]);
                         }
                     }
+                    // ⌘V with only an image on the clipboard. A terminal can't
+                    // carry the image itself; Claude Code and Codex read it off
+                    // the clipboard when they get Ctrl+V, so that's what goes.
+                    Event::PasteImage(_) => self.input_typed(&mut actions, vec![0x16]),
                     Event::Copy => {
                         if cfg!(target_os = "macos") || mods_now.shift {
                             if let Some(t) = self.selection_text() {
@@ -789,11 +793,13 @@ impl TerminalView {
                                 continue;
                             }
                             if key == Key::V {
-                                if let Ok(t) =
-                                    arboard::Clipboard::new().and_then(|mut c| c.get_text())
-                                {
-                                    self.back_to_live();
-                                    actions.push(TermAction::Paste(t));
+                                if let Ok(mut c) = arboard::Clipboard::new() {
+                                    if let Ok(t) = c.get_text() {
+                                        self.back_to_live();
+                                        actions.push(TermAction::Paste(t));
+                                    } else if c.get_image().is_ok() {
+                                        self.input_typed(&mut actions, vec![0x16]);
+                                    }
                                 }
                                 continue;
                             }
@@ -866,6 +872,28 @@ impl TerminalView {
             // Option+key with no text after it: Meta.
             if let Some(meta) = pending_meta {
                 self.input_typed(&mut actions, meta);
+            }
+        }
+
+        // Files dropped on the terminal paste their paths, escaped as iTerm
+        // and Terminal.app do. Claude Code attaches an image given its path.
+        // A drag in from Finder moves no egui pointer, so with no position
+        // the focused terminal takes it.
+        let no_pointer = ui.input(|i| i.pointer.latest_pos().is_none());
+        if interactive && (resp.contains_pointer() || (focused && no_pointer)) {
+            let paths: Vec<String> = ui.input(|i| {
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .map(|f| f.path())
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map(|p| shell_escape_path(&p.to_string_lossy()))
+                    .collect()
+            });
+            if !paths.is_empty() {
+                self.back_to_live();
+                actions.push(TermAction::Paste(paths.join(" ") + " "));
+                self.want_focus = true;
             }
         }
 
@@ -1715,6 +1743,17 @@ fn mouse_seq(
     }
 }
 
+fn shell_escape_path(p: &str) -> String {
+    let mut out = String::with_capacity(p.len());
+    for c in p.chars() {
+        if c.is_whitespace() || "\\'\"`$&|;<>()[]{}*?!#~^".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// xterm-compatible encoding of a key press.
 pub fn encode_key(key: Key, m: Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
     let modp = 1 + (m.shift as u8) + 2 * (m.alt as u8) + 4 * (m.ctrl as u8);
@@ -1833,6 +1872,15 @@ pub fn encode_key(key: Key, m: Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_paths_are_escaped() {
+        assert_eq!(
+            shell_escape_path("/Users/me/Desktop/Screen Shot (2).png"),
+            "/Users/me/Desktop/Screen\\ Shot\\ \\(2\\).png"
+        );
+        assert_eq!(shell_escape_path("/tmp/plain.png"), "/tmp/plain.png");
+    }
 
     #[test]
     fn command_marks_exit_codes_and_output() {

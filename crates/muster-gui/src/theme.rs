@@ -374,10 +374,12 @@ const MONO_CANDIDATES: &[&str] = &[
 const FALLBACK_CANDIDATES: &[&str] = &[
     "/System/Library/Fonts/Menlo.ttc",
     "/System/Library/Fonts/Apple Symbols.ttf",
+    // Ahead of STIX, which has a stray の that otherwise comes out small
+    // and high in Japanese text.
+    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
     // What macOS itself falls back to for ⏵ ⏸ ⏺ (Claude Code's mode line)
     // and ⎿ (under its tool output).
     "/System/Library/Fonts/Supplemental/STIXTwoMath.otf",
-    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -517,9 +519,79 @@ impl FontSet {
             FontFamily::Name(TERM_BOLD_FAMILY.into()),
             bold_chain.unwrap_or(chain),
         );
+        align_cjk_baselines(&mut fonts);
         ctx.set_fonts(fonts);
         result
     }
+}
+
+/// egui places a glyph from a fallback font by centring that font's line box
+/// on the primary's, not by putting it on the primary's baseline. CJK fonts
+/// have much taller line boxes than Latin ones, so Han and kana glyphs rode
+/// visibly high next to Latin text. Each family gets its own copy of every CJK
+/// fallback, shifted down onto the baseline of that family's primary font.
+/// Symbol and box-drawing fallbacks are left as they were.
+fn align_cjk_baselines(fonts: &mut FontDefinitions) {
+    let families: Vec<FontFamily> = fonts.families.keys().cloned().collect();
+    for family in families {
+        let chain = fonts.families[&family].clone();
+        let Some(primary) = chain.first().and_then(|n| fonts.font_data.get(n)) else {
+            continue;
+        };
+        let Some(p) = em_metrics(primary) else {
+            continue;
+        };
+        let mut out = Vec::with_capacity(chain.len());
+        for name in chain {
+            let shifted = fonts
+                .font_data
+                .get(&name)
+                .filter(|_| name.starts_with("sys:"))
+                .filter(|d| is_cjk(d))
+                .and_then(|d| Some((d, em_metrics(d)?)))
+                .map(|(d, f)| (d, p.ascent - f.ascent - 0.5 * (p.height - f.height)))
+                .filter(|(_, shift)| shift.abs() > 0.005);
+            match shifted {
+                Some((d, shift)) => {
+                    let mut d = (**d).clone();
+                    d.tweak.y_offset_factor += shift;
+                    let key = format!("{name}@{shift:.3}");
+                    fonts.font_data.insert(key.clone(), Arc::new(d));
+                    out.push(key);
+                }
+                None => out.push(name),
+            }
+        }
+        fonts.families.insert(family, out);
+    }
+}
+
+struct EmMetrics {
+    ascent: f32,
+    /// What egui takes as the row height: ascent - descent + line gap.
+    height: f32,
+}
+
+/// The same vertical metrics egui reads (skrifa's, at the default location).
+fn em_metrics(d: &FontData) -> Option<EmMetrics> {
+    use skrifa::{instance::LocationRef, instance::Size, MetadataProvider};
+    let font = skrifa::FontRef::from_index((*d.font).as_ref(), d.index).ok()?;
+    let m = font.metrics(Size::unscaled(), LocationRef::default());
+    let upem = m.units_per_em as f32;
+    (upem > 0.0).then(|| EmMetrics {
+        ascent: m.ascent / upem,
+        height: (m.ascent - m.descent + m.leading) / upem,
+    })
+}
+
+fn is_cjk(d: &FontData) -> bool {
+    use skrifa::MetadataProvider;
+    skrifa::FontRef::from_index((*d.font).as_ref(), d.index)
+        .map(|f| {
+            let cmap = f.charmap();
+            ['中', 'あ', '한'].iter().any(|&c| cmap.map(c).is_some())
+        })
+        .unwrap_or(false)
 }
 
 fn read_font(path: &std::path::Path, index: u32) -> Result<FontData, String> {
