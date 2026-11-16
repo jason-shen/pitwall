@@ -60,6 +60,8 @@ enum Action {
     StopBrief(PathBuf),
     Remark,
     DiscardHunk(muster_core::git::Hunk),
+    RemoveProject(String),
+    TrashFile(PathBuf),
     SendRemarks(String),
     ClearRemarks(String),
     HandOffBrief(PathBuf),
@@ -786,6 +788,14 @@ fn project_header(
             acts.push(Action::Copy(root.clone()));
             ui.close();
         }
+        ui.separator();
+        if ui
+            .button(RichText::new("Remove project…").color(RED))
+            .clicked()
+        {
+            acts.push(Action::RemoveProject(root.clone()));
+            ui.close();
+        }
     });
 }
 
@@ -980,6 +990,13 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
                 acts.push(Action::Copy(path.display().to_string()));
                 ui.close();
             }
+            if ui
+                .button(RichText::new("Move to Trash…").color(RED))
+                .clicked()
+            {
+                acts.push(Action::TrashFile(path.clone()));
+                ui.close();
+            }
         });
     }
     if let Some(it) = app.tabs.iter().find(|i| i.id == item) {
@@ -998,6 +1015,14 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
                 }
                 if ui.button("Copy path").clicked() {
                     acts.push(Action::Copy(path.display().to_string()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .button(RichText::new("Move to Trash…").color(RED))
+                    .clicked()
+                {
+                    acts.push(Action::TrashFile(path.clone()));
                     ui.close();
                 }
             });
@@ -1808,6 +1833,14 @@ fn files(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                         }
                         if ui.button("Copy path").clicked() {
                             acts.push(Action::Copy(ctx.join(&rel).display().to_string()));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
+                            .button(RichText::new("Move to Trash…").color(RED))
+                            .clicked()
+                        {
+                            acts.push(Action::TrashFile(ctx.join(&rel)));
                             ui.close();
                         }
                     });
@@ -3805,6 +3838,8 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                 Confirm::Remove { prune: true, .. }
                     | Confirm::Discard { .. }
                     | Confirm::DiscardHunk { .. }
+                    | Confirm::RemoveProject { .. }
+                    | Confirm::TrashFile { .. }
             );
         let mut answer: Option<bool> = None;
         let m = egui::Modal::new(Id::unique("confirm")).show(ctx, |ui| {
@@ -4964,6 +4999,8 @@ fn apply(app: &mut App, a: Action) {
         Action::FinishBrief(p) => app.finish_brief(&p),
         Action::StopBrief(p) => app.stop_brief(&p),
         Action::Remark => app.start_remark(),
+        Action::RemoveProject(root) => app.remove_project_prompt(&root),
+        Action::TrashFile(p) => app.trash_prompt(&p),
         Action::DiscardHunk(h) => {
             let text = format!(
                 "Throw away this hunk of {}?\n\nIt's undone in the working tree. The agent's snapshots still have it.",

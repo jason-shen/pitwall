@@ -5,7 +5,7 @@
 #   make test       tests and clippy
 #   make icon       Muster.icns and the window icon, from assets/*.svg
 #   make app        dist/Muster.app (universal, signed)
-#   make install    build for this Mac only, into ~/Applications, CLI on PATH
+#   make install    build for this Mac only, into /Applications, CLI on PATH
 #   make dist       the zip and its checksum
 #   make release    test, build, and publish vVERSION on GitHub
 #   make cask       point the Homebrew cask at that release
@@ -21,7 +21,7 @@ TAG       := v$(VERSION)
 REPO      ?= jason-shen/muster
 TAP       ?= jason-shen/homebrew-tap
 TARGETS   ?= aarch64-apple-darwin x86_64-apple-darwin
-DEST      ?= $(HOME)/Applications
+DEST      ?= /Applications
 BUNDLE_ID ?= nz.muster.app
 DEVELOPER_ID   ?=
 NOTARY_PROFILE ?=
@@ -101,7 +101,7 @@ endif
 # Just this Mac's architecture: quicker, and no second Rust target needed.
 install: TARGETS := $(HOST)
 install: app
-	mkdir -p "$(DEST)"
+	@mkdir -p "$(DEST)" 2>/dev/null; test -w "$(DEST)" || { echo "can't write to $(DEST); run it as an admin user, or pick a folder: make install DEST=~/Applications"; exit 1; }
 	rm -rf "$(DEST)/Muster.app"
 	cp -R $(APP) "$(DEST)/"
 	@if [ -d "$(HOME)/.local/bin" ]; then \

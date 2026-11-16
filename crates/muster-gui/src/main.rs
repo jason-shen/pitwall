@@ -16,6 +16,7 @@ mod term;
 mod termview;
 mod theme;
 mod tiling;
+mod trash;
 mod views;
 
 use std::path::PathBuf;

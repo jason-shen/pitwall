@@ -83,6 +83,10 @@ pub struct Settings {
     /// Projects folded up in the sidebar tree, by root folder.
     #[serde(skip)]
     pub folded_projects: std::collections::BTreeSet<String>,
+    /// Projects removed from the sidebar. Only the folder muster was opened
+    /// in needs this; a project with no terminals left drops off by itself.
+    #[serde(skip)]
+    pub hidden_projects: std::collections::BTreeSet<String>,
     /// AGENTS sorted by latest activity instead of what needs you.
     #[serde(skip)]
     pub agents_by_recent: bool,
@@ -95,6 +99,7 @@ struct State {
     project_names: std::collections::BTreeMap<String, String>,
     labels: std::collections::BTreeMap<String, String>,
     folded_projects: std::collections::BTreeSet<String>,
+    hidden_projects: std::collections::BTreeSet<String>,
     agents_by_recent: bool,
 }
 
@@ -129,6 +134,7 @@ impl Default for Settings {
             system_notifications: true,
             labels: Default::default(),
             folded_projects: Default::default(),
+            hidden_projects: Default::default(),
             agents_by_recent: false,
             project_names: Default::default(),
             // Ctrl+Alt: Alt+h/j/k/l, Alt+Enter and friends belong to the
@@ -228,6 +234,7 @@ impl Settings {
         s.project_names = state.project_names;
         s.labels = state.labels;
         s.folded_projects = state.folded_projects;
+        s.hidden_projects = state.hidden_projects;
         s.agents_by_recent = state.agents_by_recent;
         // Until [keys] is written, the card keys follow the old setting.
         let cards = match (table.contains_key("keys"), s.tile_mod) {
@@ -307,6 +314,7 @@ impl Settings {
             project_names: self.project_names.clone(),
             labels: self.labels.clone(),
             folded_projects: self.folded_projects.clone(),
+            hidden_projects: self.hidden_projects.clone(),
             agents_by_recent: self.agents_by_recent,
         };
         let sp = state_path();

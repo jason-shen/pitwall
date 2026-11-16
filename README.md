@@ -38,7 +38,7 @@ brew install --cask jason-shen/tap/muster   # Muster.app, and `muster` on your P
 From source you need Rust 1.80+ and `git`. macOS and Linux are supported. Windows isn't yet, since the daemon uses Unix sockets.
 
 ```sh
-make install                             # macOS: Muster.app in ~/Applications, `muster` in ~/.local/bin
+make install                             # macOS: Muster.app in /Applications, `muster` in ~/.local/bin
 cargo install --path crates/muster       # elsewhere: the daemon, CLI and terminal UI
 cargo install --path crates/muster-gui   # and the app
 muster-gui ~/code/my-app                 # or run `muster-gui` inside a repo
@@ -80,7 +80,7 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 
 ### Projects
 
-Every project (a git repo, or a folder that isn't one) is a branch of the tree: its **Changes**, its **Files**, files you've opened, then its terminals in the order you opened them. A terminal running an agent stays in its place and shows the agent's status. **+ Agent** and **+ Terminal** sit at the end of each project. Click a project to switch to it (⌘1–9, or ⌘⇧J / ⌘⇧K to step), and use ▸ to fold one away; the tree doesn't fold or reorder itself.
+Every project (a git repo, or a folder that isn't one) is a branch of the tree: its **Changes**, its **Files**, files you've opened, then its terminals in the order you opened them. A terminal running an agent stays in its place and shows the agent's status. **+ Agent** and **+ Terminal** sit at the end of each project. Click a project to switch to it (⌘1–9, or ⌘⇧J / ⌘⇧K to step), and use ▸ to fold one away; the tree doesn't fold or reorder itself. Right-click a project and **Remove project…** to take it off the sidebar: its terminals and agents close (agents' worktrees and branches stay), and the folder itself isn't touched. Adding the folder again with **+** brings it back.
 
 Terminals follow `cd`. A terminal that moves into another repo moves to that project.
 
@@ -121,7 +121,7 @@ The project's file tree. Clicking a file opens it in the editor you choose in Se
 
 Markdown files always open in the built-in editor, whatever you pick here (see below).
 
-⌘-click a path in a terminal (`src/app.rs:42` too) to open it the same way.
+⌘-click a path in a terminal (`src/app.rs:42` too) to open it the same way. Right-click a file, in the tree or where it's open, and **Move to Trash…** to delete it; it goes to the Trash, so the Finder's Put Back undoes it.
 
 ### Briefs
 
@@ -141,7 +141,7 @@ The cursor lands on the **Ask:** line, where you say what you want in your own w
 - **✦ Finish with AI** runs `claude -p` in the background with read-only tools (Read, Grep, Glob). It reads the code and fills in the rest, following the guide comment at the top of the template. Its reply streams straight into the brief, so you watch it write in the preview; the toolbar shows what it's reading meanwhile, with **Stop** to cancel. The brief is locked while it writes; if you stop it or it fails, the brief goes back to exactly what you had. It can't ask you anything mid-run, so choices that change what gets built come back as options and a recommendation under Choices (or Open questions).
 - **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it with `muster brief tick <n>` (the daemon writes the brief, so this works for sandboxed agents too, and it's allowed without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
 
-Briefs are listed under their project and saved in `.muster/briefs/` in the project, which is git-ignored by default (delete `.muster/.gitignore` to commit them).
+Briefs are listed under their project and saved in `.muster/briefs/` in the project, which is git-ignored by default (delete `.muster/.gitignore` to commit them). Right-click one and **Move to Trash…** to delete it.
 
 ### Markdown
 

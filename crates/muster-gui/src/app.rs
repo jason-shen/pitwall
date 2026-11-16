@@ -387,6 +387,16 @@ pub enum Confirm {
         hunk: git::Hunk,
         text: String,
     },
+    /// Close a project's terminals and take it off the sidebar.
+    RemoveProject {
+        root: String,
+        text: String,
+    },
+    /// Move a file to the Trash.
+    TrashFile {
+        path: PathBuf,
+        text: String,
+    },
     Discard {
         dir: PathBuf,
         change: Change,
@@ -409,6 +419,8 @@ impl Confirm {
             | Confirm::Remove { text, .. }
             | Confirm::Discard { text, .. }
             | Confirm::DiscardHunk { text, .. }
+            | Confirm::RemoveProject { text, .. }
+            | Confirm::TrashFile { text, .. }
             | Confirm::CloseDirty { text, .. }
             | Confirm::RestartDaemon { text } => text,
         }
@@ -1122,12 +1134,13 @@ impl App {
             .workspace_repo
             .clone()
             .unwrap_or_else(|| self.workspace.display().to_string());
+        let launch = Some(launch).filter(|l| !self.settings.hidden_projects.contains(l));
         let mut v: Vec<String> = self
             .tasks
             .values()
             .filter(|t| !crate::editors::is_editor_task(&t.id))
             .map(|t| t.repo.clone().unwrap_or_else(|| t.cwd.clone()))
-            .chain(Some(launch))
+            .chain(launch)
             .collect();
         v.sort();
         v.dedup();
@@ -2091,6 +2104,141 @@ impl App {
         v
     }
 
+    /// Ask before taking a project off the sidebar, saying what closes.
+    pub fn remove_project_prompt(&mut self, root: &str) {
+        let name = root.rsplit('/').next().unwrap_or(root).to_string();
+        let live: Vec<&TaskInfo> = self
+            .tasks
+            .values()
+            .filter(|t| {
+                self.project_of(t) == root && !matches!(t.status, TaskStatus::Exited { .. })
+            })
+            .collect();
+        let agents = live.iter().filter(|t| t.agent != "shell").count();
+        let terms = live.len() - agents;
+        let mut text = format!("Remove {name} from muster?\n\nThe folder isn't touched.");
+        if !live.is_empty() {
+            let mut what = vec![];
+            if terms > 0 {
+                what.push(format!(
+                    "{terms} terminal{}",
+                    if terms == 1 { "" } else { "s" }
+                ));
+            }
+            if agents > 0 {
+                what.push(format!(
+                    "{agents} agent{}",
+                    if agents == 1 { "" } else { "s" }
+                ));
+            }
+            text.push_str(&format!(
+                " Its {} close; agents' worktrees and branches stay.",
+                what.join(" and ")
+            ));
+        }
+        self.confirm = Some(Confirm::RemoveProject {
+            root: root.to_string(),
+            text,
+        });
+    }
+
+    fn remove_project(&mut self, root: &str) {
+        let item = project_item(root);
+        if let Some(e) = self
+            .tabs
+            .iter()
+            .find(|t| t.id == item)
+            .and_then(|t| t.files.iter().find(|e| e.dirty))
+        {
+            return self.notify(format!("save or revert {} first", e.name()), true);
+        }
+        let ids: Vec<String> = self
+            .tasks
+            .values()
+            .filter(|t| self.project_of(t) == root)
+            .map(|t| t.id.clone())
+            .collect();
+        if let Some(c) = &self.client {
+            for id in &ids {
+                c.send(Request::Remove {
+                    id: id.clone(),
+                    prune_worktree: false,
+                });
+            }
+        }
+        self.tabs.retain(|t| t.id != item);
+        self.cards.retain(|c| c.item != item);
+        self.settings.hidden_projects.insert(root.to_string());
+        self.settings.folded_projects.remove(root);
+        if self.project.as_deref() == Some(root) {
+            self.project = self.project_roots().into_iter().find(|r| r != root);
+            self.cards.clear();
+            self.active = 0;
+        }
+        let name = root.rsplit('/').next().unwrap_or(root);
+        self.notify(format!("removed {name} from muster"), false);
+    }
+
+    /// Ask before moving a file to the Trash.
+    pub fn trash_prompt(&mut self, path: &Path) {
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let unsaved = self
+            .tabs
+            .iter()
+            .flat_map(|t| &t.files)
+            .any(|e| e.path == path && e.dirty);
+        let mut text = format!("Move {name} to the Trash?");
+        if unsaved {
+            text.push_str("\n\nIt has unsaved changes, which go too.");
+        }
+        self.confirm = Some(Confirm::TrashFile {
+            path: path.to_path_buf(),
+            text,
+        });
+    }
+
+    fn trash_file(&mut self, path: &Path) {
+        if let Some(run) = self.brief_runs.get(path) {
+            run.stop();
+        }
+        if let Err(e) = crate::trash::trash(path) {
+            return self.notify(format!("{e}"), true);
+        }
+        // Wherever it was open, it's closed now.
+        for it in self.tabs.iter_mut() {
+            it.opened.retain(|p| p != path);
+            it.files.retain(|e| e.path != path);
+            it.file = 0;
+        }
+        for c in self.cards.iter_mut() {
+            if c.child == Child::File(path.to_path_buf()) {
+                c.child = if item_project(&c.item).is_some() {
+                    Child::Files
+                } else {
+                    Child::Terminal
+                };
+            }
+        }
+        self.brief_agents_forget(path);
+        self.briefs_cache.borrow_mut().clear();
+        self.md_disk.remove(path);
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.notify(format!("moved {name} to the Trash"), false);
+    }
+
+    /// A brief that's gone: its open run, if any, has nothing to write into.
+    fn brief_agents_forget(&mut self, path: &Path) {
+        self.brief_runs.remove(path);
+        self.md_mode.remove(path);
+        self.md_sync.remove(path);
+    }
+
     /// A brief's entry from the cached list: title and progress.
     pub fn brief_entry(&self, path: &Path) -> Option<crate::briefs::Entry> {
         let root = path.ancestors().nth(3)?.display().to_string();
@@ -2307,6 +2455,7 @@ impl App {
                 } else {
                     self.settings.project_names.remove(&key);
                 }
+                self.settings.hidden_projects.remove(&key);
                 self.project = Some(key);
                 self.cards.clear();
                 self.active = 0;
@@ -2864,6 +3013,8 @@ impl App {
                     },
                 );
             }
+            Confirm::RemoveProject { root, .. } => self.remove_project(&root),
+            Confirm::TrashFile { path, .. } => self.trash_file(&path),
             Confirm::DiscardHunk { dir, hunk, .. } => self.git_op(move |_| {
                 git::discard_hunk(&dir, &hunk).map(|_| format!("discarded a hunk of {}", hunk.file))
             }),
