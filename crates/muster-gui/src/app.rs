@@ -510,6 +510,11 @@ pub struct App {
     last_stats: Instant,
     /// A diffstat pass is still running; slow repos mustn't stack them up.
     stats_running: bool,
+    /// The terminals on screen, shared with the network thread so output
+    /// from others doesn't redraw the window.
+    shown: net::Shown,
+    /// See-through mode is set aside while muster isn't the focused app.
+    resting_opaque: Option<bool>,
     /// Gap between git polls; grows when a repo is slow to scan.
     git_every: Duration,
     pub sidebar: bool,
@@ -577,7 +582,8 @@ impl App {
             .build()
             .expect("tokio runtime");
         let (tx, rx) = std::sync::mpsc::channel();
-        net::start(&rt, ctx.clone(), tx.clone());
+        let shown: net::Shown = Default::default();
+        net::start(&rt, ctx.clone(), tx.clone(), shown.clone());
         let cfg = Config::load().unwrap_or_default();
         // Installed here, not on the first frame: egui only swaps fonts in at
         // the start of a pass, and drawing with the unregistered "terminal"
@@ -644,6 +650,8 @@ impl App {
             diffstats: HashMap::new(),
             last_stats: Instant::now() - Duration::from_secs(60),
             stats_running: false,
+            shown,
+            resting_opaque: None,
             git_every: Duration::from_millis(1500),
             sidebar: true,
             saved_settings: settings.clone(),
@@ -3045,9 +3053,27 @@ impl App {
             self.applied_font = Some(want);
         }
         let sch = theme::scheme(&s.scheme);
-        theme::set_backdrop(self.transparent, sch.bg, s.opacity.clamp(0.3, 1.0));
+        // See-through costs the compositor a lot: whatever is behind the
+        // window is blended (and blurred) on every refresh. Nobody is looking
+        // through muster while another app is in front, so then it rests
+        // opaque, which macOS composites like any other window.
+        let resting = self.transparent && !ui.ctx().input(|i| i.viewport().focused.unwrap_or(true));
+        let alpha = if resting {
+            1.0
+        } else {
+            s.opacity.clamp(0.3, 1.0)
+        };
+        theme::set_backdrop(self.transparent, sch.bg, alpha);
         if self.transparent {
-            let r = s.blur.clamp(0.0, crate::settings::BLUR_MAX).round() as i64;
+            if self.resting_opaque != Some(resting) {
+                set_window_opaque(frame, resting);
+                self.resting_opaque = Some(resting);
+            }
+            let r = if resting {
+                0
+            } else {
+                s.blur.clamp(0.0, crate::settings::BLUR_MAX).round() as i64
+            };
             if self.applied_blur != Some(r) {
                 set_window_blur(frame, r);
                 self.applied_blur = Some(r);
@@ -3177,6 +3203,43 @@ impl App {
     /// output, typing and the mouse all wake it anyway. What's left is
     /// the spinner of a working agent, a toast running out, and the polls in
     /// `tick` (git status, files changed on disk, layout).
+    /// Tell the network thread which terminals are on screen: the cards
+    /// showing one (just the maximized card when zoomed), and none while
+    /// the window is minimized or covered.
+    fn publish_shown(&self, ctx: &egui::Context) {
+        let hidden = ctx.input(|i| {
+            let v = i.viewport();
+            v.minimized == Some(true) || v.occluded == Some(true)
+        });
+        let now: std::collections::HashSet<String> = if hidden {
+            Default::default()
+        } else if self.zoom {
+            self.cards
+                .get(self.active)
+                .filter(|c| c.child == Child::Terminal)
+                .map(|c| c.item.clone())
+                .into_iter()
+                .collect()
+        } else {
+            self.terminal_cards().into_iter().collect()
+        };
+        if std::env::var_os("MUSTER_TRACE_REPAINT").is_some() {
+            let v = ctx.input(|i| {
+                (
+                    i.viewport().minimized,
+                    i.viewport().occluded,
+                    i.viewport().focused,
+                )
+            });
+            eprintln!("shown {:?} (minimized, occluded, focused) = {v:?}", now);
+        }
+        if let Ok(mut s) = self.shown.write() {
+            if *s != now {
+                *s = now;
+            }
+        }
+    }
+
     fn next_wake(&self) -> Duration {
         let working = self
             .tasks
@@ -3262,14 +3325,60 @@ fn set_window_blur(_frame: &eframe::Frame, _radius: i64) -> bool {
     true
 }
 
+/// Tell macOS the window has no see-through parts, so it skips blending
+/// what's behind it.
+#[cfg(target_os = "macos")]
+fn set_window_opaque(frame: &eframe::Frame, opaque: bool) {
+    use objc2::runtime::{AnyObject, Bool};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = frame.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+        return;
+    };
+    let view = h.ns_view.as_ptr() as *mut AnyObject;
+    unsafe {
+        let window: *mut AnyObject = objc2::msg_send![view, window];
+        if !window.is_null() {
+            let _: () = objc2::msg_send![window, setOpaque: Bool::new(opaque)];
+            // A see-through window's shadow is traced from its pixels every
+            // time it redraws, which costs the compositor more than the
+            // see-through itself. See-through windows go without.
+            let _: () = objc2::msg_send![window, setHasShadow: Bool::new(false)];
+        }
+        // The compositor goes by the layers, not the window's flag: wgpu's
+        // Metal layer (the view's, or one under it) was made see-through.
+        let layer: *mut AnyObject = objc2::msg_send![view, layer];
+        if !layer.is_null() {
+            let _: () = objc2::msg_send![layer, setOpaque: Bool::new(opaque)];
+            let subs: *mut AnyObject = objc2::msg_send![layer, sublayers];
+            if !subs.is_null() {
+                let n: usize = objc2::msg_send![subs, count];
+                for i in 0..n {
+                    let sub: *mut AnyObject = objc2::msg_send![subs, objectAtIndex: i];
+                    let _: () = objc2::msg_send![sub, setOpaque: Bool::new(opaque)];
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_window_opaque(_frame: &eframe::Frame, _opaque: bool) {}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if std::env::var_os("MUSTER_TRACE_REPAINT").is_some() {
+            eprintln!("frame {:?}", ui.ctx().repaint_causes());
+        }
         self.pump();
         self.apply_settings(ui, frame);
         if let Some(t) = theme::backdrop() {
             ui.painter().rect_filled(ui.max_rect(), 0.0, t);
         }
         crate::views::draw(ui, self);
+        self.publish_shown(ui.ctx());
         #[cfg(debug_assertions)]
         if let Some(mut d) = self.devshot.take() {
             d.tick(&ui.ctx().clone(), self);

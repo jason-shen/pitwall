@@ -4818,7 +4818,13 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
 
                 ui.add_space(8.0);
                 settings_heading(ui, "Window");
-                if ui.checkbox(&mut s.see_through, "See-through window").changed()
+                if ui
+                    .checkbox(&mut s.see_through, "See-through window")
+                    .on_hover_text(
+                        "The system has to blend whatever is behind the window, which costs some GPU. \
+                         The window has no shadow then, and turns opaque while another app is in front.",
+                    )
+                    .changed()
                     && s.see_through
                     && s.opacity >= 1.0
                 {
