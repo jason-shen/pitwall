@@ -2677,6 +2677,35 @@ impl App {
         self.focus_pane = true;
     }
 
+    /// Whether editor task `id` has an editor in it. Alive isn't enough: one
+    /// saved before the daemon kept task args comes back as a bare shell, and
+    /// typing `:e file` into that ran `e` in zsh. A shell in the foreground on
+    /// the normal screen means it's stale, unless the task has only just
+    /// started and the editor hasn't taken over yet.
+    pub fn editor_running(&self, id: &str) -> bool {
+        let Some(t) = self.tasks.get(id) else {
+            return false;
+        };
+        if matches!(t.status, TaskStatus::Exited { .. }) {
+            return false;
+        }
+        let at_shell =
+            t.fg.as_deref()
+                .map(|f| f.trim_start_matches('-'))
+                .is_some_and(|f| {
+                    [
+                        "zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "xonsh",
+                    ]
+                    .contains(&f)
+                });
+        let alt_screen = self
+            .terms
+            .get(id)
+            .is_some_and(|s| s.view.parser.lock().unwrap().screen().alternate_screen());
+        let settled = muster_core::now_unix() - t.created_unix > 3;
+        !(at_shell && !alt_screen && settled)
+    }
+
     /// nvim/helix/… in a PTY inside the Editor view. One per tab, kept as a
     /// daemon task so it survives restarts; a second file goes to the running
     /// editor where it has a way to take one.
@@ -2685,11 +2714,7 @@ impl App {
             return;
         };
         let id = crate::editors::task_id(&item);
-        let running = self
-            .tasks
-            .get(&id)
-            .is_some_and(|t| !matches!(t.status, TaskStatus::Exited { .. }));
-        if running {
+        if self.editor_running(&id) {
             match crate::editors::reopen_keys(cmd, path, line) {
                 Some(keys) => self.send_input(&id, keys),
                 None => self.notify(
@@ -2702,15 +2727,11 @@ impl App {
             }
             return;
         }
-        if self.tasks.contains_key(&id) {
-            // Exited editor still registered; clear it so the name is free.
-            if let Some(c) = &self.client {
-                c.send(Request::Remove {
-                    id: id.clone(),
-                    prune_worktree: false,
-                });
-            }
-            self.tasks.remove(&id);
+        // An exited or stale editor still holds the name. The new one has to
+        // wait for it to be gone, or the daemon calls it `<id>-2` and the next
+        // file starts yet another editor.
+        let replace = self.tasks.remove(&id).is_some();
+        if replace {
             self.terms.remove(&id);
         }
         let dir = self.ctx_dir();
@@ -2728,10 +2749,27 @@ impl App {
             cols,
             brief: None,
         };
-        self.call(Request::NewTask(req), move |r| match r {
-            Ok(Response::Task(t)) => Some(Reply::Created(t, true)),
-            Err(e) => Some(Reply::Notice(e, true)),
-            _ => None,
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let ctx = self.ctx.clone();
+        self.rt.spawn(async move {
+            if replace {
+                let _ = client
+                    .call(Request::Remove {
+                        id: req.name.clone(),
+                        prune_worktree: false,
+                    })
+                    .await;
+            }
+            let reply = match client.call(Request::NewTask(req)).await {
+                Ok(Response::Task(t)) => Reply::Created(t, true),
+                Err(e) => Reply::Notice(format!("{e:#}"), true),
+                Ok(_) => return,
+            };
+            let _ = tx.send(Ev::Reply(reply));
+            ctx.request_repaint();
         });
     }
 

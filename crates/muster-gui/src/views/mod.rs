@@ -3079,11 +3079,7 @@ fn file_editor(
                 .map(|t| t.item.clone())
                 .unwrap_or_default();
             let ed = crate::editors::task_id(&item);
-            let live = app
-                .tasks
-                .get(&ed)
-                .is_some_and(|t| !matches!(t.status, TaskStatus::Exited { .. }));
-            if live {
+            if app.editor_running(&ed) {
                 term_body(ui, app, side, &ed, body, focused, acts);
             } else {
                 center(
