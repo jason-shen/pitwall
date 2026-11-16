@@ -146,6 +146,7 @@
 "done" = "完了"
 "Double-click to rename" = "ダブルクリックで名前を変更"
 "Draw bold text in bright colours" = "太字を明るい色で表示"
+"Drop files on a terminal to paste their paths" = "ファイルをターミナルにドロップするとパスを貼り付けます"
 "Drop to swap" = "ドロップして入れ替え"
 "Drop to tile beside" = "ドロップして横に並べる"
 "e: open at this line" = "e：この行で開く"

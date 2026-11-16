@@ -3563,6 +3563,10 @@ impl eframe::App for App {
                 modifiers: Default::default(),
             });
         }
+        if let Some(p) = self.devshot.as_mut().and_then(|d| d.dropped.take()) {
+            raw.dropped_files
+                .push(std::sync::Arc::new(crate::devshot::Dropped(p)));
+        }
         if let Some((key, shift)) = self.devshot.as_mut().and_then(|d| d.key.take()) {
             let mut m = egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND;
             m.shift = shift;

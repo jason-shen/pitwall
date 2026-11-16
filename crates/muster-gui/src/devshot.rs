@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, split, select, size:WxH), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -16,6 +16,8 @@ pub struct DevShot {
     pub key: Option<(egui::Key, bool)>,
     /// Text to type in with the next frame's input, then Enter.
     pub typed: Option<String>,
+    /// A file to drop on the window with the next frame's input.
+    pub dropped: Option<std::path::PathBuf>,
     /// Set by the screenshot callback once the file is written.
     waiting: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -36,6 +38,7 @@ impl DevShot {
             waiting: None,
             key: None,
             typed: None,
+            dropped: None,
         })
     }
 
@@ -111,6 +114,7 @@ impl DevShot {
                     }
                 }
                 Some(("newagent", task)) => app.open_new_agent(task),
+                Some(("drop", path)) => self.dropped = Some(path.into()),
                 Some(("newproject", dir)) => {
                     app.open_new_project();
                     if let Some(f) = app.new_form.as_mut() {
@@ -215,4 +219,18 @@ fn save_bmp(path: &str, img: &egui::ColorImage) -> std::io::Result<()> {
         out.extend(std::iter::repeat_n(0, pad));
     }
     std::fs::write(path, out)
+}
+
+/// What a Finder drop hands egui: just a path, and no pointer position.
+#[derive(Debug)]
+pub struct Dropped(pub std::path::PathBuf);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
 }

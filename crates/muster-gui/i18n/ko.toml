@@ -146,6 +146,7 @@
 "done" = "완료"
 "Double-click to rename" = "더블클릭하여 이름 변경"
 "Draw bold text in bright colours" = "굵은 글씨를 밝은 색으로 표시"
+"Drop files on a terminal to paste their paths" = "파일을 터미널에 놓으면 경로가 붙여넣어집니다"
 "Drop to swap" = "놓으면 위치 교환"
 "Drop to tile beside" = "놓으면 옆에 배치"
 "e: open at this line" = "e: 이 줄에서 열기"

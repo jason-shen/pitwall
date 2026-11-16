@@ -236,6 +236,7 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
         .frame(Frame::new().fill(ground).inner_margin(Margin::same(8)))
         .show(ui, |ui| stage(ui, app, accent, &mut acts));
     overlays(&ctx, app, &mut acts);
+    dropped_files(&ctx, app, &mut acts);
     dialogs(&ctx, app, &mut acts);
     command_bar(&ctx, app, &mut acts);
     shortcuts_sheet(&ctx, app);
@@ -3983,6 +3984,42 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
     } else if create {
         app.submit_form();
     }
+}
+
+/// Files dropped on the window paste their paths into a terminal, as other
+/// terminals do; Claude Code attaches an image given its path. It goes to the
+/// terminal card under the pointer, else the active terminal. A drag from
+/// Finder usually leaves egui with no pointer position and muster unfocused,
+/// so neither can be relied on.
+fn dropped_files(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
+    let (paths, pos) = ctx.input(|i| {
+        let paths: Vec<String> = i
+            .raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path())
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| termview::shell_escape_path(&p.to_string_lossy()))
+            .collect();
+        (paths, i.pointer.latest_pos())
+    });
+    if paths.is_empty() {
+        return;
+    }
+    let is_term = |t: &&Target| t.child == Child::Terminal;
+    let under = pos
+        .and_then(|p| app.card_rects.iter().position(|r| r.contains(p)))
+        .and_then(|i| app.cards.get(i))
+        .filter(is_term);
+    let Some(id) = under
+        .or_else(|| app.target().filter(is_term))
+        .map(|t| t.item.clone())
+        .or_else(|| app.last_term.clone())
+    else {
+        app.notify(tr("Drop files on a terminal to paste their paths"), false);
+        return;
+    };
+    acts.push(Action::Paste(id, paths.join(" ") + " "));
 }
 
 fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {

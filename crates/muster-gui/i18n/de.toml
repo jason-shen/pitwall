@@ -146,6 +146,7 @@
 "done" = "fertig"
 "Double-click to rename" = "Doppelklicken zum Umbenennen"
 "Draw bold text in bright colours" = "Fetten Text in hellen Farben zeichnen"
+"Drop files on a terminal to paste their paths" = "Zieh Dateien auf ein Terminal, um ihre Pfade einzufügen"
 "Drop to swap" = "Ablegen zum Tauschen"
 "Drop to tile beside" = "Ablegen, um daneben anzuordnen"
 "e: open at this line" = "e: an dieser Zeile öffnen"

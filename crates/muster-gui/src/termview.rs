@@ -875,28 +875,6 @@ impl TerminalView {
             }
         }
 
-        // Files dropped on the terminal paste their paths, escaped as iTerm
-        // and Terminal.app do. Claude Code attaches an image given its path.
-        // A drag in from Finder moves no egui pointer, so with no position
-        // the focused terminal takes it.
-        let no_pointer = ui.input(|i| i.pointer.latest_pos().is_none());
-        if interactive && (resp.contains_pointer() || (focused && no_pointer)) {
-            let paths: Vec<String> = ui.input(|i| {
-                i.raw
-                    .dropped_files
-                    .iter()
-                    .map(|f| f.path())
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .map(|p| shell_escape_path(&p.to_string_lossy()))
-                    .collect()
-            });
-            if !paths.is_empty() {
-                self.back_to_live();
-                actions.push(TermAction::Paste(paths.join(" ") + " "));
-                self.want_focus = true;
-            }
-        }
-
         // ---------------- mouse ----------------
         let pointer = ui.input(|i| i.pointer.clone());
         let hover_pos = resp.hover_pos();
@@ -1743,7 +1721,8 @@ fn mouse_seq(
     }
 }
 
-fn shell_escape_path(p: &str) -> String {
+/// A path as iTerm and Terminal.app paste a dropped file: backslash-escaped.
+pub fn shell_escape_path(p: &str) -> String {
     let mut out = String::with_capacity(p.len());
     for c in p.chars() {
         if c.is_whitespace() || "\\'\"`$&|;<>()[]{}*?!#~^".contains(c) {
