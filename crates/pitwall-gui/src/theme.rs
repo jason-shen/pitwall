@@ -185,6 +185,14 @@ pub fn term_bold_font(size: f32) -> Option<egui::FontId> {
 
 static REAL_BOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+const ICON_FAMILY: &str = "icons";
+
+/// Nerd Font symbols (file and language icons), from the bundled symbols-only
+/// font so they show whatever terminal font is picked.
+pub fn icon_font(size: f32) -> egui::FontId {
+    egui::FontId::new(size, FontFamily::Name(ICON_FAMILY.into()))
+}
+
 /// One face of a font family, as far as picking a weight goes.
 #[derive(Clone, Debug)]
 struct Face {
@@ -450,6 +458,16 @@ impl FontSet {
             .entry(FontFamily::Proportional)
             .or_default()
             .extend(fallbacks);
+        fonts.font_data.insert(
+            "nerd-symbols".into(),
+            Arc::new(FontData::from_static(include_bytes!(
+                "../../../assets/fonts/SymbolsNerdFont-Regular.ttf"
+            ))),
+        );
+        fonts.families.insert(
+            FontFamily::Name(ICON_FAMILY.into()),
+            vec!["nerd-symbols".into()],
+        );
         Self { base: fonts }
     }
 
