@@ -325,6 +325,7 @@ pub enum Reply {
     },
     RemarksSent(String, Result<usize, String>),
     Diffstats(Vec<(String, (usize, usize, usize))>),
+    Fleet(crate::remote::FleetReply),
 }
 
 pub struct GitData {
@@ -465,6 +466,15 @@ pub struct App {
     pub open_in_new_card: bool,
     /// Typing in one terminal card goes to every terminal card.
     pub broadcast: bool,
+    /// SSH hosts from config.toml and ~/.ssh/config, and when they were read.
+    pub hosts: Vec<pitwall_core::config::HostConfig>,
+    pub hosts_read: Instant,
+    pub ssh_batch: crate::remote::Batch,
+    /// Ended sessions being reconnected, as (host, old session): the new
+    /// one takes over the old one's card.
+    pub ssh_reconnects: Vec<(String, String)>,
+    /// The window for running a command across hosts, while it's open.
+    pub fleet: Option<crate::remote::FleetUi>,
     saved_layout: Option<crate::layout::Layout>,
     /// Terminals opened for an agent (terminal id -> agent id): listed under
     /// the agent and grouped with its project.
@@ -650,6 +660,11 @@ impl App {
             card_rects: vec![],
             open_in_new_card: false,
             broadcast: false,
+            hosts: vec![],
+            hosts_read: Instant::now() - Duration::from_secs(60),
+            ssh_batch: Default::default(),
+            ssh_reconnects: vec![],
+            fleet: None,
             saved_layout: None,
             parent_of: Default::default(),
             pending_parent: None,
@@ -1279,6 +1294,9 @@ impl App {
     /// Which project (repo root) a task belongs to. Shells go wherever they
     /// have cd'd to, if that's inside a known repo.
     pub fn project_of(&self, t: &TaskInfo) -> String {
+        if t.host.is_some() {
+            return crate::remote::SSH_PROJECT.into();
+        }
         // An agent's terminal goes with the agent, even when it sits in the
         // agent's worktree outside the repo.
         if let Some(p) = self.parent_of.get(&t.id).and_then(|p| self.tasks.get(p)) {
@@ -1309,6 +1327,8 @@ impl App {
             .tasks
             .values()
             .filter(|t| !crate::editors::is_editor_task(&t.id))
+            // Listed under HOSTS, not as a project of their home folder.
+            .filter(|t| t.host.is_none())
             .map(|t| t.repo.clone().unwrap_or_else(|| t.cwd.clone()))
             .chain(launch)
             .collect();
@@ -2185,7 +2205,11 @@ impl App {
                     self.queue_review(&t.id);
                 }
                 // A plain shell that exited closes its tab, like any terminal app.
-                if t.agent == "shell" && matches!(t.status, TaskStatus::Exited { .. }) {
+                // An SSH session stays, so the reason it ended is still on screen.
+                if t.agent == "shell"
+                    && t.host.is_none()
+                    && matches!(t.status, TaskStatus::Exited { .. })
+                {
                     let id = t.id.clone();
                     self.tasks.insert(t.id.clone(), t);
                     if let Some(i) = self.tabs.iter().position(|x| x.id == id) {
@@ -2313,6 +2337,10 @@ impl App {
                 if crate::editors::is_editor_task(&id) {
                     return;
                 }
+                // Named after its host already, so no rename box.
+                if self.tasks[&id].host.is_some() {
+                    return self.place_session(&id);
+                }
                 if let Some(p) = self.pending_parent.take().filter(|_| shell) {
                     self.parent_of.insert(id.clone(), p);
                 }
@@ -2373,6 +2401,7 @@ impl App {
                 self.refresh_git_now();
                 self.reload_main();
             }
+            Reply::Fleet(r) => self.on_fleet(r),
             Reply::Diffstats(v) => {
                 self.stats_running = false;
                 self.diffstats = v.into_iter().collect();
@@ -2958,6 +2987,7 @@ impl App {
             rows,
             cols,
             brief: brief.map(|b| b.display().to_string()),
+            host: None,
         };
         self.call(Request::NewTask(req), move |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t, shell)),
@@ -3150,6 +3180,7 @@ impl App {
             rows,
             cols,
             brief: None,
+            host: None,
         };
         let Some(client) = self.client.clone() else {
             return;

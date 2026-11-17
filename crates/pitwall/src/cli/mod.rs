@@ -397,6 +397,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
                 rows,
                 cols,
                 brief: None,
+                host: None,
             };
             let Response::Task(t) = client.call(Request::NewTask(req)).await? else {
                 bail!("unexpected reply")

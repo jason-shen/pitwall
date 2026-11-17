@@ -12,6 +12,7 @@ mod keys;
 mod layout;
 mod markdown;
 mod net;
+mod remote;
 mod reviews;
 mod settings;
 mod term;

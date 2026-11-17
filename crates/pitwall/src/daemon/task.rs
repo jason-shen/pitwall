@@ -132,6 +132,8 @@ pub struct Task {
     pub prompt: Option<String>,
     /// Its own arguments (an editor card's `-c "exec nvim …"`), kept for a restart.
     pub args: Vec<String>,
+    /// An SSH session's host: it runs `ssh` with `args` instead of the agent.
+    pub host: Option<String>,
     pub created_unix: i64,
     pid: Option<u32>,
     pub state: Mutex<TaskState>,
@@ -580,6 +582,8 @@ pub struct Saved {
     pub had_turn: bool,
     #[serde(default)]
     pub auto: bool,
+    #[serde(default)]
+    pub host: Option<String>,
     pub created_unix: i64,
 }
 
@@ -611,6 +615,7 @@ impl Saved {
             base_branch: self.place.base_branch.clone(),
             turn_done: false,
             auto: self.auto,
+            host: self.host.clone(),
         }
     }
 }
@@ -673,6 +678,7 @@ impl Task {
             brief: saved.brief,
             prompt: if resume { None } else { saved.prompt },
             args: saved.args,
+            host: saved.host,
             ..Default::default()
         };
         let extra = if resume {
@@ -716,6 +722,7 @@ impl Task {
             args: self.args.clone(),
             had_turn: self.state.lock().unwrap().had_turn,
             auto: self.auto.load(Ordering::Relaxed),
+            host: self.host.clone(),
             created_unix: self.created_unix,
         }
     }
@@ -752,7 +759,20 @@ impl Task {
             })
             .map_err(|e| anyhow!("openpty: {e}"))?;
 
-        let program = resolve_command(&agent_cfg.command);
+        // An SSH session is a plain terminal that runs ssh instead of $SHELL,
+        // so it's treated as a shell everywhere else.
+        if req.host.is_some() && req.agent != "shell" {
+            bail!("an SSH session runs as a shell, not {}", req.agent);
+        }
+        let program = match &req.host {
+            Some(_) => "ssh".to_string(),
+            None => resolve_command(&agent_cfg.command),
+        };
+        let own_args: &[String] = if req.host.is_some() {
+            &[]
+        } else {
+            &agent_cfg.args
+        };
         let mut cmd = CommandBuilder::new(&program);
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("pitwall"));
         if agent_cfg.hooks.as_deref() == Some("claude") {
@@ -777,7 +797,7 @@ impl Task {
                 );
             }
         }
-        for a in agent_cfg.args.iter().chain(&req.args).chain(extra) {
+        for a in own_args.iter().chain(&req.args).chain(extra) {
             cmd.arg(a);
         }
         if let (Some(p), "arg") = (&req.prompt, agent_cfg.prompt_mode.as_str()) {
@@ -868,6 +888,7 @@ impl Task {
             brief: req.brief.clone(),
             prompt: req.prompt.clone(),
             args: req.args.clone(),
+            host: req.host.clone(),
             created_unix,
             pid,
             state: Mutex::new(TaskState {
@@ -1095,6 +1116,7 @@ impl Task {
             turn_done,
             auto: self.auto.load(Ordering::Relaxed),
             base_branch: self.base_branch.clone(),
+            host: self.host.clone(),
         }
     }
 

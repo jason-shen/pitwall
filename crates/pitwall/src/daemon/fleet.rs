@@ -8,8 +8,8 @@ use pitwall_core::config::{Config, HostConfig};
 use pitwall_core::paths;
 use pitwall_core::proto::{HostInfo, HostResult};
 
-pub fn host_infos(cfg: &Config) -> Vec<HostInfo> {
-    cfg.hosts
+pub fn host_infos(hosts: &[HostConfig]) -> Vec<HostInfo> {
+    hosts
         .iter()
         .map(|h| HostInfo {
             name: h.name.clone(),

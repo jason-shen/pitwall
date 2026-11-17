@@ -1043,6 +1043,7 @@ impl App {
             rows: size.0.max(10),
             cols: size.1.max(40),
             brief: None,
+            host: None,
         };
         self.spawn_call(Request::NewTask(req), |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t)),

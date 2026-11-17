@@ -13,6 +13,7 @@ use pitwall_core::{now_unix, paths};
 
 mod fileicon;
 mod gitview;
+mod hosts;
 
 use crate::app::{
     agent_kind, is_agent, item_project, project_item, task_dir, App, Child, CmdBar, Confirm,
@@ -120,6 +121,14 @@ enum Action {
     ToggleZoom,
     ToggleBroadcast,
     Copy(String),
+    /// Open an SSH session to a host.
+    Connect(String),
+    /// An ended SSH session, started again in its card.
+    Reconnect(String),
+    /// Every host a selector matches, side by side.
+    ConnectAll(String),
+    /// The run-on-hosts window, with this selector filled in.
+    OpenFleet(String),
     External(PathBuf, usize),
     ToggleDir(String),
     Settings,
@@ -246,6 +255,7 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
     overlays(&ctx, app, &mut acts);
     dropped_files(&ctx, app, &mut acts);
     dialogs(&ctx, app, &mut acts);
+    hosts::fleet_window(&ctx, app);
     command_bar(&ctx, app, &mut acts);
     shortcuts_sheet(&ctx, app);
     settings_window(&ctx, app);
@@ -263,6 +273,9 @@ fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
 
 /// A project's name: the one you gave it, or its folder's.
 fn project_title(app: &App, root: &str) -> String {
+    if root == crate::remote::SSH_PROJECT {
+        return "SSH".into();
+    }
     app.settings
         .project_names
         .get(root)
@@ -707,6 +720,7 @@ fn side_list(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             ui.add_space(6.0);
         }
     }
+    hosts::section(ui, app, acts);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1137,10 +1151,12 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
     };
     let mut right = strip.right();
     let mut toggles = vec![];
-    for (label, child, key) in [
+    // SSH sessions have no local folder to show.
+    let ssh = app.project.as_deref() == Some(crate::remote::SSH_PROJECT);
+    for (label, child, key) in if ssh { vec![] } else { vec![
         (tr("▤ Files").to_string(), Child::Files, "show_files"),
         (changes, Child::Changes, "show_changes"),
-    ] {
+    ] } {
         let w = ui
             .painter()
             .layout_no_wrap(label.clone(), FontId::proportional(12.5), TEXT)
@@ -1247,7 +1263,13 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
                 tab(ui, app, &id, width, acts);
             }
             let root = app.project.clone().unwrap_or_default();
-            if ui
+            if ssh {
+                ui.menu_button(RichText::new("+").size(15.0).color(MUTED), |ui| {
+                    hosts::add_menu(ui, app, acts)
+                })
+                .response
+                .on_hover_text(tr("New SSH session"));
+            } else if ui
                 .add(
                     egui::Button::new(RichText::new("+").size(15.0).color(MUTED))
                         .frame_when_inactive(false)
@@ -2130,6 +2152,7 @@ fn stage(ui: &mut Ui, app: &mut App, accent: Color32, acts: &mut Vec<Action>) {
         welcome(&mut c, app, acts);
         return;
     }
+    let rect = hosts::broadcast_strip(ui, app, rect, acts);
     // Cards in keel's grid; maximized, only the focused one, full size.
     let gap = vec2(8.0, 8.0);
     let rects = if app.zoom {
@@ -2715,7 +2738,10 @@ fn card(
         return;
     }
     match t.child {
-        Child::Terminal => term_body(ui, app, side, &t.item, body, focused, acts),
+        Child::Terminal => {
+            term_body(ui, app, side, &t.item, body, focused, acts);
+            hosts::ended_bar(ui, app, &t.item, body, acts);
+        }
         // Each card gets its own id scope: two cards both showing Changes or
         // Files would otherwise share their scroll areas' ids.
         Child::Changes => {
@@ -5715,6 +5741,10 @@ fn apply(app: &mut App, a: Action) {
             }
         }
         Action::ToggleBroadcast => app.broadcast = !app.broadcast,
+        Action::Connect(h) => app.connect(&h),
+        Action::Reconnect(id) => app.reconnect(&id),
+        Action::ConnectAll(sel) => app.connect_all(&sel),
+        Action::OpenFleet(sel) => app.open_fleet(&sel),
         Action::Copy(text) => {
             let lines = text.trim_end_matches('\n').lines().count();
             app.ctx.copy_text(text);

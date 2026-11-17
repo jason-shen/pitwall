@@ -369,13 +369,14 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             }
         }
 
-        Request::Hosts => Response::Hosts(fleet::host_infos(&d.cfg)),
+        Request::Hosts => Response::Hosts(fleet::host_infos(&hosts::current(&d.cfg.hosts))),
         Request::FleetRun {
             selector,
             command,
             confirmed,
         } => {
-            let targets: Vec<_> = hosts::select(&d.cfg.hosts, &selector)
+            let all = hosts::current(&d.cfg.hosts);
+            let targets: Vec<_> = hosts::select(&all, &selector)
                 .into_iter()
                 .cloned()
                 .collect();

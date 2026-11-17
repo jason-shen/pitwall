@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -136,6 +136,19 @@ impl DevShot {
                     }
                 }
                 Some(("drop", path)) => self.dropped = Some(path.into()),
+                Some(("connect", sel)) => {
+                    app.refresh_hosts(true);
+                    app.connect_all(sel);
+                }
+                Some(("fleet", spec)) => {
+                    app.refresh_hosts(true);
+                    let (sel, cmd) = spec.split_once(':').unwrap_or((spec, "uptime"));
+                    app.open_fleet(sel);
+                    if let Some(f) = app.fleet.as_mut() {
+                        f.command = cmd.to_string();
+                    }
+                    app.run_fleet(false);
+                }
                 Some(("newproject", dir)) => {
                     app.open_new_project();
                     if let Some(f) = app.new_form.as_mut() {

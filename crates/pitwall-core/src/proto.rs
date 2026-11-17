@@ -108,6 +108,10 @@ pub struct TaskInfo {
     /// Auto mode: pitwall approves its commands without asking.
     #[serde(default)]
     pub auto: bool,
+    /// The SSH host this terminal is connected to, for a session opened
+    /// from the host list.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -185,6 +189,10 @@ pub struct NewTask {
     /// The brief this agent is building, so the two stay linked.
     #[serde(default)]
     pub brief: Option<String>,
+    /// Run `ssh` with `args` instead of the agent's command: an interactive
+    /// session to this host. Only with the shell agent.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
