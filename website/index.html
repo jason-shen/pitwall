@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>muster · the workspace for agentic coding</title>
+  <meta name="description" content="Write a brief, run coding agents in parallel on their own worktrees, review what they did and merge it. All in one GPU-drawn window.">
+  <meta property="og:title" content="muster · the workspace for agentic coding">
+  <meta property="og:description" content="Run agents in parallel. Merge what they build. Claude Code, Codex and friends in one window, each on its own worktree.">
+  <meta property="og:image" content="assets/screenshot.png">
+  <meta name="theme-color" content="#0b0d10">
+  <link rel="icon" href="assets/muster.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/muster-256.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="#top"><img src="assets/muster.svg" alt="" width="34" height="34"><span>muster</span></a>
+  <nav class="nav-links">
+    <a href="#loop">How it works</a>
+    <a href="#safety">Safety</a>
+    <a href="#terminal">Terminal</a>
+    <a href="https://github.com/jason-shen/muster">GitHub</a>
+  </nav>
+  <a class="btn btn-small" href="#install">Install</a>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="glow glow-green"></div>
+    <div class="glow glow-amber"></div>
+    <div class="glow glow-teal"></div>
+
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="dot dot-green pulse"></span>The workspace for agentic coding</p>
+      <h1>Run agents in parallel.<br><span class="grad">Merge what they build.</span></h1>
+      <p class="lede">Write what you want. Hand it to Claude Code, Codex or any agent CLI on its own worktree. Watch every agent by what needs you, review the diff, and merge. One window, no tab juggling.</p>
+      <div class="cta-row">
+        <button class="install-pill" data-copy="brew install --cask jason-shen/tap/muster">
+          <span class="prompt">$</span> brew install --cask jason-shen/tap/muster
+          <span class="copy-label">copy</span>
+        </button>
+        <a class="btn btn-ghost" href="https://github.com/jason-shen/muster">View on GitHub →</a>
+      </div>
+      <p class="fine">macOS and Linux · Free and MIT licensed</p>
+    </div>
+
+    <div class="hero-shot">
+      <div class="window">
+        <div class="window-bar"><i></i><i></i><i></i></div>
+        <img src="assets/screenshot.png" alt="muster: projects and agents in the sidebar, an agent and a file open in two tiled cards" width="1200" height="1199">
+      </div>
+      <div class="chip chip-a"><span class="dot dot-amber"></span>add-metrics wants to run <code>npm install</code><b>Approve</b></div>
+      <div class="chip chip-b"><span class="dot dot-teal"></span>reviewer · done <em>+124 −18</em></div>
+      <div class="chip chip-c"><span class="dot dot-green pulse"></span>fix-login · working <em>brief 3/5</em></div>
+    </div>
+  </section>
+
+  <section class="mess">
+    <p class="kicker">Running agents today</p>
+    <h2 class="big">Five tools and a memory test.</h2>
+    <ul class="strike">
+      <li>A terminal tab per agent</li>
+      <li>A chat window for planning</li>
+      <li>lazygit for the diffs</li>
+      <li>An editor for the fixes</li>
+      <li>Your head, for who's waiting on you</li>
+    </ul>
+    <p class="mess-tail">Agents edit the same checkout and trip over each other. Reviewing means reading a diff and retyping your notes into a prompt.<br><strong>muster puts the whole loop in one window.</strong></p>
+  </section>
+
+  <section class="loop" id="loop">
+    <div class="section-head">
+      <p class="kicker">The loop</p>
+      <h2 class="big">Brief. Build. Review. <span class="grad">Ship.</span></h2>
+    </div>
+
+    <article class="step reveal">
+      <div class="step-copy">
+        <span class="num">01</span>
+        <h3>Write the brief.</h3>
+        <p>Start from a template made for agent work: feature, bug, refactor, UI polish, spike. Type the ask in your own words, then hit <b>✦ Finish with AI</b>. Claude reads your code and fills in the problem, the files, the steps and the open questions while you watch it write.</p>
+      </div>
+      <div class="mock mock-brief">
+        <div class="mock-bar"><span class="path">briefs › fix-login-redirect.md</span><span class="tag tag-ai">✦ reading src/auth.rs</span></div>
+        <div class="md">
+          <p class="h"># Fix the login redirect loop</p>
+          <p><b>Ask:</b> after signing in on Safari we bounce straight back to /login.</p>
+          <p class="h2">## Cause</p>
+          <p class="stream" data-stream="The session cookie is set with SameSite=Strict, so the redirect from the OAuth callback arrives without it and is_valid() sees no token."></p>
+          <p class="h2">## Steps</p>
+          <p class="task done">- [x] Reproduce with a failing test</p>
+          <p class="task done">- [x] Set SameSite=Lax on the session cookie</p>
+          <p class="task">- [ ] Check expiry in is_valid()</p>
+        </div>
+        <div class="mock-foot"><span class="btn-mini">Stop</span><span class="btn-mini btn-mini-on">Hand to agent →</span></div>
+      </div>
+    </article>
+
+    <article class="step reveal flip">
+      <div class="step-copy">
+        <span class="num">02</span>
+        <h3>Hand it to an agent.</h3>
+        <p>Every agent starts on its own git worktree and branch. Run as many as you like: they never touch your checkout or each other's. The agent ticks off each step of the brief as it goes.</p>
+      </div>
+      <div class="mock mock-tree">
+        <div class="branch trunk"><span class="node"></span><b>main</b><em>your checkout · untouched</em></div>
+        <div class="branch"><span class="node n-green"></span><code>muster/fix-login</code><span class="who">claude</span></div>
+        <div class="branch"><span class="node n-amber"></span><code>muster/add-metrics</code><span class="who">codex</span></div>
+        <div class="branch"><span class="node n-teal"></span><code>muster/docs-tour</code><span class="who">claude</span></div>
+        <div class="branch"><span class="node n-green"></span><code>muster/flaky-tests</code><span class="who">opencode</span></div>
+      </div>
+    </article>
+
+    <article class="step reveal">
+      <div class="step-copy">
+        <span class="num">03</span>
+        <h3>See who needs you.</h3>
+        <p>Every agent in every project, sorted by what needs you: waiting on an approval, asking a question, done, working. Each row shows how far through its brief it is and how much it has changed. Answer a numbered prompt right from the sidebar.</p>
+      </div>
+      <div class="mock mock-agents">
+        <div class="mock-label">AGENTS <span>priority</span></div>
+        <div class="agent"><span class="dot dot-amber pulse"></span><div><b>muster · add-metrics</b><small>approve: npm install --save-dev jest</small></div><span class="pill pill-amber">approve</span></div>
+        <div class="agent"><span class="dot dot-amber"></span><div><b>augur · api</b><small>Reuse the existing cache layer?</small><span class="choices"><i>1 Yes</i><i>2 No</i></span></div></div>
+        <div class="agent"><span class="dot dot-teal"></span><div><b>muster · reviewer</b><small>6 files <ins>+124</ins> <del>−18</del></small></div><span class="pill pill-teal">done</span></div>
+        <div class="agent"><span class="dot dot-green pulse"></span><div><b>muster · fix-login</b><small>Fix the login redirect loop · 3/5</small><span class="bar"><i style="width:60%"></i></span></div></div>
+      </div>
+    </article>
+
+    <article class="step reveal flip">
+      <div class="step-copy">
+        <span class="num">04</span>
+        <h3>Review like a lead, not a typist.</h3>
+        <p>Read the agent's diff against where it started. Comment on any line, then send every comment back as one message for its next turn. Throw away a hunk you don't want. Every step it took is a snapshot you can revert to.</p>
+      </div>
+      <div class="mock mock-diff">
+        <div class="mock-bar"><span class="path">fix-login · vs base</span><span class="btn-mini btn-mini-on">send 2 to agent</span></div>
+        <pre><span class="ln">11</span>  pub fn is_valid(&amp;self) -&gt; bool {
+<span class="ln">12</span><del>-     self.token.is_some()</del>
+<span class="ln">12</span><ins>+     self.token.is_some() &amp;&amp; self.expires_at &gt; now()</ins>
+<span class="ln">13</span>  }
+<span class="ln">14</span>
+<span class="ln">15</span><ins>+ fn now() -&gt; u64 {</ins>
+<span class="ln">16</span><ins>+     SystemTime::now().duration_since(UNIX_EPOCH)</ins></pre>
+        <div class="comment"><b>💬 you</b> Use the clock from <code>util::time</code> so the tests can fake it.</div>
+      </div>
+    </article>
+
+    <article class="step reveal">
+      <div class="step-copy">
+        <span class="num">05</span>
+        <h3>Accept. Merged.</h3>
+        <p>One step commits what the agent left, merges its branch into the one it came from, and offers to clean up the worktree, snapshots and branch. muster checks your checkout is clean first, so nothing lands on top of your own work.</p>
+      </div>
+      <div class="mock mock-accept">
+        <div class="accept-title"><span class="check">✓</span> Accept fix-login</div>
+        <label>Commit message</label>
+        <div class="field">Fix the login redirect loop</div>
+        <div class="accept-row"><code>muster/fix-login</code><span class="arrow">→</span><code>main</code></div>
+        <div class="accept-actions"><span class="btn-mini">Cancel</span><span class="btn-mini btn-mini-go">Commit &amp; merge</span></div>
+      </div>
+    </article>
+  </section>
+
+  <section class="safety" id="safety">
+    <div class="section-head">
+      <p class="kicker">Safety</p>
+      <h2 class="big">Guardrails that only tighten.</h2>
+      <p class="sub">muster never quietly allows a command on its own reading of the shell. It denies what your rules deny, queues what needs a look, and leaves the rest to the agent's own prompt.</p>
+    </div>
+
+    <div class="approval reveal">
+      <span class="badge">mutating</span>
+      <span class="approval-text"><b>add-metrics</b> wants to run <code>npm install --save-dev jest &amp;&amp; cargo test</code></span>
+      <span class="approval-btns"><span class="btn-mini">view</span><span class="btn-mini btn-mini-go">Approve ⌘⇧Y</span><span class="btn-mini btn-mini-no">Reject ⌘⇧R</span></span>
+    </div>
+    <div class="denied reveal"><span class="x">✕ refused</span><code>cargo test &amp;&amp; <mark>rm -rf ~</mark></code><em>each part judged on its own, strictest answer wins</em></div>
+
+    <div class="trio">
+      <div class="tile reveal">
+        <h4>Deny rules hold everywhere</h4>
+        <p>Behind <code>sudo</code>, <code>FOO=1</code>, <code>git -C dir</code>, and inside <code>bash -c '…'</code>.</p>
+      </div>
+      <div class="tile reveal">
+        <h4>A snapshot before every step</h4>
+        <p>A shadow-git timeline for each agent. Diff any step, revert to it, undo the revert.</p>
+        <div class="timeline">
+          <span>#5</span><span>#4</span><span class="here">#3 ↺</span><span>#2</span><span>#1</span>
+        </div>
+      </div>
+      <div class="tile reveal">
+        <h4>Your text is safe</h4>
+        <p>An agent rewrites a file you have open? The version before is one ⌘Z away.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="team">
+    <div class="team-copy reveal">
+      <p class="kicker">Agents together</p>
+      <h2 class="big">Agents that talk to each other.</h2>
+      <p class="sub">Every muster terminal has the <code>muster</code> command on its PATH. Agents list, message, wait on and read one another, so a builder can hand off to a reviewer without you in the middle.</p>
+    </div>
+    <div class="term reveal">
+      <div class="window-bar"><i></i><i></i><i></i><span>builder</span></div>
+<pre><span class="c">$</span> muster agents
+  <span class="g">●</span> builder    working   ~/code/app
+  <span class="t">●</span> reviewer   idle      ~/code/app
+<span class="c">$</span> muster tell reviewer "check the login fix, then tell me"
+  sent to reviewer
+<span class="c">$</span> muster wait reviewer
+<span class="c">$</span> muster read reviewer -n 4
+  <span class="m">[message from agent reviewer]</span> Looks right. Two small
+  notes on the cookie flags, left as comments.</pre>
+    </div>
+  </section>
+
+  <section class="terminal" id="terminal">
+    <div class="section-head">
+      <p class="kicker">Underneath</p>
+      <h2 class="big">And it's a real terminal.</h2>
+      <p class="sub">Drawn on the GPU. Agents run in their own TUIs, with your shells, vim and lazygit tiled beside them.</p>
+    </div>
+    <div class="grid">
+      <div class="tile tile-wide reveal">
+        <h4>Close the window. Nothing stops.</h4>
+        <p>A background daemon owns every terminal. Quit the app and your agents keep working. Restart the machine and they come back in their folders and pick up their sessions.</p>
+      </div>
+      <div class="tile reveal"><h4>Tabs and tiles</h4><p>Split, drag, swap and resize cards. Broadcast typing to all of them.</p></div>
+      <div class="tile reveal"><h4>Git built in</h4><p>lazygit's layout and keys: stage hunks, commit, check out, all in the window.</p></div>
+      <div class="tile reveal"><h4>Your editor, or ours</h4><p>A built-in editor that reloads live, or nvim, helix, VS Code, Cursor, Zed.</p></div>
+      <div class="tile reveal"><h4>Scrollback that survives</h4><p>Restarts keep it. Narrow a card and the text rewraps instead of getting cut.</p></div>
+      <div class="tile reveal"><h4>Keys that work</h4><p>kitty keyboard protocol, so Shift+Return is a newline in Claude Code and Codex.</p></div>
+      <div class="tile reveal"><h4>Every language</h4><p>IME for Chinese, Japanese and Korean. UI in seven languages.</p></div>
+    </div>
+  </section>
+
+  <section class="works">
+    <p class="kicker">Works with the agents you already use</p>
+    <div class="marquee" aria-label="Claude Code, Codex, opencode, Gemini, aider, goose, amp">
+      <div class="marquee-track">
+        <span>Claude Code</span><span>Codex</span><span>opencode</span><span>Gemini</span><span>aider</span><span>goose</span><span>amp</span>
+        <span aria-hidden="true">Claude Code</span><span aria-hidden="true">Codex</span><span aria-hidden="true">opencode</span><span aria-hidden="true">Gemini</span><span aria-hidden="true">aider</span><span aria-hidden="true">goose</span><span aria-hidden="true">amp</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="final" id="install">
+    <div class="glow glow-green"></div>
+    <div class="glow glow-teal"></div>
+    <img src="assets/muster.svg" alt="" width="120" height="120" class="final-icon">
+    <h2 class="huge">Muster your agents.</h2>
+    <button class="install-pill install-pill-lg" data-copy="brew install --cask jason-shen/tap/muster">
+      <span class="prompt">$</span> brew install --cask jason-shen/tap/muster
+      <span class="copy-label">copy</span>
+    </button>
+    <p class="fine">Or from source with Rust 1.80+: <code>cargo install --path crates/muster-gui</code></p>
+    <p class="fine">macOS and Linux. Windows isn't supported yet.</p>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <a class="brand" href="#top"><img src="assets/muster.svg" alt="" width="26" height="26"><span>muster</span></a>
+  <span>MIT licensed</span>
+  <a href="https://github.com/jason-shen/muster">GitHub</a>
+  <a href="https://github.com/jason-shen/muster#readme">Docs</a>
+  <a href="https://github.com/jason-shen/muster/releases">Releases</a>
+</footer>
+
+<script src="main.js"></script>
+</body>
+</html>

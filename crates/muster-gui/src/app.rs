@@ -1360,6 +1360,7 @@ impl App {
                 self.notify(format!("{name}: {m}"), false);
                 self.notify_away(&name, &m);
             }
+            self.chime();
         }
     }
 
@@ -1368,6 +1369,31 @@ impl App {
         if self.settings.system_notifications && !self.ctx.input(|i| i.focused) {
             notify_system(title, body);
         }
+    }
+
+    /// The sound for an agent wanting you. A burst of updates (several agents
+    /// finishing together, an approval right after its notification) plays once.
+    pub fn chime(&self) {
+        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        if !self.settings.notify_sound {
+            return;
+        }
+        let mut last = LAST.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
+            return;
+        }
+        *last = Some(Instant::now());
+        play_chime();
+    }
+
+    /// The approval the centre panel shows, and the one ⌘⇧Y answers: the
+    /// focused agent's if it has one, else the oldest.
+    pub fn shown_approval(&self) -> Option<&Approval> {
+        let ctx = self.ctx_task.as_deref();
+        self.approvals
+            .values()
+            .find(|a| matches!(&a.source, ApprovalSource::Task { task_id, .. } if Some(task_id.as_str()) == ctx))
+            .or_else(|| self.approvals.values().next())
     }
 
     pub fn send_input(&mut self, id: &str, data: Vec<u8>) {
@@ -1836,6 +1862,7 @@ impl App {
                         false,
                     );
                     self.notify_away(&name, &why);
+                    self.chime();
                     self.ctx
                         .send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
                             egui::UserAttentionType::Informational,
@@ -1863,6 +1890,7 @@ impl App {
                             egui::UserAttentionType::Critical,
                         ));
                 }
+                self.chime();
                 self.approvals.insert(a.id, a);
             }
             Push::ApprovalResolved { id, .. } => {
@@ -2991,21 +3019,11 @@ impl App {
     }
 
     pub fn decide_first(&mut self, allow: bool) {
-        let ctx = self.ctx_task.clone();
-        let pick = self
-            .approvals
-            .values()
-            .find(|a| matches!(&a.source, ApprovalSource::Task { task_id, .. } if Some(task_id) == ctx.as_ref()))
-            .map(|a| a.id);
-        // Only the agent on screen: the shortcut mustn't answer for a command
-        // you haven't seen.
-        match pick {
+        // Whatever the centre panel is showing, so the shortcut never answers
+        // for a command that isn't on screen.
+        match self.shown_approval().map(|a| a.id) {
             Some(id) => self.decide(id, allow),
-            None if self.approvals.is_empty() => self.notify(tr("no pending approvals"), false),
-            None => self.notify(
-                tr("this agent has nothing to approve; ⌘⇧A goes to the one waiting"),
-                false,
-            ),
+            None => self.notify(tr("no pending approvals"), false),
         }
     }
 
@@ -3292,6 +3310,25 @@ fn notify_system(title: &str, body: &str) {
         }
     });
     center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert, &post);
+}
+
+/// One of the system's own sounds, played out of process so a missing player
+/// or sound file costs nothing.
+fn play_chime() {
+    #[cfg(target_os = "macos")]
+    let (cmd, args): (&str, &[&str]) = ("afplay", &["/System/Library/Sounds/Glass.aiff"]);
+    #[cfg(not(target_os = "macos"))]
+    let (cmd, args): (&str, &[&str]) = ("canberra-gtk-play", &["-i", "message-new-instant"]);
+    let child = std::process::Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    // Reaped, or each chime leaves a zombie behind.
+    if let Ok(mut c) = child {
+        std::thread::spawn(move || c.wait());
+    }
 }
 
 /// A desktop notification through notify-send, as keel does.

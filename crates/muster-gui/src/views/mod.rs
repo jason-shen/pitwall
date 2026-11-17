@@ -2258,7 +2258,7 @@ fn card(
     }
     let active = app.active == side;
     let header = Rect::from_min_max(rect.min, pos2(rect.max.x, rect.min.y + 36.0));
-    let mut body =
+    let body =
         Rect::from_min_max(pos2(rect.min.x, header.max.y), rect.max).shrink2(vec2(1.0, 1.0));
 
     let id = Id::unique(("card", side));
@@ -2527,62 +2527,6 @@ fn card(
             galley,
             TEXT,
         );
-    }
-
-    // A pending approval for this agent sits on top of its terminal.
-    if t.child == Child::Terminal {
-        let pending: Vec<_> = app
-            .approvals
-            .values()
-            .filter(
-                |a| matches!(&a.source, ApprovalSource::Task { task_id, .. } if *task_id == t.item),
-            )
-            .cloned()
-            .collect();
-        if let Some(a) = pending.first() {
-            let strip = Rect::from_min_size(body.min, vec2(body.width(), 40.0));
-            body.min.y += 40.0;
-            ui.painter()
-                .rect_filled(strip, 0.0, Color32::from_rgb(0x2c, 0x25, 0x17));
-            let mut s = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(strip.shrink2(vec2(12.0, 6.0)))
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            s.label(RichText::new(tr("Run this command?")).color(AMBER));
-            s.add(egui::Label::new(RichText::new(&a.command).monospace().color(TEXT)).truncate())
-                .on_hover_text(&a.reason);
-            s.with_layout(Layout::right_to_left(Align::Center), |s| {
-                if s.button(
-                    RichText::new(format!(
-                        "{}  {}",
-                        tr("Approve"),
-                        crate::keys::hint(tr("approve"))
-                    ))
-                    .color(GREEN)
-                    .strong(),
-                )
-                .clicked()
-                {
-                    acts.push(Action::Decide(a.id, true));
-                }
-                if s.button(
-                    RichText::new(format!("{}  {}", tr("Reject"), crate::keys::hint("reject")))
-                        .color(RED),
-                )
-                .clicked()
-                {
-                    acts.push(Action::Decide(a.id, false));
-                }
-                if pending.len() > 1 {
-                    s.label(
-                        RichText::new(trf!("+{n} more", n = pending.len() - 1))
-                            .small()
-                            .color(MUTED),
-                    );
-                }
-            });
-        }
     }
 
     // Git data and the file tree are loaded for the focused task only; a
@@ -3138,91 +3082,152 @@ fn file_editor(
     }
 }
 
-/// Notices and approvals for tasks that aren't on screen, bottom right.
+/// The toast, bottom right. Approvals have their own panel in the middle.
 fn overlays(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
-    let visible = |item: &str| {
-        app.cards
-            .iter()
-            .any(|t| t.item == item && t.child == Child::Terminal)
-    };
-    let others: Vec<_> = app
-        .approvals
-        .values()
-        .filter(|a| match &a.source {
-            ApprovalSource::Task { task_id, .. } => !visible(task_id),
-            ApprovalSource::Ops { .. } => true,
-        })
-        .take(3)
-        .cloned()
-        .collect();
-    if others.is_empty() && app.notice.is_none() {
+    approval_panel(ctx, app, acts);
+    let Some((m, _, err)) = &app.notice else {
         return;
-    }
-    egui::Area::new(Id::unique("overlays"))
+    };
+    let dismissed = egui::Area::new(Id::unique("overlays"))
         .anchor(Align2::RIGHT_BOTTOM, vec2(-20.0, -20.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.set_max_width(420.0);
-            for a in &others {
-                Frame::new()
-                    .fill(Color32::from_rgb(0x2c, 0x25, 0x17))
-                    .stroke(Stroke::new(1.0, AMBER.gamma_multiply(0.4)))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(10, 8))
-                    .show(ui, |ui| {
-                        let who = match &a.source {
-                            ApprovalSource::Task { task_id, .. } => app
-                                .tasks
-                                .get(task_id)
-                                .map(|t| app.label(t))
-                                .unwrap_or(task_id.clone()),
-                            ApprovalSource::Ops { session, .. } => {
-                                trf!("investigation #{session}", session = session)
-                            }
-                        };
+            Frame::new()
+                .fill(Color32::from_rgb(0x20, 0x24, 0x2c))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(18)))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(m).color(if *err { RED } else { TEXT }));
+                })
+                .response
+                .interact(Sense::click())
+                .clicked()
+        })
+        .inner;
+    if dismissed {
+        app.notice = None;
+    }
+}
+
+/// A command an agent is waiting to run, in the middle of the window. A long
+/// one (a heredoc, a script) scrolls rather than running off the screen. It
+/// doesn't block the window, so the terminal behind stays usable.
+fn approval_panel(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
+    let Some(a) = app.shown_approval().cloned() else {
+        return;
+    };
+    let total = app.approvals.len();
+    let (who, task) = match &a.source {
+        ApprovalSource::Task { task_id, .. } => (
+            app.tasks
+                .get(task_id)
+                .map(|t| app.label(t))
+                .unwrap_or(task_id.clone()),
+            Some(task_id.clone()),
+        ),
+        ApprovalSource::Ops { session, .. } => {
+            (trf!("investigation #{session}", session = session), None)
+        }
+    };
+    let on_screen = task.as_ref().is_some_and(|id| {
+        app.cards
+            .iter()
+            .any(|t| t.item == *id && t.child == Child::Terminal)
+    });
+    let screen = ctx.content_rect();
+    let width = (screen.width() - 48.0).clamp(280.0, 640.0);
+    let code_h = (screen.height() * 0.45).clamp(80.0, 420.0);
+    egui::Area::new(Id::unique("approval-panel"))
+        .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            Frame::new()
+                .fill(theme::c::PANEL)
+                .stroke(Stroke::new(1.0, AMBER.gamma_multiply(0.45)))
+                .corner_radius(CornerRadius::same(10))
+                .shadow(ui.visuals().popup_shadow)
+                .inner_margin(Margin::same(16))
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("●").color(AMBER));
                         ui.label(
                             RichText::new(trf!("{who} wants to run", who = who))
-                                .small()
-                                .color(AMBER),
+                                .strong()
+                                .color(TEXT),
                         );
-                        ui.add(
-                            egui::Label::new(RichText::new(&a.command).monospace().color(TEXT))
-                                .truncate(),
-                        );
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button(RichText::new(tr("Approve")).color(GREEN))
-                                .clicked()
-                            {
-                                acts.push(Action::Decide(a.id, true));
-                            }
-                            if ui.button(RichText::new(tr("Reject")).color(RED)).clicked() {
-                                acts.push(Action::Decide(a.id, false));
-                            }
-                            if let ApprovalSource::Task { task_id, .. } = &a.source {
-                                if ui.small_button(tr("view")).clicked() {
-                                    acts.push(Action::OpenTerm(task_id.clone()));
-                                }
-                            }
-                        });
+                        if total > 1 {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new(trf!("+{n} more", n = total - 1))
+                                        .small()
+                                        .color(MUTED),
+                                );
+                            });
+                        }
                     });
-                ui.add_space(6.0);
-            }
-            if let Some((m, _, err)) = &app.notice {
-                let r = Frame::new()
-                    .fill(Color32::from_rgb(0x20, 0x24, 0x2c))
-                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(18)))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(m).color(if *err { RED } else { TEXT }));
-                    })
-                    .response
-                    .interact(Sense::click());
-                if r.clicked() {
-                    app.notice = None;
-                }
-            }
+                    if !a.reason.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(&a.reason).color(MUTED)).wrap());
+                    }
+                    ui.add_space(8.0);
+                    Frame::new()
+                        .fill(theme::c::INPUT)
+                        .stroke(Stroke::new(1.0, theme::c::BORDER))
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ScrollArea::vertical()
+                                .id_salt(("approval-cmd", a.id))
+                                .max_height(code_h)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&a.command).monospace().color(TEXT),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                        });
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let approve = egui::Button::new(
+                            RichText::new(format!(
+                                "{}  {}",
+                                tr("Approve"),
+                                crate::keys::hint(tr("approve"))
+                            ))
+                            .color(theme::c::ON_ACCENT)
+                            .strong(),
+                        )
+                        .fill(GREEN);
+                        if ui.add(approve).clicked() {
+                            acts.push(Action::Decide(a.id, true));
+                        }
+                        if ui
+                            .button(
+                                RichText::new(format!(
+                                    "{}  {}",
+                                    tr("Reject"),
+                                    crate::keys::hint("reject")
+                                ))
+                                .color(RED),
+                            )
+                            .clicked()
+                        {
+                            acts.push(Action::Decide(a.id, false));
+                        }
+                        if let Some(id) = task.filter(|_| !on_screen) {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button(tr("view")).clicked() {
+                                    acts.push(Action::OpenTerm(id));
+                                }
+                            });
+                        }
+                    });
+                });
         });
 }
 
@@ -4738,6 +4743,10 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 ui.checkbox(
                     &mut s.system_notifications,
                     tr("Notify me when an agent needs me or finishes while muster is in the background"),
+                );
+                ui.checkbox(
+                    &mut s.notify_sound,
+                    tr("Play a sound when an agent needs me"),
                 );
 
                 ui.add_space(8.0);

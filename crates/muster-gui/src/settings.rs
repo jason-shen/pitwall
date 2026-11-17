@@ -71,6 +71,8 @@ pub struct Settings {
     /// Post a system notification when an agent needs you or finishes while
     /// muster is in the background.
     pub system_notifications: bool,
+    /// A short sound when an agent needs you or wants to run a command.
+    pub notify_sound: bool,
     /// UI language code ("en", "zh", "ko", "ja", "de", "es", "fr").
     pub language: String,
     /// Every command's keys, written as `[keys]`.
@@ -134,6 +136,7 @@ impl Default for Settings {
             tabs_bottom: false,
             snippets: vec![],
             system_notifications: true,
+            notify_sound: true,
             language: "en".into(),
             labels: Default::default(),
             folded_projects: Default::default(),

@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -161,6 +161,27 @@ impl DevShot {
                     "newbrief" => app.open_new_brief(),
                     // A brief-sized task, to see the form stay on screen.
                     "newagent" => app.open_new_agent(&"A step of a long brief.\n".repeat(80)),
+                    // A long command waiting on approval, with a toast beside it.
+                    "approval" => {
+                        use muster_core::proto::{Approval, ApprovalSource, Tier};
+                        let task_id = app.target().map(|t| t.item.clone()).unwrap_or_default();
+                        let command = (1..=60)
+                            .map(|i| format!("echo \"step {i} of a long generated script\""))
+                            .collect::<Vec<_>>()
+                            .join(" && \\\n  ");
+                        app.approvals.insert(
+                            9001,
+                            Approval {
+                                id: 9001,
+                                source: ApprovalSource::Task { task_id, tool: "Bash".into() },
+                                command,
+                                tier: Tier::Mutating,
+                                reason: "writes outside the worktree".into(),
+                                created_unix: 0,
+                            },
+                        );
+                        app.notify("agent: finished its turn", false);
+                    }
                     "keys" => app.show_keys = true,
                     "submit" => app.submit_form(),
                     "swap" => app.swap_cards(0, 1),
