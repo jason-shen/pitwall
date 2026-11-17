@@ -3822,16 +3822,24 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                 .show(ui, |ui| match kind {
                     NewKind::Brief => {}
                     NewKind::Agent => {
-                        ui.label(tr("Task"));
+                        // The grid centres cells vertically, which floats the label
+                        // halfway down a tall task box.
+                        ui.vertical(|ui| {
+                            ui.add_space(4.0);
+                            ui.label(tr("Task"));
+                        });
                         // A brief handed over fills this box; capped, it scrolls
                         // instead of pushing the rest of the form off screen. The
                         // 420 is the form's other rows plus its offset from the top.
                         let max_h = (ui.ctx().content_rect().height() - 420.0).clamp(80.0, 420.0);
+                        // In a grid cell the scroll area drops to its 64pt minimum
+                        // unless told otherwise, so size it to last frame's box.
+                        let h_id = Id::unique("new-agent-task-h");
+                        let box_h = ui.data(|d| d.get_temp::<f32>(h_id)).unwrap_or(80.0);
                         let r = ScrollArea::vertical()
                             .id_salt("new-agent-task")
                             .max_height(max_h)
-                            // In a grid cell it otherwise drops to its 64pt minimum.
-                            .min_scrolled_height(max_h)
+                            .min_scrolled_height(box_h.min(max_h))
                             .show(ui, |ui| {
                                 ui.add(
                                     TextEdit::multiline(&mut f.task)
@@ -3841,6 +3849,11 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                                 )
                             })
                             .inner;
+                        let h = r.rect.height();
+                        if (h - box_h).abs() > 0.5 {
+                            ui.data_mut(|d| d.insert_temp(h_id, h));
+                            ui.ctx().request_repaint();
+                        }
                         if r.changed() && !f.name_edited {
                             f.name = crate::app::suggest_name(&f.task);
                         }
