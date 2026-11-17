@@ -3014,7 +3014,7 @@ impl App {
                 "zed" | "subl" => args.push(format!("{file}:{line}")),
                 _ => args.push(file.clone()),
             }
-            std::process::Command::new(prog)
+            pitwall_core::shellenv::command(&prog)
                 .args(args)
                 .spawn()
                 .map(|_| ())

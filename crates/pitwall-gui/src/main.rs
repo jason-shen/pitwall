@@ -24,6 +24,10 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     pitwall_core::rename::migrate();
+    // Asking the shell takes a moment; do it while the window opens.
+    std::thread::spawn(|| {
+        pitwall_core::shellenv::env();
+    });
     // Project folder: first argument, else the current directory, else $HOME
     // (apps launched from the Dock start in `/`).
     let workspace = std::env::args()

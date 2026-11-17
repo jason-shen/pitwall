@@ -14,6 +14,7 @@ pub mod policy;
 pub mod prompt;
 pub mod proto;
 pub mod rename;
+pub mod shellenv;
 pub mod tree;
 pub mod wire;
 

@@ -118,7 +118,7 @@ pub fn open_gui(cmd: &str, file: &Path, line: usize) -> std::io::Result<()> {
         }
         _ => args.push(f),
     }
-    std::process::Command::new(prog)
+    pitwall_core::shellenv::command(&prog)
         .args(args)
         .spawn()
         .map(|_| ())

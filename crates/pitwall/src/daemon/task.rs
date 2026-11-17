@@ -432,100 +432,18 @@ fn resolve_command(cmd: &str) -> String {
     if cmd.contains('/') {
         return cmd.to_string();
     }
-    shell_lookup(cmd).unwrap_or_else(|| cmd.to_string())
-}
-
-/// Where your interactive shell finds `cmd`. The daemon's PATH is whatever
-/// launched it, often in another order than your shell config sets up, so
-/// a bare `claude` can find an old copy (an npm install in /usr/local/bin)
-/// instead of the one you get typing `claude`. Asked once per command.
-fn shell_lookup(cmd: &str) -> Option<String> {
+    // Once per command, so the log says which copy agents run.
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static FOUND: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    static FOUND: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     let found = FOUND.get_or_init(Default::default);
-    if let Some(hit) = found.lock().unwrap().get(cmd) {
-        return hit.clone();
+    if let Some(p) = found.lock().unwrap().get(cmd) {
+        return p.clone();
     }
-    let hit = ask_shell(cmd);
-    if let Some(p) = &hit {
-        tracing::info!("agent command {cmd} is {p}");
-    }
-    found.lock().unwrap().insert(cmd.to_string(), hit.clone());
-    hit
-}
-
-fn ask_shell(cmd: &str) -> Option<String> {
-    if !cmd
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c))
-    {
-        return None;
-    }
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let mut child = std::process::Command::new(&shell)
-        .args(["-lic", &format!("command -v -- {cmd}")])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    // A shell config that waits on something mustn't hold up the agent.
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() < std::time::Duration::from_secs(4) => {
-                std::thread::sleep(std::time::Duration::from_millis(20))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-    let mut out = String::new();
-    std::io::Read::read_to_string(child.stdout.as_mut()?, &mut out).ok()?;
-    // An interactive shell may print a greeting first, and terminal escape
-    // codes around the answer; the answer is the last line that's a path to
-    // a file.
-    out.lines()
-        .rev()
-        .map(|l| strip_escapes(l).trim().to_string())
-        .find(|l| l.starts_with('/') && Path::new(l).is_file())
-}
-
-/// A line without its CSI and OSC escape sequences.
-fn strip_escapes(line: &str) -> String {
-    let mut out = String::new();
-    let mut it = line.chars().peekable();
-    while let Some(c) = it.next() {
-        if c != '\x1b' {
-            out.push(c);
-            continue;
-        }
-        match it.next() {
-            // CSI: parameters, then a final letter.
-            Some('[') => {
-                for c in it.by_ref() {
-                    if c.is_ascii_alphabetic() || c == '~' {
-                        break;
-                    }
-                }
-            }
-            // OSC: up to BEL or ESC \.
-            Some(']') => {
-                while let Some(c) = it.next() {
-                    if c == '\x07' || (c == '\x1b' && it.next_if_eq(&'\\').is_some()) {
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
+    let p = pitwall_core::shellenv::resolve(cmd).display().to_string();
+    tracing::info!("agent command {cmd} is {p}");
+    found.lock().unwrap().insert(cmd.to_string(), p.clone());
+    p
 }
 
 /// `--settings` JSON that wires Claude Code's hooks to `pitwall hook claude`.
@@ -842,8 +760,10 @@ impl Task {
         cmd.env("TERM_PROGRAM_VERSION", pitwall_core::VERSION);
         cmd.env("PITWALL_TASK_ID", &id);
         cmd.env("PITWALL_SOCKET", paths::socket());
+        // Your shell's PATH, whatever started the daemon, with pitwall's
+        // own folder first so agents can run `pitwall`.
         if let Some(dir) = exe.parent() {
-            let path = std::env::var("PATH").unwrap_or_default();
+            let path = pitwall_core::shellenv::path();
             cmd.env("PATH", format!("{}:{path}", dir.display()));
         }
         for (k, v) in &agent_cfg.env {
@@ -1539,15 +1459,7 @@ mod tests {
 mod shell_tests {
     #[test]
     fn finds_a_command_the_way_the_shell_does() {
-        let sh = super::ask_shell("sh").expect("the shell knows sh");
-        assert!(sh.starts_with('/') && sh.ends_with("/sh"));
-        assert!(super::ask_shell("no-such-command-pitwall").is_none());
-        assert!(super::ask_shell("sh; echo pwned").is_none());
+        assert!(super::resolve_command("sh").ends_with("/sh"));
         assert_eq!(super::resolve_command("/bin/echo"), "/bin/echo");
-        assert_eq!(super::strip_escapes("\x1b[?25h\x1b[?7h/bin/sh"), "/bin/sh");
-        assert_eq!(
-            super::strip_escapes("\x1b]0;title\x07/usr/bin/x"),
-            "/usr/bin/x"
-        );
     }
 }

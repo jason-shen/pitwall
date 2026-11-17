@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -405,7 +405,7 @@ pub fn finish(
     // The prompt goes before the flags: --tools takes a list and would
     // swallow a prompt after it. --tools only limits the built-in tools, so
     // --strict-mcp-config keeps out MCP servers that can run commands.
-    let mut child = Command::new(&agent.command)
+    let mut child = pitwall_core::shellenv::command(&agent.command)
         .arg("-p")
         .arg(finish_prompt(path, &text))
         .args(["--output-format", "stream-json", "--verbose"])

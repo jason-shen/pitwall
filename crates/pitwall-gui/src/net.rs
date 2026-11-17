@@ -34,26 +34,6 @@ pub fn pitwall_binary() -> PathBuf {
     PathBuf::from("pitwall")
 }
 
-/// Apps launched from the Dock/Finder get a bare environment. Borrow the user's
-/// login-shell environment so agents find `claude`, `codex`, API keys, etc.
-fn login_env() -> Vec<(String, String)> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let Ok(out) = std::process::Command::new(&shell)
-        .args(["-l", "-c", "env"])
-        .stdin(std::process::Stdio::null())
-        .output()
-    else {
-        return vec![];
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| l.split_once('='))
-        .filter(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|(k, _)| !matches!(*k, "PWD" | "OLDPWD" | "SHLVL" | "_"))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
-}
-
 fn spawn_daemon() {
     use std::os::unix::process::CommandExt;
     let _ = std::fs::create_dir_all(paths::home());
@@ -66,9 +46,12 @@ fn spawn_daemon() {
     };
     let mut c = std::process::Command::new(pitwall_binary());
     c.arg("daemon").stdin(std::process::Stdio::null());
-    for (k, v) in login_env() {
+    // Started from the Dock, the app has launchd's bare environment; the
+    // daemon and its agents get your shell's.
+    for (k, v) in pitwall_core::shellenv::env() {
         c.env(k, v);
     }
+    c.env("PATH", pitwall_core::shellenv::path());
     if let Ok(l2) = log.try_clone() {
         c.stdout(l2);
     }
