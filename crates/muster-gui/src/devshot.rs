@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -114,6 +114,20 @@ impl DevShot {
                     }
                 }
                 Some(("newagent", task)) => app.open_new_agent(task),
+                // join:<pane>:<tab>, by task name: drop one tab onto another.
+                Some(("join", names)) => {
+                    let id = |n: &str| app.tasks.values().find(|t| t.name == n).map(|t| t.id.clone());
+                    if let Some((p, h)) = names.split_once(':') {
+                        if let (Some(p), Some(h)) = (id(p), id(h)) {
+                            app.join_tab(&p, &h, None);
+                        }
+                    }
+                }
+                Some(("separate", name)) => {
+                    if let Some(p) = app.tasks.values().find(|t| t.name == name).map(|t| t.id.clone()) {
+                        app.separate(&p);
+                    }
+                }
                 Some(("drop", path)) => self.dropped = Some(path.into()),
                 Some(("newproject", dir)) => {
                     app.open_new_project();

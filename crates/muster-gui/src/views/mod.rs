@@ -111,6 +111,8 @@ enum Action {
     MoveTab(String, String, bool),
     /// A tab dropped on a card: tile it beside that card.
     TileOnCard(String, usize),
+    /// A pane back out to a tab of its own.
+    Separate(String),
     ToggleZoom,
     ToggleBroadcast,
     Copy(String),
@@ -831,7 +833,7 @@ fn project_header(
 /// starting claude in one doesn't move it out of the tree, it's just listed
 /// under AGENTS as well.
 fn project_body(ui: &mut Ui, app: &mut App, root: &str, acts: &mut Vec<Action>) {
-    let shells = tab_ids_in(app, root);
+    let shells = ordered_ids(app, root);
     project_rows(ui, app, root, acts);
     if shells.is_empty() {
         ui.label(RichText::new(tr("No terminals yet.")).small().color(MUTED));
@@ -1077,11 +1079,16 @@ fn where_in(app: &App, t: &TaskInfo) -> String {
 /// The current project's agents and terminals as tabs: in the order you
 /// dragged them to, then any newer ones oldest first, so a tab stays where
 /// you left it.
+/// A tab dropped onto another is a pane in that one's tab and has no tab of
+/// its own.
 fn tab_ids(app: &App) -> Vec<String> {
-    tab_ids_in(app, app.project.as_deref().unwrap_or(""))
+    let mut ids = ordered_ids(app, app.project.as_deref().unwrap_or(""));
+    ids.retain(|id| app.host_of(id).is_none());
+    ids
 }
 
-fn tab_ids_in(app: &App, here: &str) -> Vec<String> {
+/// Every terminal in a project, panes included, in tab order.
+fn ordered_ids(app: &App, here: &str) -> Vec<String> {
     let order = app.settings.tab_order.get(here);
     let at = |id: &str| {
         order
@@ -1181,6 +1188,33 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
         pos2(side.right() + 4.0, strip.top()),
         pos2(right - 8.0, strip.max.y),
     );
+    // A pane's card dragged up here goes back to being a tab.
+    if let Some(side) = egui::DragAndDrop::payload::<CardDrag>(ui.ctx()).map(|p| p.0) {
+        let pane = app
+            .cards
+            .get(side)
+            .filter(|c| c.child == Child::Terminal && app.host_of(&c.item).is_some())
+            .map(|c| c.item.clone());
+        if let Some(id) = pane {
+            let drop = ui.interact(area, Id::unique("strip_drop"), Sense::hover());
+            if drop.dnd_hover_payload::<CardDrag>().is_some() {
+                let z = area.shrink2(vec2(0.0, 4.0));
+                ui.painter().rect_filled(z, 6.0, ACCENT.gamma_multiply(0.12));
+                ui.painter()
+                    .rect_stroke(z, 6.0, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+                ui.painter().text(
+                    z.center(),
+                    Align2::CENTER_CENTER,
+                    tr("Drop to make it a tab"),
+                    FontId::proportional(13.5),
+                    TEXT,
+                );
+            }
+            if drop.dnd_release_payload::<CardDrag>().is_some() {
+                acts.push(Action::Separate(id));
+            }
+        }
+    }
     let mut tabs = ui.new_child(
         egui::UiBuilder::new()
             .id_salt("tab-strip")
@@ -1258,7 +1292,9 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
     let t = &app.tasks[id];
     let label = app.label(t);
     let shell = t.agent == "shell";
-    let active = app.target().is_some_and(|c| c.item == id);
+    let active = app
+        .target()
+        .is_some_and(|c| c.item == id || app.host_of(&c.item) == Some(id));
     let (rect, _) = ui.allocate_exact_size(vec2(width, ui.available_height()), Sense::hover());
     let r = ui.interact(rect, Id::unique(("tab", id)), Sense::click_and_drag());
     let close =
@@ -1386,12 +1422,29 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
             acts.push(Action::Rename(id.to_string(), text));
         }
     } else {
-        ui.painter().with_clip_rect(text_rect).text(
-            pos2(text_rect.left(), rect.center().y),
-            Align2::LEFT_CENTER,
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
             &label,
-            FontId::proportional(13.5),
-            if active { c::TEXT } else { c::TEXT_DIM },
+            0.0,
+            egui::TextFormat::simple(
+                FontId::proportional(13.5),
+                if active { c::TEXT } else { c::TEXT_DIM },
+            ),
+        );
+        // How many panes were dropped into this tab.
+        let panes = app.panes_of(id).len();
+        if panes > 0 {
+            job.append(
+                &format!("+{panes}"),
+                6.0,
+                egui::TextFormat::simple(FontId::proportional(11.5), c::TEXT_FAINT),
+            );
+        }
+        let galley = ui.painter().layout_job(job);
+        ui.painter().with_clip_rect(text_rect).galley(
+            pos2(text_rect.left(), rect.center().y - galley.size().y / 2.0),
+            galley,
+            c::TEXT,
         );
     }
     if shell && (hovered || active) && !renaming {
@@ -2454,7 +2507,14 @@ fn card(
         })
         .collect();
     let (split, zoom, broadcast) = (app.split(), app.zoom, app.broadcast);
+    let pane = (t.child == Child::Terminal && app.host_of(&t.item).is_some()).then(|| t.item.clone());
     hr.context_menu(|ui| {
+        if let Some(id) = &pane {
+            if ui.button(tr("Move to its own tab")).clicked() {
+                acts.push(Action::Separate(id.clone()));
+                ui.close();
+            }
+        }
         if split {
             if ui
                 .button(format!(
@@ -5493,26 +5553,15 @@ fn apply(app: &mut App, a: Action) {
                 app.settings.tab_order.insert(here, ids);
             }
         }
-        Action::TileOnTab(id, onto) => {
-            let at = match app
-                .cards
-                .iter()
-                .position(|t| t.item == onto && t.child == Child::Terminal)
-            {
-                Some(i) => i,
-                // Not on screen yet: it takes the focused card, the dragged
-                // one goes beside it.
-                None => {
-                    app.show(Target {
-                        item: onto,
-                        child: Child::Terminal,
-                    });
-                    app.active
-                }
-            };
-            app.tile_beside(&id, at);
-        }
-        Action::TileOnCard(id, at) => app.tile_beside(&id, at),
+        Action::TileOnTab(id, onto) => app.join_tab(&id, &onto, None),
+        Action::TileOnCard(id, at) => match app.cards.get(at) {
+            Some(c) if c.child == Child::Terminal && c.item != id => {
+                let onto = c.item.clone();
+                app.join_tab(&id, &onto, Some(at));
+            }
+            _ => app.tile_beside(&id, at),
+        },
+        Action::Separate(id) => app.separate(&id),
         Action::ToggleZoom => {
             if app.split() {
                 app.zoom = !app.zoom;

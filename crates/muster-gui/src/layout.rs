@@ -20,6 +20,8 @@ pub struct Layout {
     pub items: BTreeMap<String, ItemLayout>,
     /// Terminals opened for an agent, by terminal id.
     pub parents: BTreeMap<String, String>,
+    /// Tabs dropped onto other tabs: (pane, the tab it's in).
+    pub joined: Vec<(String, String)>,
 }
 
 #[derive(Serialize, Deserialize, Default, PartialEq, Clone, Debug)]

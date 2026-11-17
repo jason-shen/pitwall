@@ -471,6 +471,9 @@ pub struct App {
     pub parent_of: std::collections::BTreeMap<String, String>,
     /// The terminal being created belongs to this agent.
     pending_parent: Option<String>,
+    /// Tabs dropped onto another tab, as (pane, the tab it's in). A pane has
+    /// no tab of its own until it's taken back out.
+    pub joined: Vec<(String, String)>,
     /// A new project's two tabs, started one after the other so the agent's
     /// is first whichever the daemon finishes starting first.
     project_setup: Option<ProjectSetup>,
@@ -637,6 +640,7 @@ impl App {
             saved_layout: None,
             parent_of: Default::default(),
             pending_parent: None,
+            joined: vec![],
             project_setup: None,
             active: 0,
             project: None,
@@ -890,6 +894,22 @@ impl App {
                 self.zoom = false;
             }
         }
+        let on_screen = self
+            .cards
+            .iter()
+            .position(|t| t.item == id && t.child == Child::Terminal);
+        // A pane, or a tab with panes, brings its whole tab back.
+        let host = self.host_of(id).map(str::to_string).or_else(|| {
+            (!self.panes_of(id).is_empty()).then(|| id.to_string())
+        });
+        if let Some(host) = host.filter(|_| on_screen.is_none()) {
+            self.show_group(&host);
+        } else if on_screen.is_none() && self.cards.iter().any(|c| self.in_group(&c.item)) {
+            // The cards belong to another tab's panes; this tab gets its own.
+            self.cards.clear();
+            self.active = 0;
+            self.zoom = false;
+        }
         // Already in a card: just focus that one.
         if let Some(i) = self
             .cards
@@ -903,6 +923,100 @@ impl App {
             item: id.to_string(),
             child: Child::Terminal,
         });
+    }
+
+    /// The tab a terminal sits in as a pane.
+    pub fn host_of(&self, id: &str) -> Option<&str> {
+        self.joined
+            .iter()
+            .find(|(p, _)| p == id)
+            .map(|(_, h)| h.as_str())
+    }
+
+    pub fn panes_of(&self, host: &str) -> Vec<String> {
+        self.joined
+            .iter()
+            .filter(|(_, h)| h == host)
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+
+    fn in_group(&self, id: &str) -> bool {
+        self.joined.iter().any(|(p, h)| p == id || h == id)
+    }
+
+    /// Drop tab `id` onto `onto`: it's tiled into onto's tab as a pane and its
+    /// own tab goes away. Panes it had come with it. `at` is the card it was
+    /// dropped on, if it was dropped on a card.
+    pub fn join_tab(&mut self, id: &str, onto: &str, at: Option<usize>) {
+        let host = self.host_of(onto).unwrap_or(onto).to_string();
+        if id == host {
+            return;
+        }
+        let mut moving = vec![id.to_string()];
+        moving.extend(self.panes_of(id));
+        self.joined.retain(|(p, h)| !moving.contains(p) && h != id);
+        self.joined
+            .extend(moving.iter().map(|m| (m.clone(), host.clone())));
+        if !self.cards.iter().any(|c| c.item == host) {
+            self.show_group(&host);
+        } else {
+            let mut at = at.unwrap_or_else(|| {
+                self.cards
+                    .iter()
+                    .position(|c| c.item == onto)
+                    .unwrap_or(self.active)
+            });
+            for m in &moving {
+                self.tile_beside(m, at);
+                at = self.active;
+            }
+        }
+        if let Some(i) = self.cards.iter().position(|c| c.item == id) {
+            self.focus_card(i);
+        }
+    }
+
+    /// Fill the cards with a tab and its panes.
+    pub fn show_group(&mut self, host: &str) {
+        self.cards.clear();
+        self.active = 0;
+        self.zoom = false;
+        self.show(Target {
+            item: host.to_string(),
+            child: Child::Terminal,
+        });
+        for p in self.panes_of(host) {
+            self.item_mut(&p);
+            self.cards.push(Target {
+                item: p,
+                child: Child::Terminal,
+            });
+        }
+    }
+
+    /// A pane back to a tab of its own, next to the tab it was in. Its card
+    /// leaves that tab's cards.
+    pub fn separate(&mut self, id: &str) {
+        let Some(host) = self.host_of(id).map(str::to_string) else {
+            return;
+        };
+        self.joined.retain(|(p, _)| p != id);
+        let here = self.project.clone().unwrap_or_default();
+        if let Some(order) = self.settings.tab_order.get_mut(&here) {
+            order.retain(|x| x != id);
+            let at = order.iter().position(|x| *x == host).map_or(order.len(), |i| i + 1);
+            order.insert(at, id.to_string());
+        }
+        if let Some(i) = self.cards.iter().position(|c| c.item == id) {
+            self.close_side(i);
+        }
+    }
+
+    /// A card that leaves the screen takes its terminal out of any tab it
+    /// was a pane in; a tab's own card leaving frees all its panes.
+    fn ungroup(&mut self, id: &str) {
+        self.joined.retain(|(p, h)| p != id && h != id);
     }
 
     /// Keep `cur` and the git context on whatever the focused card shows.
@@ -991,6 +1105,11 @@ impl App {
     pub fn toggle_split(&mut self) {
         if self.split() {
             let keep = self.cards[self.active].clone();
+            for c in std::mem::take(&mut self.cards) {
+                if c.item != keep.item {
+                    self.ungroup(&c.item);
+                }
+            }
             self.cards = vec![keep];
             self.active = 0;
             self.zoom = false;
@@ -1005,7 +1124,10 @@ impl App {
         if self.cards.len() <= 1 || i >= self.cards.len() {
             return;
         }
-        self.cards.remove(i);
+        let gone = self.cards.remove(i).item;
+        if !self.cards.iter().any(|c| c.item == gone) {
+            self.ungroup(&gone);
+        }
         if self.active >= i && self.active > 0 {
             self.active -= 1;
         }
@@ -1606,6 +1728,12 @@ impl App {
             .filter(|(k, v)| self.tasks.contains_key(*k) && self.tasks.contains_key(*v))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        self.joined = l
+            .joined
+            .iter()
+            .filter(|(p, h)| self.tasks.contains_key(p) && self.tasks.contains_key(h))
+            .cloned()
+            .collect();
         self.zoom = l.zoom && cards.len() > 1;
         self.active = l.active.min(cards.len() - 1);
         for (id, il) in &l.items {
@@ -1643,6 +1771,7 @@ impl App {
             active: self.active,
             zoom: self.zoom,
             sidebar: self.sidebar,
+            joined: self.joined.clone(),
             parents: self
                 .parent_of
                 .iter()
@@ -1935,6 +2064,7 @@ impl App {
     fn forget_task(&mut self, id: &str) {
         self.tasks.remove(id);
         self.parent_of.retain(|k, v| k != id && v != id);
+        self.ungroup(id);
         // A later task can reuse the id; it shouldn't inherit the name.
         self.settings.labels.remove(id);
         if let Some(i) = self.tabs.iter().position(|t| t.id == id) {
