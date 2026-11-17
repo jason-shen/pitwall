@@ -1525,6 +1525,10 @@ impl App {
                     approvals,
                 } => {
                     self.client = Some(client);
+                    // Otherwise a restarted daemon keeps the "older build"
+                    // banner up until the next periodic check, which an idle
+                    // window can take most of a minute to reach.
+                    self.daemon_outdated = daemon_outdated();
                     self.tasks = tasks.into_iter().map(|t| (t.id.clone(), t)).collect();
                     self.approvals = approvals.into_iter().map(|a| (a.id, a)).collect();
                     // Re-attach every terminal we show.
@@ -3153,6 +3157,7 @@ impl App {
                 // The connection loop notices the daemon is gone and starts
                 // the one built alongside this app.
                 self.call(Request::Shutdown, |_| None);
+                self.daemon_outdated = false;
                 self.notify(tr("restarting the daemon…"), false);
             }
         }
