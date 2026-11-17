@@ -23,6 +23,7 @@
   <nav class="nav-links">
     <a href="#loop">How it works</a>
     <a href="#safety">Safety</a>
+    <a href="#remotes">Remotes</a>
     <a href="#terminal">Terminal</a>
     <a href="https://github.com/jason-shen/pitwall">GitHub</a>
   </nav>
@@ -220,6 +221,53 @@
     </div>
   </section>
 
+  <section class="remotes" id="remotes">
+    <div class="section-head">
+      <p class="kicker">Remotes</p>
+      <h2 class="big">Every server, <span class="grad">side by side.</span></h2>
+      <p class="sub">Your SSH servers live in the sidebar, in groups you make. Open one, or the whole group tiled together, and type into all of them at once. Agents running on a server show up in your list with the rest.</p>
+    </div>
+
+    <div class="remote-grid">
+      <div class="mock mock-remotes reveal">
+        <div class="side-tabs"><span>Projects</span><span class="on">Remotes</span><span>Keys</span><b>+</b></div>
+        <div class="side-tools"><span>Connect all</span><span>Run…</span></div>
+        <div class="group open"><i class="caret">▾</i><span class="folder"></span>Home lab<em>2</em></div>
+        <div class="remote live"><span class="srv"></span>build box<code>192.168.50.226</code></div>
+        <div class="remote live"><span class="srv"></span>nas<code>192.168.50.59</code></div>
+        <div class="group open"><i class="caret">▾</i><span class="folder"></span>Work<em>1</em></div>
+        <div class="remote dragging"><span class="srv"></span>staging<code>10.0.0.42</code></div>
+        <div class="group dim"><i class="caret">▸</i><span class="folder"></span>Ungrouped<em>3</em></div>
+        <div class="mock-label agents-label">AGENTS <span>priority</span></div>
+        <div class="agent remote-agent"><span class="dot dot-green pulse"></span><div><b>build box · claude</b><small>Fix the flaky deploy script</small></div><span class="pill pill-remote">remote</span></div>
+      </div>
+
+      <div class="sessions reveal">
+        <div class="bstrip"><span>Broadcasting input to 3 terminals</span><span class="btn-mini btn-mini-on">Stop broadcasting</span></div>
+        <div class="tiles">
+          <div class="sess"><div class="sess-bar">Remote › build box</div><pre><span class="c">$</span> sudo apt upgrade -y<span class="cursor"></span></pre></div>
+          <div class="sess"><div class="sess-bar">Remote › nas</div><pre><span class="c">$</span> sudo apt upgrade -y<span class="cursor"></span></pre></div>
+          <div class="sess wide"><div class="sess-bar">Remote › staging</div><pre><span class="c">$</span> sudo apt upgrade -y<span class="cursor"></span></pre></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="trio">
+      <div class="tile reveal">
+        <h4>Your ssh, your config</h4>
+        <p>Sessions run your own <code>ssh</code>, so ProxyJump and your agent work. Hosts in <code>~/.ssh/config</code> show up on their own; add others in the app.</p>
+      </div>
+      <div class="tile reveal">
+        <h4>One command, every box</h4>
+        <p><b>Run…</b> sends a command to a group and shows each server's exit code and output. Anything that changes things asks first.</p>
+      </div>
+      <div class="tile reveal">
+        <h4>Agents on servers too</h4>
+        <p>A <code>claude</code> running on a server is read off its screen and listed as <b>build box · claude</b>, marked remote.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="terminal" id="terminal">
     <div class="section-head">
       <p class="kicker">Underneath</p>
@@ -237,6 +285,17 @@
       <div class="tile reveal"><h4>Scrollback that survives</h4><p>Restarts keep it. Narrow a card and the text rewraps instead of getting cut.</p></div>
       <div class="tile reveal"><h4>Keys that work</h4><p>kitty keyboard protocol, so Shift+Return is a newline in Claude Code and Codex.</p></div>
       <div class="tile reveal"><h4>Every language</h4><p>IME for Chinese, Japanese and Korean. UI in seven languages.</p></div>
+      <div class="tile reveal">
+        <h4>API keys, locked away</h4>
+        <p>Tokens sealed with AES-256-GCM behind their own password. Reveal or copy asks every time; the clipboard clears itself.</p>
+        <div class="keyrow"><span class="k">OpenAI</span><code>••••••••1234</code></div>
+      </div>
+      <div class="tile reveal">
+        <h4>An icon for every file</h4>
+        <p>Nerd Font icons for each language in the file tree, bundled so they show with any font.</p>
+        <div class="icons"><span class="rs">rs</span><span class="ts">ts</span><span class="py">py</span><span class="go">go</span><span class="md">md</span></div>
+      </div>
+      <div class="tile reveal"><h4>Starts clean</h4><p>No stray shell at launch. Projects, Remotes and Keys each get a tab in the sidebar.</p></div>
     </div>
   </section>
 

@@ -24,7 +24,9 @@ It's also a real terminal, drawn on the GPU, so the agents run in their own TUIs
 - **Review built for agents:** diff against the agent's base, line comments sent back to it, discard a hunk, Accept to commit and merge.
 - **Agents that talk to each other** through the `pitwall` command: list, message, wait on and read one another.
 - **Projects first.** The sidebar is a tree of your projects, each with its Changes, Files, briefs and terminals.
-- **Git and an editor built in**: lazygit-style staging and commits, a file tree, a built-in editor with Markdown preview, or nvim, helix, VS Code and friends.
+- **Remotes.** SSH sessions to your servers as terminal cards: groups, Connect all side by side, typing broadcast to every box, a command run across many, and agents running on a server listed with your own.
+- **API keys, locked away.** A Keys tab keeps tokens encrypted (AES-256-GCM) behind their own password, which revealing or copying one always asks for.
+- **Git and an editor built in**: lazygit-style staging and commits, a file tree with an icon for every language, a built-in editor with Markdown preview, or nvim, helix, VS Code and friends.
 - **A terminal that holds up**: tabs and tiles, scrollback that survives restarts, text that rewraps when a card narrows, mouse reporting, IME, OSC 52, synchronized output, the kitty keyboard protocol for Shift+Return in Claude Code and Codex.
 
 ## Install
@@ -50,7 +52,7 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 
 ## A quick tour
 
-1. **Open a project.** Run `pitwall-gui` in a repo, or press **+** beside PROJECTS and pick a folder. It opens with a terminal; name its tab and press Enter (or just Enter to keep `term-1`).
+1. **Open a project.** Run `pitwall-gui` in a repo, or press **+** on the sidebar's Projects tab and pick a folder. A new project opens with your default agent and a terminal. With nothing open, the app starts on an empty stage rather than a shell in your home folder.
 2. **Write a brief.** **+ Brief** under the project (⌘⌥B), pick a template and a title, and write what you want on the **Ask:** line. **✦ Finish with AI** (⌘⌥F) has Claude read the code and fill in the rest.
 3. **Hand it off.** **Hand to agent →** (⌘⌥↵) opens the New agent form with the brief as the task. Or skip the brief: **+ Agent** (⌘⇧N), or type a task into the command bar (⌘⇧P) and press Enter.
 4. **Watch it.** It appears under AGENTS with its status, what it's doing and how far through the brief it is. When it needs you (an approval, a question, a finished turn), it moves to the top, the project shows "1 waiting", and the dock bounces if pitwall is in the background. ⌘⇧A jumps to the next one that needs you.
@@ -61,7 +63,7 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 
 ```
 ┌ ⌕ Search or start a task  ⌘⇧P ┐┌ ● server   ● reviewer  ● tests   +     ± Changes 6  ▤ Files ┐
-│ PROJECTS                    + ││┌ pitwall › reviewer › Agent ──┐┌ pitwall › README.md ─────────┐│
+│ Projects │ Remotes │ Keys   + ││┌ pitwall › reviewer › Agent ──┐┌ pitwall › README.md ─────────┐│
 │ ▾ ● pitwall                    │││                             ││                             ││
 │     ± Changes        6 files  │││   the agent's terminal      ││   the file, in your editor  ││
 │     ▤ Files                   │││                             ││                             ││
@@ -78,6 +80,8 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 └───────────────────────────────┘└─────────────────────────────────────────────────────────────┘
 ```
 
+The sidebar has three tabs: **Projects**, **Remotes** and **Keys**. The **+** at the end of the row adds to whichever is showing. A dot on a tab you're not on says something there wants you (amber) or a remote session is open (green).
+
 ### Projects
 
 Every project (a git repo, or a folder that isn't one) is a branch of the tree: its **Changes**, its **Files**, files you've opened, then its terminals in the order you opened them. A terminal running an agent stays in its place and shows the agent's status. **+ Agent** and **+ Terminal** sit at the end of each project. Click a project to switch to it (⌘1–9, or ⌘⇧J / ⌘⇧K to step), and use ▸ to fold one away; the tree doesn't fold or reorder itself. Right-click a project and **Remove project…** to take it off the sidebar: its terminals and agents close (agents' worktrees and branches stay), and the folder itself isn't touched. Adding the folder again with **+** brings it back.
@@ -89,6 +93,8 @@ Terminals follow `cd`. A terminal that moves into another repo moves to that pro
 AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. An agent with its own worktree shows how much it has changed so far (files, lines added and removed), so you can tell finished agents apart without opening each. An agent handed a brief shows the brief's title and how many of its steps are ticked. Right-click for its Changes, its brief, Accept, kill or remove.
 
 Any terminal running claude, codex, opencode, gemini, aider, goose, amp and other agent CLIs counts as an agent, whether pitwall started it or you typed it. When one is blocked on a numbered prompt, its choices show as buttons under it in the tree, so you can answer without opening it.
+
+An agent running on a server, in a remote session, is listed too, as `machine · claude` with a **remote** badge. Locally all pitwall can see is `ssh`, so it reads the agent off the session's screen and title the way keel does: the agent's name leading the title (Claude Code's `✳ <topic>` counts), or its name on screen together with its own UI.
 
 ### Tabs and cards
 
@@ -102,7 +108,23 @@ Whatever is on screen sits in a **card**. ⌘⇧D splits, and you can tile as ma
 - ⌃⌥H / J / K / L move between cards, ⌃⌥⇧H / J / K / L swap, ⌃⌥Z maximizes, ⌃⌥W closes (rebind them in Settings → Shortcuts). They're on Ctrl+Option so plain Option keys reach the programs in the terminal;
 - right-click a title bar to maximize, swap, broadcast or close.
 
-**Broadcast** (⌘⇧B) sends your typing to every terminal card at once.
+**Broadcast** (⌘⇧B) sends your typing to every terminal card at once. While it's on, or once two remote sessions share the screen, a strip above the cards says where typing goes and turns it on or off, and broadcasting cards get an orange border.
+
+### Remotes
+
+The Remotes tab lists your SSH servers: the ones under `hosts` in config.toml and every `Host` entry in `~/.ssh/config`. Each shows a name you can change (double-click) and its IP. Click one to open a session to it as a terminal card. Sessions use your own `ssh`, so your ssh config, ProxyJump and SSH agent all apply, and they get a tab strip of their own.
+
+- **+ → Add a remote…** takes an address, and optionally a name, user, port, key file, tags and a group, and writes it into config.toml. Right-click a remote to edit it, open a new session, run a command on it, copy its address or remove it. Removing one from `~/.ssh/config` only stops pitwall listing it; the file isn't touched.
+- **Groups.** **+ → New group** makes a folder; drag a remote onto one, or right-click → **Move to**. Anything in no group sits under **Ungrouped**. Right-click a group to connect to or run a command on all of it, rename it or delete it (its remotes go back to Ungrouped). Groups and names are kept in `state.json`, so `~/.ssh/config` hosts can be grouped too.
+- **Connect all** opens every remote, or a group, tiled side by side; turn on broadcast and type into all of them at once.
+- **Run…** sends one command to many remotes and shows each one's exit code, time and output. It goes through the same policy as agents' commands, so anything that changes things asks first.
+- A session that ends keeps its screen, so you can read why, with **Reconnect** and **Close** under it.
+
+### API keys
+
+The Keys tab keeps tokens for other services (OpenAI, Stripe, GitHub). The first time, you set a password for them. Each key is sealed with AES-256-GCM under a random key, and that key is wrapped with one derived from your password (PBKDF2-SHA256, 600,000 rounds), the same scheme keel uses. `~/.pitwall/apikeys.json` is readable only by you and never holds a key in the clear.
+
+Each row shows the name, the service and the last four characters. **Reveal** and **Copy** ask for the password every time: a revealed key hides again after 30 seconds, and a copied one is cleared from the clipboard after 30 seconds if it's still there. For five minutes after you type the password, new keys can be saved without asking again. **+** also changes the password and locks the keys at once. A forgotten password can't be recovered: **Forgot the password…** deletes every key so you can start again.
 
 ### Changes
 
@@ -112,7 +134,7 @@ Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) write
 
 ### Files and editors
 
-The project's file tree. Clicking a file opens it in the editor you choose in Settings:
+The project's file tree, with a Nerd Font icon for each language and file type (Rust, TypeScript, Python, Go, Markdown, Docker, git files and around 70 more), coloured as editors colour them. The symbols font is bundled, so the icons show whatever terminal font you pick. Clicking a file opens it in the editor you choose in Settings:
 
 - the **built-in editor** (syntax highlighting, selection, undo, find, go to line), which reloads live when an agent changes the file;
 - a **terminal editor** (nvim, vim, helix, micro, nano) running inside the card;
@@ -238,7 +260,8 @@ pitwall approve 3 | deny 3                # answer a pending approval
 pitwall snaps fix-auth                    # its undo history
 pitwall diff fix-auth '#5^' '#5'          # what one step changed
 pitwall revert fix-auth '#4'              # roll back to a step
-pitwall run tag:web -- 'journalctl -u nginx -n 50'   # policy-checked SSH across hosts
+pitwall hosts                             # your remotes, ~/.ssh/config hosts included
+pitwall run tag:web -- 'journalctl -u nginx -n 50'   # policy-checked SSH across remotes
 pitwall ask "why is prod-3 returning 502s?"          # an LLM investigation over SSH, saved as a runbook
 pitwall stop                              # stop the daemon and everything it runs
 ```
@@ -269,6 +292,15 @@ auto_allow_read_only = false
 theme = "base16-ocean.dark" # the editor's syntax theme
 ```
 
+Remotes added in the app are written to `hosts`, which has to sit above the first `[table]` (in TOML a key below one belongs to that table; older configs had it under `[ops]`, where it was never read, and entries there are still picked up):
+
+```toml
+hosts = [
+  { name = "build box", addr = "192.168.50.226", user = "ubuntu", tags = ["lab"] },
+  { name = "db-1", addr = "db.internal", port = 2222, key = "~/.ssh/id_ed25519" },
+]
+```
+
 **Settings** (⌘, or ⚙ at the foot of the sidebar) is the app's half of the same file, written as `[app]` and `[keys]` at the end of it. Change things in either place: pitwall picks up a hand edit within a couple of seconds, and keeps your comments and the daemon's sections when it saves.
 
 - font (any installed monospace font or a font file), weight, bold weight, size and line height; pick a Nerd Font if your prompt uses icons;
@@ -280,7 +312,7 @@ theme = "base16-ocean.dark" # the editor's syntax theme
 
 Without a chosen font pitwall uses SF Mono or Menlo (JetBrains Mono or DejaVu on Linux) with symbol, CJK and colour emoji fallbacks, or `PITWALL_FONT=/path/to/font.ttf`.
 
-What isn't a setting stays in `~/.pitwall`: the layout (projects, tabs, cards and open files) in `layout.json`, put back on the next launch, and the names you give projects and tabs, and which projects are folded, in `state.json`.
+What isn't a setting stays in `~/.pitwall`: the layout (projects, tabs, cards and open files) in `layout.json`, put back on the next launch; the names you give projects, tabs and remotes, remote groups, which projects and groups are folded and the sidebar's tab in `state.json`; and your API keys, encrypted, in `apikeys.json`.
 
 ## How it works
 
@@ -305,7 +337,7 @@ scripts/         the app bundle's Info.plist, the Homebrew cask template, macos-
 Makefile         build, install and publish (`make help`)
 ```
 
-`cargo test --workspace` runs 85 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts and secret redaction.
+`cargo test --workspace` runs 102 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts, secret redaction, `~/.ssh/config` hosts, agents spotted in remote sessions, and API key encryption.
 
 ## Releasing
 
@@ -323,6 +355,8 @@ The app is signed ad hoc, and the cask clears the quarantine flag so Gatekeeper 
 
 - Terminals survive the app closing. When the daemon stops (`pitwall stop`, a reboot) their processes end; the next daemon starts them again in the same folders, with the same command (an editor card comes back as its editor), and agents that had finished a turn resume their session (`resume_args` in each agent's config); one that never got going starts over with its task. A shell comes back as a fresh shell. A task that can't start again (its folder is on a drive that isn't mounted, say) is kept for the next start rather than forgotten.
 - The approval bar works with Claude Code and Codex. Other agents' own prompts show as *waiting* and are answered in their tab.
+- Agents on a remote are spotted from their screen and aren't hooked into pitwall's policy, so their commands don't come through the approval bar.
+- Remote sessions need an `ssh` binary on the machine running the daemon. Remote groups live in the app; the CLI selects remotes by name and tag.
 - The built-in editor has no multi-cursor. With nothing selected, copy and cut take the whole line.
 - Card sizes reset when the app restarts.
 
