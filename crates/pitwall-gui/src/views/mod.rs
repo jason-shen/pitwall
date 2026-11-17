@@ -14,13 +14,14 @@ use pitwall_core::{now_unix, paths};
 mod fileicon;
 mod gitview;
 mod hosts;
+mod keys;
 
 use crate::app::{
     agent_kind, is_agent, item_project, project_item, task_dir, App, Child, CmdBar, Confirm,
     MainSrc, MdMode, SettingsUi, Target,
 };
 use crate::i18n::{tr, trf};
-use crate::settings::{self as cfg, CursorStyle};
+use crate::settings::{self as cfg, CursorStyle, SidebarTab};
 use crate::{term, termview, theme};
 
 // Shared with keel: warm graphite with a sea-teal accent (see theme::c).
@@ -132,8 +133,11 @@ enum Action {
     /// Ask, then take it out of the app.
     RemoveRemote(String),
     NewGroup,
-    /// Show Remotes (true) or Projects in the sidebar.
-    SidebarTab(bool),
+    SidebarTab(SidebarTab),
+    KeyRequest(crate::apikeys::Action),
+    EditKey(String),
+    ConfirmDeleteKey(String, String),
+    ConfirmResetKeys,
     StartRenameGroup(String),
     /// The name typed for a group, or None when the rename was cancelled.
     RenameGroup(String, Option<String>),
@@ -276,6 +280,8 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
     dialogs(&ctx, app, &mut acts);
     hosts::fleet_window(&ctx, app);
     hosts::remote_form(&ctx, app, &mut acts);
+    app.keys_tick();
+    keys::dialogs(&ctx, app);
     command_bar(&ctx, app, &mut acts);
     shortcuts_sheet(&ctx, app);
     settings_window(&ctx, app);
@@ -704,36 +710,38 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             }
             ui.add_space(10.0);
             app.refresh_hosts(false);
-            let remotes = app.settings.sidebar_remotes;
+            let tab = app.settings.sidebar_tab;
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if remotes {
-                        hosts::add_button(ui, acts);
-                    } else if ui
-                        .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
-                        .on_hover_text(tr("New project: open a folder"))
-                        .clicked()
-                    {
-                        acts.push(Action::NewProject);
+                    match tab {
+                        SidebarTab::Projects => {
+                            if ui
+                                .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
+                                .on_hover_text(tr("New project: open a folder"))
+                                .clicked()
+                            {
+                                acts.push(Action::NewProject);
+                            }
+                        }
+                        SidebarTab::Remotes => hosts::add_button(ui, acts),
+                        SidebarTab::Keys => keys::add_button(ui, app, acts),
                     }
                     ui.add_space(4.0);
                     sidebar_tabs(ui, app, acts);
                 });
             });
             ui.add_space(8.0);
-            if remotes {
+            if tab == SidebarTab::Remotes {
                 hosts::toolbar(ui, app, acts);
             }
             // Each tab keeps its own scroll position.
             ScrollArea::vertical()
-                .id_salt(if remotes { "side_remotes" } else { "side_list" })
+                .id_salt(("side", tab as u8))
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    if remotes {
-                        hosts::section(ui, app, acts)
-                    } else {
-                        side_list(ui, app, acts)
-                    }
+                .show(ui, |ui| match tab {
+                    SidebarTab::Projects => side_list(ui, app, acts),
+                    SidebarTab::Remotes => hosts::section(ui, app, acts),
+                    SidebarTab::Keys => keys::section(ui, app, acts),
                 });
         });
 }
@@ -758,10 +766,11 @@ fn side_list(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     }
 }
 
-/// Projects | Remotes along the top of the sidebar. A dot on the tab you're
-/// not on says something there wants you (amber) or a session is open (green).
+/// Projects | Remotes | Keys along the top of the sidebar. A dot on a tab
+/// you're not on says something there wants you (amber) or a session is
+/// open (green).
 fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
-    let remotes = app.settings.sidebar_remotes;
+    let current = app.settings.sidebar_tab;
     let waiting = |remote: bool| {
         app.tasks
             .values()
@@ -774,18 +783,19 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 8.0, Color32::from_white_alpha(10));
-    let half = rect.width() / 2.0;
-    for (i, (icon, label, is_remote)) in [
-        ('\u{f07b}', tr("Projects"), false),
-        ('\u{f048b}', tr("Remotes"), true),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let r = Rect::from_min_size(rect.min + vec2(half * i as f32, 0.0), vec2(half, rect.height()))
+    let tabs = [
+        // nf-fa-folder, nf-md-server, nf-md-key
+        ('\u{f07b}', tr("Projects"), SidebarTab::Projects),
+        ('\u{f048b}', tr("Remotes"), SidebarTab::Remotes),
+        ('\u{f0306}', tr("Keys"), SidebarTab::Keys),
+    ];
+    let third = rect.width() / tabs.len() as f32;
+    for (i, (icon, label, tab)) in tabs.into_iter().enumerate() {
+        let r = Rect::from_min_size(rect.min + vec2(third * i as f32, 0.0), vec2(third, rect.height()))
             .shrink(3.0);
         let resp = ui.interact(r, Id::unique(("sidebar-tab", i)), Sense::click());
-        let on = remotes == is_remote;
+        let on = current == tab;
+        let is_remote = tab == SidebarTab::Remotes;
         if on {
             p.rect_filled(r, 6.0, SEL);
         } else if resp.hovered() {
@@ -795,7 +805,10 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         let text = ui.fonts_mut(|f| {
             f.layout_no_wrap(label.to_string(), FontId::proportional(13.0), color)
         });
-        let w = 14.0 + 6.0 + text.size().x;
+        // A narrow sidebar keeps just the icons, named on hover.
+        let full = 14.0 + 6.0 + text.size().x;
+        let roomy = full + 14.0 <= r.width();
+        let w = if roomy { full } else { 14.0 };
         let x = r.center().x - w / 2.0;
         p.text(
             pos2(x + 7.0, r.center().y),
@@ -804,8 +817,12 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
             theme::icon_font(13.0),
             if on { ACCENT } else { MUTED },
         );
-        p.galley(pos2(x + 20.0, r.center().y - text.size().y / 2.0), text, color);
-        if !on {
+        if roomy {
+            p.galley(pos2(x + 20.0, r.center().y - text.size().y / 2.0), text, color);
+        } else {
+            resp.clone().on_hover_text(label);
+        }
+        if !on && tab != SidebarTab::Keys {
             let dot = if waiting(is_remote) {
                 Some(AMBER)
             } else if is_remote && live_sessions {
@@ -818,7 +835,7 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
             }
         }
         if resp.clicked() && !on {
-            acts.push(Action::SidebarTab(is_remote));
+            acts.push(Action::SidebarTab(tab));
         }
     }
 }
@@ -4424,6 +4441,8 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                     | Confirm::DiscardHunk { .. }
                     | Confirm::RemoveProject { .. }
                     | Confirm::RemoveRemote { .. }
+                    | Confirm::DeleteApiKey { .. }
+                    | Confirm::ResetApiKeys { .. }
                     | Confirm::TrashFile { .. }
             );
         let mut answer: Option<bool> = None;
@@ -5870,7 +5889,11 @@ fn apply(app: &mut App, a: Action) {
             app.ask_remove_remote(&h);
         }
         Action::NewGroup => app.new_group(),
-        Action::SidebarTab(r) => app.settings.sidebar_remotes = r,
+        Action::SidebarTab(t) => app.settings.sidebar_tab = t,
+        Action::KeyRequest(a) => app.keys_request(a),
+        Action::EditKey(id) => app.keys_open_editor(Some(&id)),
+        Action::ConfirmDeleteKey(id, name) => keys::confirm_delete(app, id, &name),
+        Action::ConfirmResetKeys => keys::confirm_reset(app),
         Action::StartRenameGroup(g) => app.renaming_group = Some((g.clone(), g)),
         Action::RenameGroup(old, new) => match new {
             Some(n) => app.rename_group(&old, &n),

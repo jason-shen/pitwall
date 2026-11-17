@@ -425,6 +425,14 @@ pub enum Confirm {
         name: String,
         text: String,
     },
+    DeleteApiKey {
+        id: String,
+        text: String,
+    },
+    /// Forgot the API keys password: delete every key and start again.
+    ResetApiKeys {
+        text: String,
+    },
 }
 
 impl Confirm {
@@ -439,6 +447,8 @@ impl Confirm {
             | Confirm::TrashFile { text, .. }
             | Confirm::CloseDirty { text, .. }
             | Confirm::RemoveRemote { text, .. }
+            | Confirm::DeleteApiKey { text, .. }
+            | Confirm::ResetApiKeys { text }
             | Confirm::RestartDaemon { text } => text,
         }
     }
@@ -484,6 +494,9 @@ pub struct App {
     pub remote_form: Option<crate::remote::RemoteForm>,
     /// A remote group being renamed: its name now, and the text typed.
     pub renaming_group: Option<(String, String)>,
+    /// Saved API keys (sealed) and the state of their dialogs.
+    pub api_keys: crate::apikeys::Store,
+    pub api_ui: crate::apikeys::KeysUi,
     /// The window for running a command across hosts, while it's open.
     pub fleet: Option<crate::remote::FleetUi>,
     saved_layout: Option<crate::layout::Layout>,
@@ -678,6 +691,8 @@ impl App {
             renaming_remote: None,
             remote_form: None,
             renaming_group: None,
+            api_keys: crate::apikeys::Store::load(),
+            api_ui: Default::default(),
             fleet: None,
             saved_layout: None,
             parent_of: Default::default(),
@@ -3586,6 +3601,8 @@ impl App {
             }
             Confirm::RemoveProject { root, .. } => self.remove_project(&root),
             Confirm::RemoveRemote { name, .. } => self.remove_remote(&name),
+            Confirm::DeleteApiKey { id, .. } => self.keys_delete(&id),
+            Confirm::ResetApiKeys { .. } => self.keys_reset(),
             Confirm::TrashFile { path, .. } => self.trash_file(&path),
             Confirm::DiscardHunk { dir, hunk, .. } => self.git_op(move |_| {
                 git::discard_hunk(&dir, &hunk)

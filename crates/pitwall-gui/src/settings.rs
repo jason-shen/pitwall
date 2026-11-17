@@ -30,6 +30,16 @@ pub enum CursorStyle {
     Bar,
 }
 
+/// What the sidebar lists.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarTab {
+    #[default]
+    Projects,
+    Remotes,
+    Keys,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -112,9 +122,8 @@ pub struct Settings {
     /// AGENTS sorted by latest activity instead of what needs you.
     #[serde(skip)]
     pub agents_by_recent: bool,
-    /// The sidebar shows Remotes rather than Projects.
     #[serde(skip)]
-    pub sidebar_remotes: bool,
+    pub sidebar_tab: SidebarTab,
     /// Tab order you dragged into, by project root. Tabs not listed (new
     /// ones) go after, oldest first.
     #[serde(skip)]
@@ -135,7 +144,7 @@ struct State {
     folded_projects: std::collections::BTreeSet<String>,
     hidden_projects: std::collections::BTreeSet<String>,
     agents_by_recent: bool,
-    sidebar_remotes: bool,
+    sidebar_tab: SidebarTab,
     tab_order: std::collections::BTreeMap<String, Vec<String>>,
 }
 
@@ -180,7 +189,7 @@ impl Default for Settings {
             folded_projects: Default::default(),
             hidden_projects: Default::default(),
             agents_by_recent: false,
-            sidebar_remotes: false,
+            sidebar_tab: SidebarTab::Projects,
             tab_order: Default::default(),
             project_names: Default::default(),
             // Ctrl+Alt: Alt+h/j/k/l, Alt+Enter and friends belong to the
@@ -287,7 +296,7 @@ impl Settings {
         s.folded_projects = state.folded_projects;
         s.hidden_projects = state.hidden_projects;
         s.agents_by_recent = state.agents_by_recent;
-        s.sidebar_remotes = state.sidebar_remotes;
+        s.sidebar_tab = state.sidebar_tab;
         s.tab_order = state.tab_order;
         // Until [keys] is written, the card keys follow the old setting.
         let cards = match (table.contains_key("keys"), s.tile_mod) {
@@ -374,7 +383,7 @@ impl Settings {
             folded_projects: self.folded_projects.clone(),
             hidden_projects: self.hidden_projects.clone(),
             agents_by_recent: self.agents_by_recent,
-            sidebar_remotes: self.sidebar_remotes,
+            sidebar_tab: self.sidebar_tab,
             tab_order: self.tab_order.clone(),
         };
         let sp = state_path();

@@ -1,5 +1,6 @@
 //! pitwall — a standalone GPU terminal for running coding agents side by side.
 
+mod apikeys;
 mod app;
 mod briefs;
 #[cfg(debug_assertions)]

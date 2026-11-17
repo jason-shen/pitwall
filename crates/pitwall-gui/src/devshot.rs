@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -152,6 +152,32 @@ impl DevShot {
                     app.refresh_hosts(true);
                     app.ask_remove_remote(host);
                 }
+                Some(("keypw", pw)) => {
+                    app.api_ui.setup_pw = pw.to_string();
+                    app.api_ui.setup_confirm = pw.to_string();
+                    app.keys_setup();
+                }
+                Some(("addkey", spec)) => {
+                    let mut it = spec.splitn(3, ':');
+                    let (name, service, secret) =
+                        (it.next().unwrap_or(""), it.next().unwrap_or(""), it.next().unwrap_or(""));
+                    app.keys_open_editor(None);
+                    if let Some(e) = app.api_ui.editor.as_mut() {
+                        e.name = name.into();
+                        e.service = service.into();
+                        e.secret = secret.into();
+                    }
+                    app.keys_save_editor();
+                }
+                Some(("reveal", pw)) => {
+                    if let Some(id) = app.api_keys.keys.first().map(|k| k.id.clone()) {
+                        app.keys_request(crate::apikeys::Action::Reveal(id));
+                        if let Some(p) = app.api_ui.prompt.as_mut() {
+                            p.password = pw.to_string();
+                        }
+                        app.keys_submit_prompt();
+                    }
+                }
                 Some(("addremote", spec)) => {
                     let (addr, name) = spec.split_once(':').unwrap_or((spec, ""));
                     app.open_remote_form(None, None);
@@ -193,8 +219,9 @@ impl DevShot {
                     "changes" => app.toggle_child(Child::Changes),
                     "files" => app.toggle_child(Child::Files),
                     "saveremote" => app.save_remote_form(false),
-                    "projects" => app.settings.sidebar_remotes = false,
-                    "remotes" => app.settings.sidebar_remotes = true,
+                    "projects" => app.settings.sidebar_tab = crate::settings::SidebarTab::Projects,
+                    "remotes" => app.settings.sidebar_tab = crate::settings::SidebarTab::Remotes,
+                    "keystab" => app.settings.sidebar_tab = crate::settings::SidebarTab::Keys,
                     "terminal" => {
                         app.bar = None;
                         app.new_form = None;
