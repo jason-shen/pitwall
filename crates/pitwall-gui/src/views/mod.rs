@@ -11,6 +11,7 @@ use pitwall_core::git::{self, Change, DiffMode, Hunk, LineKind};
 use pitwall_core::proto::{ApprovalSource, SnapshotInfo, TaskInfo, TaskStatus};
 use pitwall_core::{now_unix, paths};
 
+mod fileicon;
 mod gitview;
 
 use crate::app::{
@@ -1999,7 +2000,9 @@ fn files(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         ui.add(egui::Label::new(RichText::new(&name).small().color(MUTED)).truncate())
             .on_hover_text(ctx.display().to_string());
     });
-    let row_h = 18.0;
+    ui.add_space(4.0);
+    let row_h = 22.0;
+    let indent = 14.0;
     let n = app.tree.rows.len();
     ScrollArea::vertical()
         .id_salt("files")
@@ -2009,24 +2012,39 @@ fn files(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             for r in &visible {
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                let p = ui.painter();
                 if resp.hovered() {
-                    ui.painter().rect_filled(rect, 3.0, PANEL_2);
+                    p.rect_filled(rect.shrink2(vec2(0.0, 1.0)), 4.0, SEL);
                 }
-                let x = rect.left() + 4.0 + r.depth as f32 * 12.0;
-                let (label, color) = if r.is_dir {
-                    (
-                        format!("{} {}", if r.expanded { "▾" } else { "▸" }, r.name),
-                        ACCENT,
-                    )
+                let y = rect.center().y;
+                let x = rect.left() + 6.0 + r.depth as f32 * indent;
+                // One guide per ancestor, under its chevron; adjacent rows'
+                // segments join into a line.
+                for d in 0..r.depth {
+                    let gx = rect.left() + 6.0 + d as f32 * indent + 4.0;
+                    p.line_segment(
+                        [pos2(gx, rect.top()), pos2(gx, rect.bottom())],
+                        Stroke::new(1.0, Color32::from_white_alpha(14)),
+                    );
+                }
+                if r.is_dir {
+                    p.text(
+                        pos2(x + 4.0, y),
+                        Align2::CENTER_CENTER,
+                        if r.expanded { "▾" } else { "▸" },
+                        FontId::proportional(10.0),
+                        if resp.hovered() { TEXT } else { MUTED },
+                    );
+                    fileicon::folder(p, pos2(x + 12.0, y), r.expanded);
                 } else {
-                    (format!("  {}", r.name), TEXT)
-                };
-                ui.painter().text(
-                    pos2(x, rect.center().y),
+                    fileicon::file(p, pos2(x + 12.0, y), &r.name);
+                }
+                p.text(
+                    pos2(x + 12.0 + fileicon::WIDTH + 7.0, y),
                     Align2::LEFT_CENTER,
-                    label,
+                    &r.name,
                     FontId::proportional(13.0),
-                    color,
+                    TEXT,
                 );
                 let mark = if r.is_dir {
                     (app.marks.dirs.contains(&r.rel) || app.marks.files.contains_key(&r.rel))
