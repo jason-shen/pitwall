@@ -814,7 +814,7 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
                 None
             };
             if let Some(c) = dot {
-                p.circle_filled(pos2(x + w + 7.0, r.center().y - 4.0), 3.0, c);
+                p.circle_filled(pos2(x + w + 8.0, r.center().y), 3.0, c);
             }
         }
         if resp.clicked() && !on {
