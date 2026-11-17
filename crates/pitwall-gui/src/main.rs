@@ -12,6 +12,7 @@ mod keys;
 mod layout;
 mod markdown;
 mod net;
+mod reviews;
 mod settings;
 mod term;
 mod termview;

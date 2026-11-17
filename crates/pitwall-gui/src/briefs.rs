@@ -298,19 +298,28 @@ pub fn list(root: &Path) -> Vec<Entry> {
     v.into_iter().map(|(_, e)| e).collect()
 }
 
+/// Keep `.pitwall/` (briefs, reviews) out of commits until you choose
+/// otherwise.
+pub fn ignore_folder(root: &Path) -> std::io::Result<()> {
+    let dir = root.join(".pitwall");
+    std::fs::create_dir_all(&dir)?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(
+            &ignore,
+            "# pitwall's briefs and reviews; delete this file to commit them\n*\n",
+        )?;
+    }
+    Ok(())
+}
+
 /// Write a new brief from a template and return its path. The briefs folder
 /// gets a .gitignore so they stay out of commits until you choose otherwise.
 pub fn create(root: &Path, title: &str, template: &Template) -> std::io::Result<PathBuf> {
     pitwall_core::rename::adopt_project(root);
     let d = dir(root);
     std::fs::create_dir_all(&d)?;
-    let ignore = root.join(".pitwall").join(".gitignore");
-    if !ignore.exists() {
-        std::fs::write(
-            &ignore,
-            "# pitwall's briefs; delete this file to commit them\n*\n",
-        )?;
-    }
+    ignore_folder(root)?;
     let base = {
         let s = crate::app::slugify(title);
         if s.is_empty() {

@@ -111,6 +111,8 @@ enum Action {
     MoveTab(String, String, bool),
     /// A tab dropped on a card: tile it beside that card.
     TileOnCard(String, usize),
+    /// Have a project's reviewer write its next review.
+    Review(String),
     /// A pane back out to a tab of its own.
     Separate(String),
     ToggleZoom,
@@ -860,6 +862,14 @@ fn project_body(ui: &mut Ui, app: &mut App, root: &str, acts: &mut Vec<Action>) 
                 tr("+ Brief"),
                 tr("A doc to plan the work, then hand to an agent").to_string(),
                 Action::NewBrief,
+            ),
+            (
+                tr("Review"),
+                trf!(
+                    "Have {agent} review the changes and write .pitwall/reviews/review-N.md",
+                    agent = app.settings.reviewer_agent
+                ),
+                Action::Review(root.to_string()),
             ),
         ] {
             let b = egui::Button::new(RichText::new(label).size(12.5).color(MUTED))
@@ -4437,13 +4447,16 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
             act: BarAct::Start(q.to_string()),
         });
     }
-    let cmds: [(&str, &str, BarFn); 11] = [
+    let cmds: [(&str, &str, BarFn); 12] = [
         (tr("New agent"), "✦", |_, a| a.push(Action::NewAgent)),
         (tr("New terminal"), "❯", |app, a| {
             a.push(new_terminal_action(app))
         }),
         (tr("New project…"), "+", |_, a| a.push(Action::NewProject)),
         (tr("New brief…"), "✎", |_, a| a.push(Action::NewBrief)),
+        (tr("Review the changes"), "⌕", |app, a| {
+            a.push(Action::Review(app.project.clone().unwrap_or_default()))
+        }),
         (tr("Show changes"), "±", |app, _| app.show_git()),
         (tr("Browse files"), "▤", |app, _| {
             app.toggle_child(Child::Files)
@@ -4894,6 +4907,21 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                         });
                 });
                 ui.checkbox(&mut s.worktree, tr("Give each agent its own branch and worktree"));
+                ui.horizontal(|ui| {
+                    ui.label(tr("Reviewer"));
+                    egui::ComboBox::from_id_salt("reviewer-agent")
+                        .selected_text(s.reviewer_agent.clone())
+                        .show_ui(ui, |ui| {
+                            for a in agents.iter() {
+                                ui.selectable_value(&mut s.reviewer_agent, a.clone(), a);
+                            }
+                        });
+                    ui.label(
+                        RichText::new(tr("runs a project's Review"))
+                            .small()
+                            .color(MUTED),
+                    );
+                });
 
                 ui.add_space(8.0);
                 settings_heading(ui, tr("Notifications"));
@@ -5595,6 +5623,7 @@ fn apply(app: &mut App, a: Action) {
             _ => app.tile_beside(&id, at),
         },
         Action::Separate(id) => app.separate(&id),
+        Action::Review(root) => app.start_review(&root),
         Action::ToggleZoom => {
             if app.split() {
                 app.zoom = !app.zoom;

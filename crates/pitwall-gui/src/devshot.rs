@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, startreview, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -216,6 +216,11 @@ grep -c "warning" build.log | xargs -I{} echo "{} warnings""##
                         app.notify("agent: finished its turn", false);
                     }
                     "toast" => app.notify(crate::i18n::trf!("Copied {n} lines", n = 12), false),
+                    // The project's Review button (twice, to see the reviewer reused).
+                    "startreview" | "startreview2" => {
+                        let root = app.project.clone().unwrap_or_default();
+                        app.start_review(&root);
+                    }
                     "keys" => app.show_keys = true,
                     "submit" => app.submit_form(),
                     "swap" => app.swap_cards(0, 1),

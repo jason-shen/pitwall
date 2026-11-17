@@ -61,6 +61,8 @@ pub struct Settings {
     pub default_agent: String,
     /// New agents get their own branch and worktree.
     pub worktree: bool,
+    /// Agent each project's reviewer runs.
+    pub reviewer_agent: String,
     /// The old card-keys modifier, read once to seed the card keys in
     /// `[keys]`; the keys themselves are what count now.
     #[serde(skip_serializing)]
@@ -137,6 +139,7 @@ impl Default for Settings {
             editor: "builtin".into(),
             default_agent: "claude".into(),
             worktree: true,
+            reviewer_agent: "claude".into(),
             tile_mod: Default::default(),
             tabs_bottom: false,
             snippets: vec![],

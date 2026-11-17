@@ -481,6 +481,9 @@ pub struct App {
     reviewed: HashSet<String>,
     /// When you last typed; a dialog doesn't open under your fingers.
     last_typed: Instant,
+    /// Reviews asked for and not written yet, with their project.
+    reviews_due: Vec<(PathBuf, String)>,
+    reviews_checked: Instant,
     /// A new project's two tabs, started one after the other so the agent's
     /// is first whichever the daemon finishes starting first.
     project_setup: Option<ProjectSetup>,
@@ -654,6 +657,8 @@ impl App {
             review_ready: vec![],
             reviewed: HashSet::new(),
             last_typed: Instant::now(),
+            reviews_due: vec![],
+            reviews_checked: Instant::now(),
             project_setup: None,
             active: 0,
             project: None,
@@ -1513,6 +1518,82 @@ impl App {
         }
     }
 
+    /// Have the project's reviewer look over the work and write the next
+    /// `review-N.md`. A reviewer already sitting idle in the project is
+    /// given the job instead of a second one being started.
+    pub fn start_review(&mut self, root: &str) {
+        let agent = self.settings.reviewer_agent.clone();
+        if !self.cfg.agents.contains_key(&agent) || agent == "shell" {
+            return self.notify(
+                trf!("the reviewer runs {agent}, which isn't in [agents]; pick another in Settings", agent = agent),
+                true,
+            );
+        }
+        let rootp = PathBuf::from(root);
+        if let Err(e) = crate::briefs::ignore_folder(&rootp)
+            .and_then(|_| std::fs::create_dir_all(crate::reviews::dir(&rootp)))
+        {
+            return self.notify(trf!("couldn't make the reviews folder: {e}", e = e), true);
+        }
+        let path = crate::reviews::next_path(&rootp);
+        let prompt = crate::reviews::prompt(&path);
+        let file = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        let reviewer = self
+            .tasks
+            .values()
+            .filter(|t| t.name == "reviewer" && self.project_of(t) == root)
+            .filter(|t| !matches!(t.status, TaskStatus::Exited { .. }))
+            .max_by_key(|t| t.created_unix)
+            .map(|t| (t.id.clone(), t.status.clone()));
+        match reviewer {
+            Some((_, TaskStatus::Running | TaskStatus::Waiting { .. })) => {
+                return self.notify(tr("the reviewer is still busy; try again when it's done"), false);
+            }
+            Some((id, _)) => {
+                self.call(
+                    Request::Prompt {
+                        id: id.clone(),
+                        text: prompt,
+                        from: None,
+                    },
+                    |r| r.err().map(|e| Reply::Notice(e, true)),
+                );
+                self.open_item(&id);
+            }
+            None => self.create_task(agent, "reviewer".into(), Some(prompt), false, rootp),
+        }
+        self.notify(trf!("reviewing; it'll write {file}", file = file), false);
+        self.reviews_due.push((path, root.to_string()));
+    }
+
+    /// A review the reviewer has finished writing opens in the editor.
+    fn open_written_reviews(&mut self) {
+        if self.reviews_due.is_empty() || self.reviews_checked.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.reviews_checked = Instant::now();
+        self.ctx.request_repaint_after(Duration::from_secs(1));
+        // Written and left alone for a second, so a half-written file
+        // doesn't open.
+        let done = |p: &Path| {
+            std::fs::metadata(p).is_ok_and(|m| {
+                m.len() > 0
+                    && m.modified()
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > Duration::from_secs(1))
+            })
+        };
+        let (ready, waiting): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.reviews_due).into_iter().partition(|(p, _)| done(p));
+        self.reviews_due = waiting;
+        for (path, root) in ready {
+            let name = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            self.open_path(project_item(&root), path, None);
+            self.notify(trf!("{file} is ready", file = name), false);
+        }
+    }
+
     /// Once per agent: a later turn doesn't put the same work up again.
     pub fn queue_review(&mut self, id: &str) {
         if self.reviewed.insert(id.to_string()) {
@@ -1916,6 +1997,7 @@ impl App {
             self.last_typed = Instant::now();
         }
         self.show_finished_brief();
+        self.open_written_reviews();
         self.watch_config();
         self.save_layout();
         self.drain_notifications();
