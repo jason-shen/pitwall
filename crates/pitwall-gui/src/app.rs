@@ -420,6 +420,11 @@ pub enum Confirm {
     RestartDaemon {
         text: String,
     },
+    /// Take a remote out of the app, closing its sessions.
+    RemoveRemote {
+        name: String,
+        text: String,
+    },
 }
 
 impl Confirm {
@@ -433,6 +438,7 @@ impl Confirm {
             | Confirm::RemoveProject { text, .. }
             | Confirm::TrashFile { text, .. }
             | Confirm::CloseDirty { text, .. }
+            | Confirm::RemoveRemote { text, .. }
             | Confirm::RestartDaemon { text } => text,
         }
     }
@@ -475,6 +481,9 @@ pub struct App {
     pub ssh_reconnects: Vec<(String, String)>,
     /// A remote being renamed in the sidebar, and the text typed so far.
     pub renaming_remote: Option<(String, String)>,
+    pub remote_form: Option<crate::remote::RemoteForm>,
+    /// A remote group being renamed: its name now, and the text typed.
+    pub renaming_group: Option<(String, String)>,
     /// The window for running a command across hosts, while it's open.
     pub fleet: Option<crate::remote::FleetUi>,
     saved_layout: Option<crate::layout::Layout>,
@@ -667,6 +676,8 @@ impl App {
             ssh_batch: Default::default(),
             ssh_reconnects: vec![],
             renaming_remote: None,
+            remote_form: None,
+            renaming_group: None,
             fleet: None,
             saved_layout: None,
             parent_of: Default::default(),
@@ -3574,6 +3585,7 @@ impl App {
                 );
             }
             Confirm::RemoveProject { root, .. } => self.remove_project(&root),
+            Confirm::RemoveRemote { name, .. } => self.remove_remote(&name),
             Confirm::TrashFile { path, .. } => self.trash_file(&path),
             Confirm::DiscardHunk { dir, hunk, .. } => self.git_op(move |_| {
                 git::discard_hunk(&dir, &hunk)

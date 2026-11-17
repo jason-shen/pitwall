@@ -89,6 +89,19 @@ pub struct Settings {
     /// Names you gave remotes, by their name in the config.
     #[serde(skip)]
     pub remote_names: std::collections::BTreeMap<String, String>,
+    /// Remote groups in the order they're listed, and which group each
+    /// remote is in. A remote in none is Ungrouped. Kept here rather than in
+    /// config.toml so ~/.ssh/config hosts can be grouped too.
+    #[serde(skip)]
+    pub remote_groups: Vec<String>,
+    #[serde(skip)]
+    pub remote_group: std::collections::BTreeMap<String, String>,
+    /// Groups folded up in the sidebar ("" is Ungrouped).
+    #[serde(skip)]
+    pub folded_remote_groups: std::collections::BTreeSet<String>,
+    /// ~/.ssh/config hosts removed from the app; the file isn't touched.
+    #[serde(skip)]
+    pub hidden_remotes: std::collections::BTreeSet<String>,
     /// Projects folded up in the sidebar tree, by root folder.
     #[serde(skip)]
     pub folded_projects: std::collections::BTreeSet<String>,
@@ -112,6 +125,10 @@ struct State {
     project_names: std::collections::BTreeMap<String, String>,
     labels: std::collections::BTreeMap<String, String>,
     remote_names: std::collections::BTreeMap<String, String>,
+    remote_groups: Vec<String>,
+    remote_group: std::collections::BTreeMap<String, String>,
+    folded_remote_groups: std::collections::BTreeSet<String>,
+    hidden_remotes: std::collections::BTreeSet<String>,
     folded_projects: std::collections::BTreeSet<String>,
     hidden_projects: std::collections::BTreeSet<String>,
     agents_by_recent: bool,
@@ -152,6 +169,10 @@ impl Default for Settings {
             language: "en".into(),
             labels: Default::default(),
             remote_names: Default::default(),
+            remote_groups: vec![],
+            remote_group: Default::default(),
+            folded_remote_groups: Default::default(),
+            hidden_remotes: Default::default(),
             folded_projects: Default::default(),
             hidden_projects: Default::default(),
             agents_by_recent: false,
@@ -254,6 +275,10 @@ impl Settings {
         s.project_names = state.project_names;
         s.labels = state.labels;
         s.remote_names = state.remote_names;
+        s.remote_groups = state.remote_groups;
+        s.remote_group = state.remote_group;
+        s.folded_remote_groups = state.folded_remote_groups;
+        s.hidden_remotes = state.hidden_remotes;
         s.folded_projects = state.folded_projects;
         s.hidden_projects = state.hidden_projects;
         s.agents_by_recent = state.agents_by_recent;
@@ -336,6 +361,10 @@ impl Settings {
             project_names: self.project_names.clone(),
             labels: self.labels.clone(),
             remote_names: self.remote_names.clone(),
+            remote_groups: self.remote_groups.clone(),
+            remote_group: self.remote_group.clone(),
+            folded_remote_groups: self.folded_remote_groups.clone(),
+            hidden_remotes: self.hidden_remotes.clone(),
             folded_projects: self.folded_projects.clone(),
             hidden_projects: self.hidden_projects.clone(),
             agents_by_recent: self.agents_by_recent,

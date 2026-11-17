@@ -126,6 +126,20 @@ enum Action {
     /// An ended SSH session, started again in its card.
     Reconnect(String),
     StartRenameRemote(String),
+    /// The add-remote form, filing it under this group.
+    AddRemote(Option<String>),
+    EditRemote(String),
+    /// Ask, then take it out of the app.
+    RemoveRemote(String),
+    NewGroup,
+    StartRenameGroup(String),
+    /// The name typed for a group, or None when the rename was cancelled.
+    RenameGroup(String, Option<String>),
+    DeleteGroup(String),
+    /// A remote into a group, or Ungrouped.
+    MoveRemote(String, Option<String>),
+    /// Fold or unfold a remote group ("" is Ungrouped).
+    ToggleGroupFold(String),
     /// The name typed for a remote, or None when the rename was cancelled.
     RenameRemote(String, Option<String>),
     /// Every host a selector matches, side by side.
@@ -259,6 +273,7 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
     dropped_files(&ctx, app, &mut acts);
     dialogs(&ctx, app, &mut acts);
     hosts::fleet_window(&ctx, app);
+    hosts::remote_form(&ctx, app, &mut acts);
     command_bar(&ctx, app, &mut acts);
     shortcuts_sheet(&ctx, app);
     settings_window(&ctx, app);
@@ -4326,6 +4341,7 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                     | Confirm::Discard { .. }
                     | Confirm::DiscardHunk { .. }
                     | Confirm::RemoveProject { .. }
+                    | Confirm::RemoveRemote { .. }
                     | Confirm::TrashFile { .. }
             );
         let mut answer: Option<bool> = None;
@@ -5764,6 +5780,27 @@ fn apply(app: &mut App, a: Action) {
         Action::ToggleBroadcast => app.broadcast = !app.broadcast,
         Action::Connect(h) => app.connect(&h),
         Action::Reconnect(id) => app.reconnect(&id),
+        Action::AddRemote(g) => app.open_remote_form(None, g.as_deref()),
+        Action::EditRemote(h) => app.open_remote_form(Some(&h), None),
+        Action::RemoveRemote(h) => {
+            // The form would sit over the question.
+            app.remote_form = None;
+            app.ask_remove_remote(&h);
+        }
+        Action::NewGroup => app.new_group(),
+        Action::StartRenameGroup(g) => app.renaming_group = Some((g.clone(), g)),
+        Action::RenameGroup(old, new) => match new {
+            Some(n) => app.rename_group(&old, &n),
+            None => app.renaming_group = None,
+        },
+        Action::DeleteGroup(g) => app.delete_group(&g),
+        Action::MoveRemote(h, g) => app.move_remote(&h, g.as_deref()),
+        Action::ToggleGroupFold(k) => {
+            let f = &mut app.settings.folded_remote_groups;
+            if !f.remove(&k) {
+                f.insert(k);
+            }
+        }
         Action::StartRenameRemote(h) => {
             let now = app.settings.remote_names.get(&h).cloned().unwrap_or_default();
             app.renaming_remote = Some((h, now));

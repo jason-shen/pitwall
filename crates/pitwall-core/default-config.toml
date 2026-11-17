@@ -3,6 +3,18 @@
 # merged over these defaults (tables merge, arrays replace). The app keeps its
 # own sections, [app] and [keys], at the end: change them in Settings or here.
 
+# ── Hosts ────────────────────────────────────────────────────────────────
+# The remotes in the app, and what `pitwall run` and `pitwall ask` reach.
+# The app and `pitwall run` also list Host entries in ~/.ssh/config. This has
+# to stay above the first [table]: a key below one belongs to that table.
+# Selectors: "all", a name, "web-*", "tag:prod", comma-separated unions.
+hosts = []
+# hosts = [
+#   { name = "prod-1", addr = "10.0.0.11", user = "ubuntu", tags = ["prod", "web"] },
+#   { name = "prod-2", addr = "10.0.0.12", user = "ubuntu", tags = ["prod", "web"] },
+#   { name = "db-1",   addr = "db.internal", port = 2222, user = "admin", key = "~/.ssh/id_ed25519", tags = ["prod", "db"] },
+# ]
+
 # ── Agents ───────────────────────────────────────────────────────────────
 # Each agent is a command pitwall runs in a PTY inside the task's worktree.
 #   prompt_mode: "arg"  -> initial prompt passed as the last argument
@@ -146,12 +158,3 @@ api_key_env = "ANTHROPIC_API_KEY"
 base_url = "https://api.anthropic.com"
 max_steps = 16
 max_output_bytes = 6000
-
-# ── Hosts ────────────────────────────────────────────────────────────────
-# Selectors: "all", a name, "web-*", "tag:prod", comma-separated unions.
-hosts = []
-# hosts = [
-#   { name = "prod-1", addr = "10.0.0.11", user = "ubuntu", tags = ["prod", "web"] },
-#   { name = "prod-2", addr = "10.0.0.12", user = "ubuntu", tags = ["prod", "web"] },
-#   { name = "db-1",   addr = "db.internal", port = 2222, user = "admin", key = "~/.ssh/id_ed25519", tags = ["prod", "db"] },
-# ]

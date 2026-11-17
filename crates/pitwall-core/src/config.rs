@@ -177,14 +177,33 @@ impl Config {
         if path.exists() {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("read {}", path.display()))?;
-            let user: toml::Table =
+            let mut user: toml::Table =
                 toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+            lift_stray_hosts(&mut user);
             merge(&mut base, user);
         }
         let cfg: Config = toml::Value::Table(base)
             .try_into()
             .with_context(|| format!("invalid config in {}", path.display()))?;
         Ok(cfg)
+    }
+}
+
+/// The old default config put `hosts = []` after the `[ops]` header, which
+/// makes it `ops.hosts`: hosts written there were never read. They count as
+/// top-level hosts now.
+fn lift_stray_hosts(user: &mut toml::Table) {
+    let stray = user
+        .get_mut("ops")
+        .and_then(|o| o.as_table_mut())
+        .and_then(|o| o.remove("hosts"));
+    if let Some(toml::Value::Array(mut stray)) = stray {
+        match user.get_mut("hosts") {
+            Some(toml::Value::Array(top)) => top.append(&mut stray),
+            _ => {
+                user.insert("hosts".into(), toml::Value::Array(stray));
+            }
+        }
     }
 }
 
@@ -208,6 +227,23 @@ mod tests {
         let c = Config::default();
         assert!(c.agents.contains_key("claude"));
         assert_eq!(c.policy.destructive, Decision::Deny);
+    }
+
+    #[test]
+    fn hosts_under_ops_still_count() {
+        let mut user: toml::Table = toml::from_str(
+            "hosts = [{ name = \"a\" }]\n[ops]\nmodel = \"m\"\nhosts = [{ name = \"b\" }]\n",
+        )
+        .unwrap();
+        lift_stray_hosts(&mut user);
+        let names: Vec<_> = user["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["a", "b"]);
+        assert!(user["ops"].get("hosts").is_none());
     }
 
     #[test]

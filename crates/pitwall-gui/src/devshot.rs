@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -136,6 +136,32 @@ impl DevShot {
                     }
                 }
                 Some(("drop", path)) => self.dropped = Some(path.into()),
+                Some(("group", name)) => {
+                    app.new_group();
+                    if let Some((old, _)) = app.renaming_group.clone() {
+                        app.rename_group(&old, name);
+                    }
+                }
+                Some(("move", spec)) => {
+                    if let Some((host, group)) = spec.rsplit_once(':') {
+                        app.refresh_hosts(true);
+                        app.move_remote(host, Some(group).filter(|g| !g.is_empty()));
+                    }
+                }
+                Some(("remove", host)) => {
+                    app.refresh_hosts(true);
+                    app.ask_remove_remote(host);
+                }
+                Some(("addremote", spec)) => {
+                    let (addr, name) = spec.split_once(':').unwrap_or((spec, ""));
+                    app.open_remote_form(None, None);
+                    if let Some(f) = app.remote_form.as_mut() {
+                        f.addr = addr.to_string();
+                        f.name = name.to_string();
+                        f.user = "ubuntu".into();
+                        f.tags = "lab".into();
+                    }
+                }
                 Some(("connect", sel)) => {
                     app.refresh_hosts(true);
                     app.connect_all(sel);
@@ -166,6 +192,7 @@ impl DevShot {
                 _ => match step.as_str() {
                     "changes" => app.toggle_child(Child::Changes),
                     "files" => app.toggle_child(Child::Files),
+                    "saveremote" => app.save_remote_form(false),
                     "terminal" => {
                         app.bar = None;
                         app.new_form = None;
