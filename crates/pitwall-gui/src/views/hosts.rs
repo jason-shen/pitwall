@@ -7,7 +7,7 @@ use egui::{
 };
 use pitwall_core::proto::TaskStatus;
 
-use super::{section_label, status_mark, Action, AMBER, GREEN, MUTED, RED, SEL, TEXT};
+use super::{status_mark, Action, AMBER, GREEN, MUTED, RED, SEL, TEXT};
 use crate::app::{App, Child};
 use crate::i18n::{tr, trf};
 
@@ -21,47 +21,49 @@ fn live(app: &App, id: &str) -> bool {
 #[derive(Clone)]
 struct RemoteDrag(String);
 
-pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
-    app.refresh_hosts(false);
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        section_label(ui, tr("REMOTES"));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let plus = ui
-                .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
-                .on_hover_text(tr("Add a remote or a group"));
-            egui::Popup::menu(&plus).show(|ui| {
-                if ui.button(tr("Add a remote…")).clicked() {
-                    acts.push(Action::AddRemote(None));
-                    ui.close();
-                }
-                if ui.button(tr("New group")).clicked() {
-                    acts.push(Action::NewGroup);
-                    ui.close();
-                }
-            });
-            if app.hosts.is_empty() {
-                return;
-            }
-            if ui
-                .add(egui::Button::new(RichText::new(tr("Run…")).small().color(MUTED)).frame(false))
-                .on_hover_text(tr("Run a command on several remotes at once"))
-                .clicked()
-            {
-                acts.push(Action::OpenFleet("all".into()));
-            }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(tr("Connect all")).small().color(MUTED))
-                        .frame(false),
-                )
-                .on_hover_text(tr("Open every remote side by side; broadcast input types into all of them"))
-                .clicked()
-            {
-                acts.push(Action::ConnectAll("all".into()));
-            }
-        });
+/// The `+` on the sidebar's tab row while Remotes is showing.
+pub fn add_button(ui: &mut Ui, acts: &mut Vec<Action>) {
+    let plus = ui
+        .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
+        .on_hover_text(tr("Add a remote or a group"));
+    egui::Popup::menu(&plus).show(|ui| {
+        if ui.button(tr("Add a remote…")).clicked() {
+            acts.push(Action::AddRemote(None));
+            ui.close();
+        }
+        if ui.button(tr("New group")).clicked() {
+            acts.push(Action::NewGroup);
+            ui.close();
+        }
     });
+}
+
+/// What acts on every remote at once, above the list.
+pub fn toolbar(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
+    if app.hosts.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        if ui
+            .add(egui::Button::new(RichText::new(tr("Connect all")).small().color(MUTED)).frame(false))
+            .on_hover_text(tr("Open every remote side by side; broadcast input types into all of them"))
+            .clicked()
+        {
+            acts.push(Action::ConnectAll("all".into()));
+        }
+        if ui
+            .add(egui::Button::new(RichText::new(tr("Run…")).small().color(MUTED)).frame(false))
+            .on_hover_text(tr("Run a command on several remotes at once"))
+            .clicked()
+        {
+            acts.push(Action::OpenFleet("all".into()));
+        }
+    });
+    ui.add_space(2.0);
+}
+
+pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     if app.hosts.is_empty() && app.settings.remote_groups.is_empty() {
         ui.label(
             RichText::new(tr(

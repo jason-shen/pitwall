@@ -132,6 +132,8 @@ enum Action {
     /// Ask, then take it out of the app.
     RemoveRemote(String),
     NewGroup,
+    /// Show Remotes (true) or Projects in the sidebar.
+    SidebarTab(bool),
     StartRenameGroup(String),
     /// The name typed for a group, or None when the rename was cancelled.
     RenameGroup(String, Option<String>),
@@ -701,22 +703,38 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                     });
             }
             ui.add_space(10.0);
+            app.refresh_hosts(false);
+            let remotes = app.settings.sidebar_remotes;
             ui.horizontal(|ui| {
-                section_label(ui, tr("PROJECTS"));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
+                    if remotes {
+                        hosts::add_button(ui, acts);
+                    } else if ui
                         .add(egui::Button::new(RichText::new("+").color(MUTED)).frame(false))
                         .on_hover_text(tr("New project: open a folder"))
                         .clicked()
                     {
                         acts.push(Action::NewProject);
                     }
+                    ui.add_space(4.0);
+                    sidebar_tabs(ui, app, acts);
                 });
             });
+            ui.add_space(8.0);
+            if remotes {
+                hosts::toolbar(ui, app, acts);
+            }
+            // Each tab keeps its own scroll position.
             ScrollArea::vertical()
-                .id_salt("side_list")
+                .id_salt(if remotes { "side_remotes" } else { "side_list" })
                 .auto_shrink([false, false])
-                .show(ui, |ui| side_list(ui, app, acts));
+                .show(ui, |ui| {
+                    if remotes {
+                        hosts::section(ui, app, acts)
+                    } else {
+                        side_list(ui, app, acts)
+                    }
+                });
         });
 }
 
@@ -738,7 +756,71 @@ fn side_list(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             ui.add_space(6.0);
         }
     }
-    hosts::section(ui, app, acts);
+}
+
+/// Projects | Remotes along the top of the sidebar. A dot on the tab you're
+/// not on says something there wants you (amber) or a session is open (green).
+fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
+    let remotes = app.settings.sidebar_remotes;
+    let waiting = |remote: bool| {
+        app.tasks
+            .values()
+            .any(|t| t.host.is_some() == remote && t.attention && is_agent(t))
+    };
+    let live_sessions = app
+        .tasks
+        .values()
+        .any(|t| t.host.is_some() && !matches!(t.status, TaskStatus::Exited { .. }));
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 8.0, Color32::from_white_alpha(10));
+    let half = rect.width() / 2.0;
+    for (i, (icon, label, is_remote)) in [
+        ('\u{f07b}', tr("Projects"), false),
+        ('\u{f048b}', tr("Remotes"), true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let r = Rect::from_min_size(rect.min + vec2(half * i as f32, 0.0), vec2(half, rect.height()))
+            .shrink(3.0);
+        let resp = ui.interact(r, Id::unique(("sidebar-tab", i)), Sense::click());
+        let on = remotes == is_remote;
+        if on {
+            p.rect_filled(r, 6.0, SEL);
+        } else if resp.hovered() {
+            p.rect_filled(r, 6.0, Color32::from_white_alpha(6));
+        }
+        let color = if on { TEXT } else { MUTED };
+        let text = ui.fonts_mut(|f| {
+            f.layout_no_wrap(label.to_string(), FontId::proportional(13.0), color)
+        });
+        let w = 14.0 + 6.0 + text.size().x;
+        let x = r.center().x - w / 2.0;
+        p.text(
+            pos2(x + 7.0, r.center().y),
+            Align2::CENTER_CENTER,
+            icon,
+            theme::icon_font(13.0),
+            if on { ACCENT } else { MUTED },
+        );
+        p.galley(pos2(x + 20.0, r.center().y - text.size().y / 2.0), text, color);
+        if !on {
+            let dot = if waiting(is_remote) {
+                Some(AMBER)
+            } else if is_remote && live_sessions {
+                Some(GREEN)
+            } else {
+                None
+            };
+            if let Some(c) = dot {
+                p.circle_filled(pos2(x + w + 7.0, r.center().y - 4.0), 3.0, c);
+            }
+        }
+        if resp.clicked() && !on {
+            acts.push(Action::SidebarTab(is_remote));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5788,6 +5870,7 @@ fn apply(app: &mut App, a: Action) {
             app.ask_remove_remote(&h);
         }
         Action::NewGroup => app.new_group(),
+        Action::SidebarTab(r) => app.settings.sidebar_remotes = r,
         Action::StartRenameGroup(g) => app.renaming_group = Some((g.clone(), g)),
         Action::RenameGroup(old, new) => match new {
             Some(n) => app.rename_group(&old, &n),
