@@ -1,6 +1,6 @@
 //! Application state and actions. Drawing lives in `views.rs`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -474,6 +474,13 @@ pub struct App {
     /// Tabs dropped onto another tab, as (pane, the tab it's in). A pane has
     /// no tab of its own until it's taken back out.
     pub joined: Vec<(String, String)>,
+    /// Agents that finished their brief, waiting to have their diff and the
+    /// Accept dialog put in front of you.
+    review_ready: Vec<String>,
+    /// Ones already put there, so a later turn doesn't pop it again.
+    reviewed: HashSet<String>,
+    /// When you last typed; a dialog doesn't open under your fingers.
+    last_typed: Instant,
     /// A new project's two tabs, started one after the other so the agent's
     /// is first whichever the daemon finishes starting first.
     project_setup: Option<ProjectSetup>,
@@ -644,6 +651,9 @@ impl App {
             parent_of: Default::default(),
             pending_parent: None,
             joined: vec![],
+            review_ready: vec![],
+            reviewed: HashSet::new(),
+            last_typed: Instant::now(),
             project_setup: None,
             active: 0,
             project: None,
@@ -1503,6 +1513,46 @@ impl App {
         }
     }
 
+    /// Once per agent: a later turn doesn't put the same work up again.
+    pub fn queue_review(&mut self, id: &str) {
+        if self.reviewed.insert(id.to_string()) {
+            self.review_ready.push(id.to_string());
+        }
+    }
+
+    /// An agent's finished brief: its diff, and Accept offered over it. Only
+    /// while you're here, not typing, and nothing else is asking you.
+    fn show_finished_brief(&mut self) {
+        if self.review_ready.is_empty()
+            || self.confirm.is_some()
+            || self.new_form.is_some()
+            || self.bar.is_some()
+            || !self.ctx.input(|i| i.focused)
+        {
+            return;
+        }
+        if self.last_typed.elapsed() < Duration::from_secs(2) {
+            self.ctx.request_repaint_after(Duration::from_millis(500));
+            return;
+        }
+        let id = self.review_ready.remove(0);
+        self.open_review(&id);
+    }
+
+    /// The agent's diff, with Accept offered over it.
+    pub fn open_review(&mut self, id: &str) {
+        let Some(name) = self.tasks.get(id).map(|t| self.label(t)) else {
+            return;
+        };
+        self.open_item(id);
+        self.show(Target {
+            item: id.to_string(),
+            child: Child::Changes,
+        });
+        self.notify(trf!("{name} finished its brief", name = name), false);
+        self.accept_prompt();
+    }
+
     /// A system notification, only while pitwall is in the background.
     pub fn notify_away(&self, title: &str, body: &str) {
         if self.settings.system_notifications && !self.ctx.input(|i| i.focused) {
@@ -1857,6 +1907,15 @@ impl App {
 
     fn tick(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        let typed = self.ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { .. }))
+        });
+        if typed {
+            self.last_typed = Instant::now();
+        }
+        self.show_finished_brief();
         self.watch_config();
         self.save_layout();
         self.drain_notifications();
@@ -2031,6 +2090,11 @@ impl App {
                         .send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
                             egui::UserAttentionType::Informational,
                         ));
+                }
+                // A brief built on its own branch, every step ticked off, and the
+                // turn over: its work is ready to look at and merge.
+                if t.turn_done && !prev_done && t.branch.is_some() && brief_finished(&t) {
+                    self.queue_review(&t.id);
                 }
                 // A plain shell that exited closes its tab, like any terminal app.
                 if t.agent == "shell" && matches!(t.status, TaskStatus::Exited { .. }) {
@@ -2614,6 +2678,8 @@ impl App {
             f.name = slugify(&title);
             f.name_edited = true;
             f.brief = Some(path.to_path_buf());
+            // Built on its own branch, so it can be reviewed and merged.
+            f.worktree = true;
             if let Some(root) = path.ancestors().nth(3) {
                 f.dir = root.display().to_string();
             }
@@ -2709,6 +2775,30 @@ impl App {
                 self.create_task_with(f.agent, slugify(&f.name), task, f.worktree, dir, f.brief);
             }
             NewKind::Project => {
+                // Agents need a repo for worktrees, and Accept for merging
+                // their work back, so a plain folder becomes one.
+                if git::root(&dir).is_none() {
+                    match git::init(&dir) {
+                        Ok(()) => {
+                            let d = dir.clone();
+                            self.in_background(
+                                move || match git::first_commit(&d) {
+                                    Ok(0) => Ok(tr("made it a git repo, with a first commit").to_string()),
+                                    Ok(n) => Ok(trf!(
+                                        "made it a git repo, with a first commit; {n} file(s) over 10 MB left out",
+                                        n = n
+                                    )),
+                                    Err(e) => Err(trf!("made it a git repo, but the first commit failed: {e}", e = format!("{e:#}"))),
+                                },
+                                Reply::GitDone,
+                            );
+                        }
+                        Err(e) => self.notify(
+                            trf!("couldn't make it a git repo: {e}", e = format!("{e:#}")),
+                            true,
+                        ),
+                    }
+                }
                 let root = git::root(&dir).unwrap_or(dir.clone());
                 let key = root.display().to_string();
                 let folder = root
@@ -3146,7 +3236,9 @@ impl App {
             .or_else(|| t.title.clone())
             .unwrap_or_else(|| t.name.clone());
         let mut text = trf!("Accept {id}?", id = t.id);
-        let pending = self.changes.len();
+        // From the worktree itself: the Changes list may still be another
+        // task's when this opens on its own after a brief.
+        let pending = git::status(Path::new(&t.cwd)).map_or(0, |c| c.len());
         if pending > 0 {
             text.push_str("\n\n");
             text.push_str(&trf!(
@@ -3508,6 +3600,15 @@ fn notify_system(title: &str, body: &str) {
         }
     });
     center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert, &post);
+}
+
+/// Every step of the agent's brief is ticked off.
+fn brief_finished(t: &TaskInfo) -> bool {
+    let Some(text) = t.brief.as_ref().and_then(|b| std::fs::read_to_string(b).ok()) else {
+        return false;
+    };
+    let (done, all) = crate::briefs::progress(&text);
+    all > 0 && done == all
 }
 
 /// One of the system's own sounds, played out of process so a missing player

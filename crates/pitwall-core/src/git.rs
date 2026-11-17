@@ -441,6 +441,48 @@ pub fn discard_file(dir: &Path, c: &Change) -> Result<()> {
     }
 }
 
+pub fn init(dir: &Path) -> Result<()> {
+    run(dir, &["init", "-q"]).map(|_| ())
+}
+
+/// Files bigger than this stay out of a new repo's first commit.
+const FIRST_COMMIT_MAX: u64 = 10 * 1024 * 1024;
+
+/// The first commit of a folder just made a repo, so agents have something
+/// to branch their worktrees from. Models, datasets and other big files are
+/// left out through .git/info/exclude (local, never committed) rather than
+/// a .gitignore pitwall would be adding to your project.
+pub fn first_commit(dir: &Path) -> Result<usize> {
+    let others = run(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let big: Vec<&str> = others
+        .split('\0')
+        .filter(|r| !r.is_empty())
+        .filter(|r| {
+            std::fs::symlink_metadata(dir.join(r))
+                .is_ok_and(|m| m.is_file() && m.len() > FIRST_COMMIT_MAX)
+        })
+        .collect();
+    if !big.is_empty() {
+        let exclude = dir.join(".git").join("info").join("exclude");
+        let mut text = std::fs::read_to_string(&exclude).unwrap_or_default();
+        text.push_str("# over 10 MB, left out by pitwall\n");
+        for r in &big {
+            text.push('/');
+            for c in r.chars() {
+                if matches!(c, '\\' | '*' | '?' | '[' | '!' | '#') {
+                    text.push('\\');
+                }
+                text.push(c);
+            }
+            text.push('\n');
+        }
+        std::fs::write(&exclude, text)?;
+    }
+    stage_all(dir)?;
+    run(dir, &["commit", "-q", "--allow-empty", "-m", "Initial commit"])?;
+    Ok(big.len())
+}
+
 pub fn commit(dir: &Path, message: &str) -> Result<String> {
     let out = run(dir, &["commit", "-q", "-m", message])?;
     let head = run(dir, &["log", "-1", "--format=%h %s"]).unwrap_or_default();
@@ -923,6 +965,24 @@ mod tests {
         let m = merge(&d, "pitwall/x").unwrap();
         assert!(m.contains("into main"));
         assert!(d.join("b.txt").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_new_repo_gets_a_first_commit_without_its_big_files() {
+        let d = std::env::temp_dir().join(format!("pitwall-git-init-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("data")).unwrap();
+        std::fs::write(d.join("main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(d.join("data/big.bin"), vec![0u8; FIRST_COMMIT_MAX as usize + 1]).unwrap();
+        init(&d).unwrap();
+        // CI machines may have no identity configured.
+        run(&d, &["config", "user.email", "t@example.com"]).unwrap();
+        run(&d, &["config", "user.name", "t"]).unwrap();
+        assert_eq!(first_commit(&d).unwrap(), 1);
+        let files = run(&d, &["ls-files"]).unwrap();
+        assert_eq!(files.trim(), "main.rs");
+        assert!(status(&d).unwrap().is_empty(), "the big file is excluded, not left untracked");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

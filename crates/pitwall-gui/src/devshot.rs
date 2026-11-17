@@ -123,6 +123,13 @@ impl DevShot {
                         }
                     }
                 }
+                // review:<task id or name>: as if its brief had just been finished.
+                Some(("review", name)) => {
+                    let pick = app.tasks.get(name).or_else(|| app.tasks.values().find(|t| t.name == name));
+                    if let Some(id) = pick.map(|t| t.id.clone()) {
+                        app.open_review(&id);
+                    }
+                }
                 Some(("separate", name)) => {
                     if let Some(p) = app.tasks.values().find(|t| t.name == name).map(|t| t.id.clone()) {
                         app.separate(&p);
