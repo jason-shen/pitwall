@@ -1,23 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- muster.svg pared down for 16 and 32 pixels, where its lines of output
-       would blur: the same three agents, bigger dots, no text. -->
+  <!-- muster.svg for 16 and 32 pixels: fills more of the square, with a
+       heavier prompt and bigger dots so they don't blur into the background. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2c3039"/>
-      <stop offset="1" stop-color="#111317"/>
+      <stop offset="0" stop-color="#2a2e36"/>
+      <stop offset="1" stop-color="#101215"/>
     </linearGradient>
   </defs>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
 
-  <rect x="168" y="186" width="340" height="652" rx="56" fill="#1d2128" stroke="#ffffff" stroke-opacity="0.12" stroke-width="6"/>
-  <circle cx="246" cy="266" r="40" fill="#58d68d"/>
-  <path d="M236 470 l70 64 l-70 64" fill="none" stroke="#2ec4b6" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
-
-  <rect x="532" y="186" width="324" height="310" rx="56" fill="#1d2128" stroke="#ffffff" stroke-opacity="0.12" stroke-width="6"/>
-  <circle cx="610" cy="266" r="40" fill="#f0a13c"/>
-  <rect x="580" y="378" width="230" height="64" rx="32" fill="#f0a13c"/>
-
-  <rect x="532" y="528" width="324" height="310" rx="56" fill="#1d2128" stroke="#ffffff" stroke-opacity="0.12" stroke-width="6"/>
-  <circle cx="610" cy="608" r="40" fill="#2ec4b6"/>
-  <path d="M606 730 l46 44 l104 -104" fill="none" stroke="#2ec4b6" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M220 350 l160 162 l-160 162" fill="none" stroke="#e9e7e3" stroke-width="100" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="500" cy="618" r="62" fill="#8cd05c"/>
+  <circle cx="660" cy="618" r="62" fill="#f0a13c"/>
+  <circle cx="820" cy="618" r="62" fill="#2bc4ae"/>
 </svg>

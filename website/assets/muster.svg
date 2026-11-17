@@ -1,26 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- Muster's icon: three agents in tiled cards, as the app shows them.
-       Green is working, amber is waiting on you, teal is done.
-       Regenerate the .icns with `make icon`. -->
+  <!-- A prompt and three agents after it, in the app's status colours:
+       working, waiting on you, done. Regenerate the .icns with `make icon`. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2c3039"/>
-      <stop offset="1" stop-color="#111317"/>
-    </linearGradient>
-    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#222730"/>
-      <stop offset="1" stop-color="#181b21"/>
+      <stop offset="0" stop-color="#2a2e36"/>
+      <stop offset="1" stop-color="#101215"/>
     </linearGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
-      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <filter id="lift" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.5"/>
-    </filter>
-    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="10"/>
-    </filter>
     <filter id="outer" x="-10%" y="-10%" width="120%" height="125%">
       <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.35"/>
     </filter>
@@ -29,46 +18,10 @@
   <!-- Apple's grid: an 824px rounded square, with room around it for the shadow. -->
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#outer)"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
-  <rect x="101" y="101" width="822" height="822" rx="184" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="2"/>
+  <rect x="101" y="101" width="822" height="822" rx="184" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
 
-  <!-- Left: an agent at work. -->
-  <g filter="url(#lift)">
-    <rect x="178" y="196" width="326" height="632" rx="40" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
-  </g>
-  <circle cx="226" cy="246" r="26" fill="#58d68d" opacity="0.55" filter="url(#glow)"/>
-  <circle cx="226" cy="246" r="15" fill="#58d68d"/>
-  <rect x="258" y="237" width="150" height="18" rx="9" fill="#ffffff" opacity="0.22"/>
-  <rect x="178" y="292" width="326" height="2" fill="#ffffff" opacity="0.07"/>
-  <path d="M214 352 l28 26 l-28 26" fill="none" stroke="#2ec4b6" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="264" y="368" width="168" height="20" rx="10" fill="#cfd5df" opacity="0.75"/>
-  <rect x="214" y="434" width="244" height="18" rx="9" fill="#8b93a1" opacity="0.55"/>
-  <rect x="214" y="476" width="196" height="18" rx="9" fill="#8b93a1" opacity="0.55"/>
-  <rect x="214" y="518" width="226" height="18" rx="9" fill="#58d68d" opacity="0.55"/>
-  <rect x="214" y="560" width="150" height="18" rx="9" fill="#8b93a1" opacity="0.55"/>
-  <rect x="214" y="602" width="210" height="18" rx="9" fill="#e2675d" opacity="0.5"/>
-  <rect x="214" y="644" width="176" height="18" rx="9" fill="#8b93a1" opacity="0.55"/>
-  <path d="M214 718 l28 26 l-28 26" fill="none" stroke="#2ec4b6" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="262" y="730" width="20" height="30" rx="4" fill="#2ec4b6"/>
-
-  <!-- Top right: one waiting on you, with its question. -->
-  <g filter="url(#lift)">
-    <rect x="530" y="196" width="316" height="300" rx="40" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
-  </g>
-  <circle cx="578" cy="246" r="28" fill="#f0a13c" opacity="0.65" filter="url(#glow)"/>
-  <circle cx="578" cy="246" r="15" fill="#f0a13c"/>
-  <rect x="610" y="237" width="120" height="18" rx="9" fill="#ffffff" opacity="0.22"/>
-  <rect x="530" y="292" width="316" height="2" fill="#ffffff" opacity="0.07"/>
-  <rect x="566" y="330" width="200" height="18" rx="9" fill="#8b93a1" opacity="0.55"/>
-  <rect x="566" y="404" width="118" height="54" rx="27" fill="#f0a13c"/>
-  <rect x="700" y="404" width="110" height="54" rx="27" fill="none" stroke="#f0a13c" stroke-opacity="0.7" stroke-width="5"/>
-
-  <!-- Bottom right: one that's done. -->
-  <g filter="url(#lift)">
-    <rect x="530" y="528" width="316" height="300" rx="40" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
-  </g>
-  <circle cx="578" cy="578" r="26" fill="#2ec4b6" opacity="0.55" filter="url(#glow)"/>
-  <circle cx="578" cy="578" r="15" fill="#2ec4b6"/>
-  <rect x="610" y="569" width="140" height="18" rx="9" fill="#ffffff" opacity="0.22"/>
-  <rect x="530" y="624" width="316" height="2" fill="#ffffff" opacity="0.07"/>
-  <path d="M600 718 l44 44 l92 -92" fill="none" stroke="#2ec4b6" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M248 374 l138 138 l-138 138" fill="none" stroke="#e9e7e3" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="504" cy="604" r="46" fill="#8cd05c"/>
+  <circle cx="638" cy="604" r="46" fill="#f0a13c"/>
+  <circle cx="772" cy="604" r="46" fill="#2bc4ae"/>
 </svg>
