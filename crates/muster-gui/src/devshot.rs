@@ -1,5 +1,5 @@
 //! Debug builds only: `MUSTER_SHOT=/tmp/shot` steps through the screens listed in
-//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `MUSTER_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -182,6 +182,7 @@ impl DevShot {
                         );
                         app.notify("agent: finished its turn", false);
                     }
+                    "toast" => app.notify(crate::i18n::trf!("Copied {n} lines", n = 12), false),
                     "keys" => app.show_keys = true,
                     "submit" => app.submit_form(),
                     "swap" => app.swap_cards(0, 1),

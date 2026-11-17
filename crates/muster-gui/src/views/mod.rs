@@ -3088,18 +3088,33 @@ fn overlays(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     let Some((m, _, err)) = &app.notice else {
         return;
     };
+    // Keel's toast: a mark saying how it went, room around the text, and a
+    // shadow so it lifts off a busy terminal.
     let dismissed = egui::Area::new(Id::unique("overlays"))
-        .anchor(Align2::RIGHT_BOTTOM, vec2(-20.0, -20.0))
+        .anchor(Align2::RIGHT_BOTTOM, vec2(-20.0, -52.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            ui.set_max_width(420.0);
             Frame::new()
-                .fill(Color32::from_rgb(0x20, 0x24, 0x2c))
-                .stroke(Stroke::new(1.0, Color32::from_white_alpha(18)))
+                .fill(theme::c::PANEL)
+                .stroke(Stroke::new(1.0, if *err { RED } else { theme::c::BORDER }))
                 .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::symmetric(12, 8))
+                .inner_margin(Margin::symmetric(16, 12))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 16,
+                    spread: 0,
+                    color: Color32::from_black_alpha(120),
+                })
                 .show(ui, |ui| {
-                    ui.label(RichText::new(m).color(if *err { RED } else { TEXT }));
+                    ui.set_max_width(400.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(if *err { "✖" } else { "✔" })
+                                .size(15.0)
+                                .color(if *err { RED } else { GREEN }),
+                        );
+                        ui.label(RichText::new(m).size(15.0).color(TEXT));
+                    });
                 })
                 .response
                 .interact(Sense::click())
@@ -3298,7 +3313,7 @@ fn term_body(
                 .clicked()
             {
                 if let Some(text) = sel {
-                    ui.ctx().copy_text(text);
+                    actions.push(termview::TermAction::Copy(text));
                 }
                 ui.close();
             }
@@ -3321,7 +3336,7 @@ fn term_body(
                 .clicked()
             {
                 if let Some(text) = out {
-                    ui.ctx().copy_text(text);
+                    actions.push(termview::TermAction::Copy(text));
                 }
                 ui.close();
             }
@@ -3365,6 +3380,7 @@ fn term_body(
             termview::TermAction::Input(b) => acts.push(Action::Input(id.to_string(), b)),
             termview::TermAction::Typed(b) => acts.push(Action::Typed(id.to_string(), b)),
             termview::TermAction::Paste(text) => acts.push(Action::Paste(id.to_string(), text)),
+            termview::TermAction::Copy(text) => acts.push(Action::Copy(text)),
             termview::TermAction::Resize { cols, rows } => {
                 acts.push(Action::Resize(id.to_string(), rows, cols))
             }
@@ -5447,8 +5463,16 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::ToggleBroadcast => app.broadcast = !app.broadcast,
         Action::Copy(text) => {
+            let lines = text.trim_end_matches('\n').lines().count();
             app.ctx.copy_text(text);
-            app.notify(tr("copied"), false);
+            app.notify(
+                if lines > 1 {
+                    trf!("Copied {n} lines", n = lines)
+                } else {
+                    tr("Copied").to_string()
+                },
+                false,
+            );
         }
         Action::External(path, line) => app.open_external(&path, line),
         Action::ToggleDir(rel) => app.tree.toggle(&rel),

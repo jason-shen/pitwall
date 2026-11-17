@@ -174,6 +174,8 @@ pub enum TermAction {
     },
     /// ⌘-click on a file path in the output: open it in the editor.
     OpenFile(PathBuf, Option<usize>),
+    /// Selected text for the clipboard. The app copies it, so it can say so.
+    Copy(String),
 }
 
 pub struct TerminalView {
@@ -718,7 +720,7 @@ impl TerminalView {
                     Event::Copy => {
                         if cfg!(target_os = "macos") || mods_now.shift {
                             if let Some(t) = self.selection_text() {
-                                ui.ctx().copy_text(t);
+                                actions.push(TermAction::Copy(t));
                             }
                         } else {
                             self.input_typed(&mut actions, vec![0x03]);
@@ -788,7 +790,7 @@ impl TerminalView {
                         if !cfg!(target_os = "macos") && modifiers.ctrl && modifiers.shift {
                             if key == Key::C {
                                 if let Some(t) = self.selection_text() {
-                                    ui.ctx().copy_text(t);
+                                    actions.push(TermAction::Copy(t));
                                 }
                                 continue;
                             }
@@ -1008,7 +1010,7 @@ impl TerminalView {
             }
             if resp.drag_stopped() && settings.copy_on_select {
                 if let Some(t) = self.selection_text() {
-                    ui.ctx().copy_text(t);
+                    actions.push(TermAction::Copy(t));
                 }
             }
             if resp.double_clicked() {
