@@ -381,6 +381,7 @@
 "Status" = "Status"
 "Stop" = "Stopp"
 "Stop broadcasting input" = "Eingabe-Broadcast beenden"
+"starting {name}…" = "{name} wird gestartet …"
 "stopped; the brief is as you left it" = "gestoppt; der Brief ist unverändert"
 "Swap with" = "Tauschen mit"
 "Swap with the card above" = "Mit der Karte darüber tauschen"

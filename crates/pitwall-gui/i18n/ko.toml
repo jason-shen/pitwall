@@ -381,6 +381,7 @@
 "Status" = "상태"
 "Stop" = "중지"
 "Stop broadcasting input" = "입력 브로드캐스트 중지"
+"starting {name}…" = "{name} 시작 중…"
 "stopped; the brief is as you left it" = "중지했습니다. 브리프는 남겨 둔 상태 그대로입니다"
 "Swap with" = "위치 바꾸기"
 "Swap with the card above" = "위 카드와 바꾸기"

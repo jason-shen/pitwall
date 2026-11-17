@@ -381,6 +381,7 @@
 "Status" = "ステータス"
 "Stop" = "停止"
 "Stop broadcasting input" = "入力のブロードキャストを停止"
+"starting {name}…" = "{name} を起動しています…"
 "stopped; the brief is as you left it" = "停止しました。ブリーフは元のままです"
 "Swap with" = "入れ替え先"
 "Swap with the card above" = "上のカードと入れ替え"

@@ -424,6 +424,11 @@ impl Daemon {
         if self.restoring.load(Ordering::SeqCst) {
             return;
         }
+        // Removing several tasks at once saves from several threads. They
+        // share the temp file, so without this one rename fails and the
+        // list left on disk can be from before the last removal.
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = SAVING.lock().unwrap_or_else(|e| e.into_inner());
         let mut saved: Vec<task::Saved> = self
             .tasks
             .lock()

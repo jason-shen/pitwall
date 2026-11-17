@@ -2761,6 +2761,11 @@ impl App {
         let repo = git::root(&dir).map(|p| p.display().to_string());
         let (rows, cols) = self.pane_grid();
         let shell = agent == "shell";
+        // An agent's tab only opens after its first snapshot, which takes a
+        // while in a big folder; say something's happening meanwhile.
+        if !shell {
+            self.notify(trf!("starting {name}…", name = name), false);
+        }
         let req = NewTask {
             name,
             agent,

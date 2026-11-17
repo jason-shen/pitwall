@@ -16,19 +16,27 @@ use pitwall_core::proto::SnapshotInfo;
 
 const TIMELINE: &str = "refs/heads/timeline";
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+/// Files bigger than this stay out of snapshots unless one already has them. An agent working
+/// in a project folder (not a worktree) would otherwise copy every model,
+/// dataset and build output in it into the shadow repo, taking minutes and
+/// gigabytes before the agent can even start.
+const MAX_FILE: u64 = 10 * 1024 * 1024;
 
 pub struct Store {
     git_dir: PathBuf,
     work: PathBuf,
     lock: Mutex<()>,
+    /// info/exclude as configured, before the big files are added to it.
+    excludes: String,
 }
 
 impl Store {
     pub fn open(git_dir: PathBuf, work: &Path, excludes: &[String]) -> Result<Store> {
-        let s = Store {
+        let mut s = Store {
             git_dir,
             work: work.to_path_buf(),
             lock: Mutex::new(()),
+            excludes: String::new(),
         };
         if !s.git_dir.join("HEAD").exists() {
             std::fs::create_dir_all(&s.git_dir)?;
@@ -49,7 +57,8 @@ impl Store {
             ex.push_str(e);
             ex.push('\n');
         }
-        std::fs::write(info.join("exclude"), ex)?;
+        std::fs::write(info.join("exclude"), &ex)?;
+        s.excludes = ex;
         Ok(s)
     }
 
@@ -115,7 +124,37 @@ impl Store {
         self.take_locked(label, false)
     }
 
+    /// Add the untracked files over MAX_FILE to info/exclude, so `add -A`
+    /// walks past them instead of hashing them.
+    fn exclude_big_files(&self) {
+        // Listed against the configured excludes alone; the file still holds
+        // the last snapshot's big files, which would hide them from the list
+        // and so drop them from the next exclude.
+        let path = self.git_dir.join("info").join("exclude");
+        let _ = std::fs::write(&path, &self.excludes);
+        let Ok(list) = self.run(&["ls-files", "--others", "--exclude-standard", "-z"]) else {
+            return;
+        };
+        let mut ex = self.excludes.clone();
+        for rel in list.split('\0').filter(|r| !r.is_empty()) {
+            let big = std::fs::symlink_metadata(self.work.join(rel))
+                .is_ok_and(|m| m.is_file() && m.len() > MAX_FILE);
+            if big {
+                ex.push('/');
+                for c in rel.chars() {
+                    if matches!(c, '\\' | '*' | '?' | '[' | '!' | '#') {
+                        ex.push('\\');
+                    }
+                    ex.push(c);
+                }
+                ex.push('\n');
+            }
+        }
+        let _ = std::fs::write(&path, ex);
+    }
+
     fn take_locked(&self, label: &str, force: bool) -> Result<Option<SnapshotInfo>> {
+        self.exclude_big_files();
         // --ignore-errors: unreadable files shouldn't abort the snapshot.
         let _ = self.run(&["add", "-A", "--ignore-errors", "."]);
         let tree = self.run(&["write-tree"])?.trim().to_string();
@@ -356,6 +395,26 @@ fn parse_shortstat(s: &str) -> (u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn big_files_stay_out_of_every_snapshot() {
+        let base = std::env::temp_dir().join(format!("pitwall-snap-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let work = base.join("work");
+        std::fs::create_dir_all(work.join("models")).unwrap();
+        std::fs::write(work.join("a.txt"), "one\n").unwrap();
+        let big = vec![0u8; MAX_FILE as usize + 1];
+        std::fs::write(work.join("models/weights.bin"), &big).unwrap();
+        std::fs::write(work.join("models/#odd [1]*.bin"), &big).unwrap();
+
+        let s = Store::open(base.join("shadow.git"), &work, &[]).unwrap();
+        s.take("start").unwrap().expect("first snapshot");
+        std::fs::write(work.join("b.txt"), "two\n").unwrap();
+        s.take("edit").unwrap().expect("second snapshot");
+        let files = s.run(&["ls-tree", "-r", "--name-only", TIMELINE]).unwrap();
+        assert_eq!(files.lines().collect::<Vec<_>>(), ["a.txt", "b.txt"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn take_dedupe_diff_restore() {

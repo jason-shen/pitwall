@@ -381,6 +381,7 @@
 "Status" = "状态"
 "Stop" = "停止"
 "Stop broadcasting input" = "停止广播输入"
+"starting {name}…" = "正在启动 {name}…"
 "stopped; the brief is as you left it" = "已停止；简报保持原样"
 "Swap with" = "交换位置"
 "Swap with the card above" = "与上方卡片交换"
