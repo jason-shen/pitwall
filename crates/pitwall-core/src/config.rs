@@ -140,11 +140,20 @@ pub struct HostConfig {
     pub key: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The HostName ~/.ssh/config gives an alias. Only shown: ssh is still
+    /// handed the alias, so the rest of that block applies.
+    #[serde(skip)]
+    pub hostname: Option<String>,
 }
 
 impl HostConfig {
     pub fn addr(&self) -> &str {
         self.addr.as_deref().unwrap_or(&self.name)
+    }
+
+    /// The address to show for it: an alias's HostName, or what ssh dials.
+    pub fn shown_addr(&self) -> &str {
+        self.hostname.as_deref().unwrap_or(self.addr())
     }
 }
 

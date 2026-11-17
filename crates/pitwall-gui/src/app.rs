@@ -473,6 +473,8 @@ pub struct App {
     /// Ended sessions being reconnected, as (host, old session): the new
     /// one takes over the old one's card.
     pub ssh_reconnects: Vec<(String, String)>,
+    /// A remote being renamed in the sidebar, and the text typed so far.
+    pub renaming_remote: Option<(String, String)>,
     /// The window for running a command across hosts, while it's open.
     pub fleet: Option<crate::remote::FleetUi>,
     saved_layout: Option<crate::layout::Layout>,
@@ -664,6 +666,7 @@ impl App {
             hosts_read: Instant::now() - Duration::from_secs(60),
             ssh_batch: Default::default(),
             ssh_reconnects: vec![],
+            renaming_remote: None,
             fleet: None,
             saved_layout: None,
             parent_of: Default::default(),
@@ -805,11 +808,22 @@ impl App {
 
     /// The name shown for a task: yours if you renamed it.
     pub fn label(&self, t: &TaskInfo) -> String {
+        if let Some(l) = self.settings.labels.get(&t.id) {
+            return l.clone();
+        }
+        // A session goes by its remote's name, renamed or not.
+        match &t.host {
+            Some(h) => self.remote_name(h),
+            None => t.name.clone(),
+        }
+    }
+
+    pub fn remote_name(&self, host: &str) -> String {
         self.settings
-            .labels
-            .get(&t.id)
+            .remote_names
+            .get(host)
             .cloned()
-            .unwrap_or_else(|| t.name.clone())
+            .unwrap_or_else(|| host.to_string())
     }
 
     pub fn notify(&mut self, msg: impl Into<String>, error: bool) {

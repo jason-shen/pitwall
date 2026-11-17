@@ -1065,6 +1065,20 @@ impl Task {
         (!t.is_empty()).then_some(t)
     }
 
+    /// What an SSH session is running as far as anyone here can tell: an
+    /// agent recognised on its screen, or just ssh. Locally the foreground
+    /// process is always ssh, so a remote claude would never show as one.
+    fn remote_program(&self) -> String {
+        let bottom = self.tail_text(6).join("\n");
+        let term = self.term.lock().unwrap();
+        let title = term.callbacks().title.clone().unwrap_or_default();
+        let screen = term.screen().contents();
+        drop(term);
+        pitwall_core::agents::agent_on_screen(&title, &bottom, &screen)
+            .unwrap_or("ssh")
+            .to_string()
+    }
+
     pub fn info(&self) -> TaskInfo {
         let st = self.state.lock().unwrap();
         let attention = st.pending_approvals > 0
@@ -1090,6 +1104,8 @@ impl Task {
         };
         let (live_cwd, fg) = if exited {
             (None, None)
+        } else if self.host.is_some() {
+            (self.live_cwd(), Some(self.remote_program()))
         } else {
             (self.live_cwd(), self.foreground())
         };

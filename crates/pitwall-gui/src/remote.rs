@@ -62,7 +62,7 @@ impl App {
 
     pub fn connect(&mut self, name: &str) {
         let Some(h) = self.hosts.iter().find(|h| h.name == name).cloned() else {
-            return self.notify(trf!("no host named {name}", name = name), true);
+            return self.notify(trf!("no remote named {name}", name = name), true);
         };
         self.start_session(&h);
     }
@@ -76,7 +76,7 @@ impl App {
             .collect();
         if hosts.is_empty() {
             return self.notify(
-                trf!("{selector} matches no hosts", selector = selector),
+                trf!("{selector} matches no remotes", selector = selector),
                 true,
             );
         }
@@ -94,7 +94,7 @@ impl App {
         // $SHELL with ssh's arguments.
         if self.daemon_outdated {
             return self.notify(
-                crate::i18n::tr("Restart the daemon (sidebar banner) to open SSH sessions"),
+                crate::i18n::tr("Restart the daemon (sidebar banner) to open remote sessions"),
                 true,
             );
         }
@@ -168,7 +168,7 @@ impl App {
             return;
         };
         let Some(h) = self.hosts.iter().find(|h| h.name == host).cloned() else {
-            return self.notify(trf!("{host} is no longer configured", host = host), true);
+            return self.notify(trf!("{host} is no longer configured", host = self.remote_name(&host)), true);
         };
         self.ssh_reconnects.push((host, old.to_string()));
         self.start_session(&h);

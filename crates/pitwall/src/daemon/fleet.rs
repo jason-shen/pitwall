@@ -14,8 +14,8 @@ pub fn host_infos(hosts: &[HostConfig]) -> Vec<HostInfo> {
         .map(|h| HostInfo {
             name: h.name.clone(),
             addr: match h.port {
-                Some(p) => format!("{}:{p}", h.addr()),
-                None => h.addr().to_string(),
+                Some(p) => format!("{}:{p}", h.shown_addr()),
+                None => h.shown_addr().to_string(),
             },
             user: h.user.clone(),
             tags: h.tags.clone(),

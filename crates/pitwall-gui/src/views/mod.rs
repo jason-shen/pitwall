@@ -125,6 +125,9 @@ enum Action {
     Connect(String),
     /// An ended SSH session, started again in its card.
     Reconnect(String),
+    StartRenameRemote(String),
+    /// The name typed for a remote, or None when the rename was cancelled.
+    RenameRemote(String, Option<String>),
     /// Every host a selector matches, side by side.
     ConnectAll(String),
     /// The run-on-hosts window, with this selector filled in.
@@ -274,7 +277,7 @@ fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
 /// A project's name: the one you gave it, or its folder's.
 fn project_title(app: &App, root: &str) -> String {
     if root == crate::remote::SSH_PROJECT {
-        return "SSH".into();
+        return tr("Remote").into();
     }
     app.settings
         .project_names
@@ -1268,7 +1271,7 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
                     hosts::add_menu(ui, app, acts)
                 })
                 .response
-                .on_hover_text(tr("New SSH session"));
+                .on_hover_text(tr("New remote session"));
             } else if ui
                 .add(
                     egui::Button::new(RichText::new("+").size(15.0).color(MUTED))
@@ -1656,18 +1659,36 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     );
     let clip = p.with_clip_rect(text);
     let mut line = egui::text::LayoutJob::default();
+    // A remote agent reads as keel shows it, machine then agent; locally
+    // the project says where it is.
+    let (first, second) = match &t.host {
+        Some(_) => (app.label(t), agent_kind(t).unwrap_or("agent").to_string()),
+        None => (project_title(app, &app.project_of(t)), app.label(t)),
+    };
     line.append(
-        &project_title(app, &app.project_of(t)),
+        &first,
         0.0,
         egui::TextFormat::simple(FontId::proportional(13.0), if on { TEXT } else { MUTED }),
     );
     line.append(
-        &format!(" · {}", app.label(t)),
+        &format!(" · {second}"),
         0.0,
         egui::TextFormat::simple(FontId::proportional(13.0), if on { TEXT } else { MUTED }),
     );
     // What it has changed so far, so a finished agent's size shows at a glance.
     let mut right = text.right();
+    if t.host.is_some() {
+        let g = ui.fonts_mut(|fo| {
+            fo.layout_no_wrap(tr("remote").into(), FontId::proportional(10.5), ACCENT)
+        });
+        let pill = Rect::from_min_size(
+            pos2(right - g.size().x - 10.0, top - g.size().y / 2.0 - 1.0),
+            g.size() + vec2(10.0, 2.0),
+        );
+        p.rect_filled(pill, 4.0, ACCENT.gamma_multiply(0.15));
+        p.galley(pill.min + vec2(5.0, 1.0), g, ACCENT);
+        right = pill.left() - 4.0;
+    }
     if t.auto {
         let g = ui.fonts_mut(|fo| {
             fo.layout_no_wrap(tr("auto").into(), FontId::proportional(11.0), AMBER)
@@ -1730,7 +1751,7 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             acts.push(Action::OpenBeside(tid.clone()));
             ui.close();
         }
-        if ui.button(tr("Changes")).clicked() {
+        if t.host.is_none() && ui.button(tr("Changes")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             acts.push(Action::Show(Target {
                 item: tid.clone(),
@@ -5743,6 +5764,22 @@ fn apply(app: &mut App, a: Action) {
         Action::ToggleBroadcast => app.broadcast = !app.broadcast,
         Action::Connect(h) => app.connect(&h),
         Action::Reconnect(id) => app.reconnect(&id),
+        Action::StartRenameRemote(h) => {
+            let now = app.settings.remote_names.get(&h).cloned().unwrap_or_default();
+            app.renaming_remote = Some((h, now));
+        }
+        Action::RenameRemote(h, text) => {
+            app.renaming_remote = None;
+            match text.map(|t| t.trim().to_string()) {
+                None => {}
+                Some(t) if t.is_empty() || t == h => {
+                    app.settings.remote_names.remove(&h);
+                }
+                Some(t) => {
+                    app.settings.remote_names.insert(h, t);
+                }
+            }
+        }
         Action::ConnectAll(sel) => app.connect_all(&sel),
         Action::OpenFleet(sel) => app.open_fleet(&sel),
         Action::Copy(text) => {

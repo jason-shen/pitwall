@@ -47,28 +47,50 @@ fn merge(mut hosts: Vec<HostConfig>, extra: Vec<HostConfig>) -> Vec<HostConfig> 
     hosts
 }
 
-/// `Host` aliases that name one machine. Patterns (`*`, `?`, `!`) only set
-/// options for others, so they're skipped. Includes aren't followed.
+/// `Host` aliases that name one machine, with the HostName under each.
+/// Patterns (`*`, `?`, `!`) only set options for others, so they're skipped.
+/// Includes aren't followed.
 fn ssh_config_hosts(text: &str) -> Vec<HostConfig> {
     let mut out: Vec<HostConfig> = vec![];
+    // The aliases the current Host line added, for its HostName to go to.
+    let mut block: Vec<usize> = vec![];
     for line in text.lines() {
-        let line = line.trim();
-        let mut words = line.split(|c: char| c.is_whitespace() || c == '=');
-        if !words.next().is_some_and(|w| w.eq_ignore_ascii_case("host")) {
+        let mut words = line
+            .trim()
+            .split(|c: char| c.is_whitespace() || c == '=')
+            .filter(|w| !w.is_empty());
+        let Some(key) = words.next() else {
             continue;
-        }
-        for name in words.filter(|w| !w.is_empty()) {
-            if name.contains(['*', '?', '!']) || out.iter().any(|h| h.name == name) {
-                continue;
+        };
+        if key.eq_ignore_ascii_case("match") {
+            block.clear();
+        } else if key.eq_ignore_ascii_case("hostname") {
+            if let Some(v) = words.next() {
+                for &i in &block {
+                    out[i].hostname.get_or_insert_with(|| v.to_string());
+                }
             }
-            out.push(HostConfig {
-                name: name.to_string(),
-                addr: None,
-                port: None,
-                user: None,
-                key: None,
-                tags: vec!["ssh-config".into()],
-            });
+        } else if key.eq_ignore_ascii_case("host") {
+            block.clear();
+            for name in words {
+                if name.contains(['*', '?', '!']) {
+                    continue;
+                }
+                if let Some(i) = out.iter().position(|h| h.name == name) {
+                    block.push(i);
+                    continue;
+                }
+                block.push(out.len());
+                out.push(HostConfig {
+                    name: name.to_string(),
+                    addr: None,
+                    port: None,
+                    user: None,
+                    key: None,
+                    tags: vec!["ssh-config".into()],
+                    hostname: None,
+                });
+            }
         }
     }
     out
@@ -98,8 +120,11 @@ mod tests {
     #[test]
     fn ssh_config_aliases() {
         let text = "Host *\n  ServerAliveInterval 30\nHost box  box\n  HostName 10.0.0.2\nhost=nas !bad\nMatch host x\nHost web-?\n";
-        let names: Vec<_> = ssh_config_hosts(text).into_iter().map(|h| h.name).collect();
+        let found = ssh_config_hosts(text);
+        let names: Vec<_> = found.iter().map(|h| h.name.as_str()).collect();
         assert_eq!(names, ["box", "nas"]);
+        assert_eq!(found[0].shown_addr(), "10.0.0.2");
+        assert_eq!(found[1].shown_addr(), "nas");
         let merged = merge(vec![h("box", &[])], ssh_config_hosts(text));
         assert_eq!(merged.len(), 2);
     }
@@ -112,6 +137,7 @@ mod tests {
             user: None,
             key: None,
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            hostname: None,
         }
     }
 

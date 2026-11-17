@@ -1,5 +1,5 @@
-//! The HOSTS part of the sidebar, the window for running a command across
-//! hosts, and the broadcast strip over the cards.
+//! The REMOTES part of the sidebar, the window for running a command across
+//! remotes, and the broadcast strip over the cards.
 
 use egui::{
     pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Key, Layout, Margin,
@@ -21,14 +21,14 @@ pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     app.refresh_hosts(false);
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        section_label(ui, tr("HOSTS"));
+        section_label(ui, tr("REMOTES"));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if app.hosts.is_empty() {
                 return;
             }
             if ui
                 .add(egui::Button::new(RichText::new(tr("Run…")).small().color(MUTED)).frame(false))
-                .on_hover_text(tr("Run a command on several hosts at once"))
+                .on_hover_text(tr("Run a command on several remotes at once"))
                 .clicked()
             {
                 acts.push(Action::OpenFleet("all".into()));
@@ -38,7 +38,7 @@ pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                     egui::Button::new(RichText::new(tr("Connect all")).small().color(MUTED))
                         .frame(false),
                 )
-                .on_hover_text(tr("Open every host side by side; broadcast input types into all of them"))
+                .on_hover_text(tr("Open every remote side by side; broadcast input types into all of them"))
                 .clicked()
             {
                 acts.push(Action::ConnectAll("all".into()));
@@ -48,7 +48,7 @@ pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     if app.hosts.is_empty() {
         ui.label(
             RichText::new(tr(
-                "No hosts yet. Add them under hosts in config.toml, or as Host entries in ~/.ssh/config.",
+                "No remotes yet. Add them under hosts in config.toml, or as Host entries in ~/.ssh/config.",
             ))
             .small()
             .color(MUTED),
@@ -59,7 +59,10 @@ pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     for h in &hosts {
         let sessions = app.sessions_of(&h.name);
         let up = sessions.iter().any(|s| live(app, s));
-        host_row(ui, app, h, up, &sessions, acts);
+        match app.renaming_remote.as_mut().filter(|(r, _)| *r == h.name) {
+            Some((_, text)) => rename_row(ui, &h.name, text, acts),
+            None => remote_row(ui, app, h, up, &sessions, acts),
+        }
         if sessions.len() > 1 || sessions.iter().any(|s| !live(app, s)) {
             for id in &sessions {
                 session_row(ui, app, id, acts);
@@ -68,7 +71,22 @@ pub fn section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     }
 }
 
-fn host_row(
+fn rename_row(ui: &mut Ui, host: &str, text: &mut String, acts: &mut Vec<Action>) {
+    let r = ui.add(
+        TextEdit::singleline(text)
+            .hint_text(host)
+            .desired_width(ui.available_width()),
+    );
+    r.request_focus();
+    let (enter, esc) = ui.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
+    if esc {
+        acts.push(Action::RenameRemote(host.to_string(), None));
+    } else if enter || r.lost_focus() {
+        acts.push(Action::RenameRemote(host.to_string(), Some(text.clone())));
+    }
+}
+
+fn remote_row(
     ui: &mut Ui,
     app: &App,
     h: &pitwall_core::config::HostConfig,
@@ -95,42 +113,41 @@ fn host_row(
         crate::theme::icon_font(14.0),
         if up { GREEN } else { MUTED },
     );
+    let shown = app.remote_name(&h.name);
     let name = p.text(
         pos2(rect.left() + 28.0, y),
         Align2::LEFT_CENTER,
-        &h.name,
+        &shown,
         FontId::proportional(13.0),
         TEXT,
     );
-    let detail = match (&h.user, h.tags.iter().any(|t| t == "ssh-config")) {
-        (_, true) => "~/.ssh/config".to_string(),
-        (Some(u), _) => format!("{u}@{}", h.addr()),
-        (None, _) if h.addr() != h.name => h.addr().to_string(),
-        _ => String::new(),
-    };
-    if name.right() + 40.0 < rect.right() {
+    // The address once it isn't already the name.
+    let addr = h.shown_addr();
+    if addr != shown && name.right() + 40.0 < rect.right() {
         let room = Rect::from_min_max(pos2(name.right() + 8.0, rect.top()), rect.max);
         ui.painter_at(room).text(
             pos2(room.left(), y),
             Align2::LEFT_CENTER,
-            detail,
-            FontId::proportional(11.0),
+            addr,
+            FontId::monospace(11.0),
             MUTED,
         );
     }
     let first_live = sessions.iter().find(|s| live(app, s)).cloned();
     let resp = resp.on_hover_text(match &first_live {
-        Some(_) => tr("Show its session; right-click for more"),
-        None => tr("Connect; right-click for more"),
+        Some(_) => tr("Show its session; double-click to rename, right-click for more"),
+        None => tr("Connect; double-click to rename, right-click for more"),
     });
-    if resp.clicked() {
+    if resp.double_clicked() {
+        acts.push(Action::StartRenameRemote(h.name.clone()));
+    } else if resp.clicked() {
         acts.push(match first_live {
             Some(id) => Action::OpenTerm(id),
             None => Action::Connect(h.name.clone()),
         });
     }
     let name = h.name.clone();
-    let addr = h.addr().to_string();
+    let addr = addr.to_string();
     let tags: Vec<String> = h.tags.iter().filter(|t| *t != "ssh-config").cloned().collect();
     resp.context_menu(|ui| {
         if ui.button(tr("New session")).clicked() {
@@ -139,6 +156,10 @@ fn host_row(
         }
         if ui.button(tr("Run a command…")).clicked() {
             acts.push(Action::OpenFleet(name.clone()));
+            ui.close();
+        }
+        if ui.button(tr("Rename…")).clicked() {
+            acts.push(Action::StartRenameRemote(name.clone()));
             ui.close();
         }
         for t in &tags {
@@ -192,14 +213,14 @@ fn session_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     }
 }
 
-/// The `+` at the end of the tab strip while SSH sessions are showing.
+/// The `+` at the end of the tab strip while remote sessions are showing.
 pub fn add_menu(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
     if app.hosts.is_empty() {
-        ui.label(RichText::new(tr("No hosts configured")).color(MUTED));
+        ui.label(RichText::new(tr("No remotes configured")).color(MUTED));
         return;
     }
     for h in &app.hosts {
-        if ui.button(&h.name).clicked() {
+        if ui.button(app.remote_name(&h.name)).clicked() {
             acts.push(Action::Connect(h.name.clone()));
             ui.close();
         }
@@ -279,7 +300,7 @@ pub fn fleet_window(ctx: &egui::Context, app: &mut App) {
             .map(|h| h.name.clone())
             .collect()
     };
-    egui::Window::new(tr("Run on hosts"))
+    egui::Window::new(tr("Run on remotes"))
         .id(Id::unique("fleet-window"))
         .open(&mut open)
         .collapsible(false)
@@ -292,7 +313,7 @@ pub fn fleet_window(ctx: &egui::Context, app: &mut App) {
                 .num_columns(2)
                 .spacing([12.0, 10.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new(tr("Hosts")).color(MUTED));
+                    ui.label(RichText::new(tr("Remotes")).color(MUTED));
                     ui.horizontal(|ui| {
                         ui.add(
                             TextEdit::singleline(&mut f.selector)
@@ -457,7 +478,7 @@ pub fn ended_bar(ui: &mut Ui, app: &App, id: &str, body: Rect, acts: &mut Vec<Ac
             .max_rect(bar.shrink2(vec2(12.0, 0.0)))
             .layout(Layout::left_to_right(Align::Center)),
     );
-    let host = t.host.clone().unwrap_or_default();
+    let host = app.label(t);
     let why = match code {
         Some(0) | None => trf!("Session to {host} ended", host = host),
         Some(c) => trf!("Session to {host} ended (exit {code})", host = host, code = c),
