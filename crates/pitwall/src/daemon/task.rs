@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -150,6 +151,8 @@ pub struct Task {
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pub snaps: Option<Store>,
+    /// Auto mode: commands pitwall would ask about are approved without asking.
+    pub auto: AtomicBool,
 }
 
 pub fn slug(s: &str) -> String {
@@ -575,6 +578,8 @@ pub struct Saved {
     pub args: Vec<String>,
     #[serde(default)]
     pub had_turn: bool,
+    #[serde(default)]
+    pub auto: bool,
     pub created_unix: i64,
 }
 
@@ -605,6 +610,7 @@ impl Saved {
             brief: self.brief.clone(),
             base_branch: self.place.base_branch.clone(),
             turn_done: false,
+            auto: self.auto,
         }
     }
 }
@@ -689,6 +695,7 @@ impl Task {
             st.had_turn = saved.had_turn;
             st.turn_open = false;
         }
+        t.auto.store(saved.auto, Ordering::Relaxed);
         Ok(t)
     }
 
@@ -708,6 +715,7 @@ impl Task {
             prompt: self.prompt.clone(),
             args: self.args.clone(),
             had_turn: self.state.lock().unwrap().had_turn,
+            auto: self.auto.load(Ordering::Relaxed),
             created_unix: self.created_unix,
         }
     }
@@ -888,6 +896,7 @@ impl Task {
             master: Mutex::new(pair.master),
             killer: Mutex::new(killer),
             snaps,
+            auto: AtomicBool::new(false),
         });
 
         // Weak, so the task can go; its sender going ends this thread.
@@ -1084,6 +1093,7 @@ impl Task {
             title: self.title(),
             brief: self.brief.clone(),
             turn_done,
+            auto: self.auto.load(Ordering::Relaxed),
             base_branch: self.base_branch.clone(),
         }
     }

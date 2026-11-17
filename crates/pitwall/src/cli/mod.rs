@@ -563,6 +563,15 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
             client.call(Request::Decide { id, allow: false }).await?;
             println!("denied #{id}");
         }
+        Cmd::Auto { id, state } => {
+            let on = match state.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => bail!("auto mode is `on` or `off`"),
+            };
+            client.call(Request::SetAuto { id: id.clone(), on }).await?;
+            println!("auto mode {state} for {id}");
+        }
         Cmd::Snap { id, label } => match client
             .call(Request::TakeSnapshot {
                 id,

@@ -2156,16 +2156,22 @@ impl App {
                 }
                 t.attention |= self.done_unseen.contains(&t.id);
                 if t.attention && !was && is_agent(&t) && !self.watching(&t.id) {
+                    // An approval has the panel in the middle; a toast would
+                    // show the same command a second time.
+                    let approval = t.pending_approvals > 0;
                     let why = match &t.status {
+                        _ if approval => tr("wants to run a command").into(),
                         TaskStatus::Waiting { reason } => reason.clone(),
                         TaskStatus::Idle => tr("finished its turn").into(),
                         other => tr(&other.label()).to_string(),
                     };
                     let name = self.label(&t);
-                    self.notify(
-                        trf!("{name} needs you: {why}", name = name, why = why),
-                        false,
-                    );
+                    if !approval {
+                        self.notify(
+                            trf!("{name} needs you: {why}", name = name, why = why),
+                            false,
+                        );
+                    }
                     self.notify_away(&name, &why);
                     self.chime();
                     self.ctx
@@ -3386,6 +3392,20 @@ impl App {
         if let Some(c) = &self.client {
             c.send(Request::Decide { id, allow });
         }
+    }
+
+    pub fn set_auto(&mut self, id: &str, on: bool) {
+        let Some(c) = &self.client else { return };
+        c.send(Request::SetAuto { id: id.to_string(), on });
+        let name = self.tasks.get(id).map(|t| self.label(t)).unwrap_or(id.to_string());
+        self.notify(
+            if on {
+                trf!("auto mode on: {name}'s commands run without asking", name = name)
+            } else {
+                trf!("auto mode off: {name} asks again", name = name)
+            },
+            false,
+        );
     }
 
     pub fn decide_first(&mut self, allow: bool) {

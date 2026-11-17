@@ -89,6 +89,7 @@ enum Action {
     Discard(Change),
     Checkout(String),
     Decide(u64, bool),
+    SetAuto(String, bool),
     NextAttention,
     Revert(String, SnapshotInfo),
     Checkpoint(String),
@@ -1441,6 +1442,13 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
                 if active { c::TEXT } else { c::TEXT_DIM },
             ),
         );
+        if t.auto {
+            job.append(
+                tr("auto"),
+                6.0,
+                egui::TextFormat::simple(FontId::proportional(11.0), AMBER),
+            );
+        }
         // How many panes were dropped into this tab.
         let panes = app.panes_of(id).len();
         if panes > 0 {
@@ -1493,6 +1501,7 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
             acts.push(Action::OpenBeside(tid.clone()));
             ui.close();
         }
+        auto_toggle(ui, t, acts);
         if shell {
             ui.separator();
             if ui.button(tr("Close terminal")).clicked() {
@@ -1501,6 +1510,22 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
             }
         }
     });
+}
+
+/// Auto mode on or off, in an agent's right-click menu.
+fn auto_toggle(ui: &mut Ui, t: &TaskInfo, acts: &mut Vec<Action>) {
+    if !is_agent(t) {
+        return;
+    }
+    let text = if t.auto {
+        tr("Turn off auto mode")
+    } else {
+        tr("Auto mode: approve its commands")
+    };
+    if ui.button(text).clicked() {
+        acts.push(Action::SetAuto(t.id.clone(), !t.auto));
+        ui.close();
+    }
 }
 
 /// The tab's dot: keel's green for a live terminal, an agent's state colour,
@@ -1620,6 +1645,13 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     );
     // What it has changed so far, so a finished agent's size shows at a glance.
     let mut right = text.right();
+    if t.auto {
+        let g = ui.fonts_mut(|fo| {
+            fo.layout_no_wrap(tr("auto").into(), FontId::proportional(11.0), AMBER)
+        });
+        right -= g.size().x + 6.0;
+        p.galley(pos2(right + 6.0, top - g.size().y / 2.0), g, AMBER);
+    }
     if let Some((files, add, del)) = app.diffstats.get(id).filter(|s| s.0 > 0) {
         let mut job = egui::text::LayoutJob::default();
         let f = |c| egui::TextFormat::simple(FontId::monospace(11.0), c);
@@ -1694,6 +1726,7 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             acts.push(Action::Accept);
             ui.close();
         }
+        auto_toggle(ui, t, acts);
         ui.separator();
         if t.agent == "shell" {
             if ui.button(tr("Close terminal")).clicked() {
@@ -1869,6 +1902,7 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             acts.push(Action::Accept);
             ui.close();
         }
+        auto_toggle(ui, t, acts);
         ui.separator();
         if shell {
             if ui.button(tr("Close terminal")).clicked() {
@@ -3382,6 +3416,18 @@ fn approval_panel(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                         {
                             acts.push(Action::Decide(a.id, false));
                         }
+                        if let Some(id) = &task {
+                            if ui
+                                .button(RichText::new(tr("Auto mode")).color(AMBER))
+                                .on_hover_text(trf!(
+                                    "Approve this and everything {who} asks to run from now on. Deny rules still hold; turn it off from its tab.",
+                                    who = who
+                                ))
+                                .clicked()
+                            {
+                                acts.push(Action::SetAuto(id.clone(), true));
+                            }
+                        }
                         if let Some(id) = task.filter(|_| !on_screen) {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui.button(tr("view")).clicked() {
@@ -4446,6 +4492,26 @@ fn bar_options(app: &App, bar: &CmdBar) -> Vec<BarOpt> {
             hint: iso.into(),
             act: BarAct::Start(q.to_string()),
         });
+    }
+    if let Some(t) = app.target().and_then(|c| app.tasks.get(&c.item)).filter(|t| is_agent(t)) {
+        let text = if t.auto {
+            trf!("Turn off auto mode for {name}", name = app.label(t))
+        } else {
+            trf!("Auto mode for {name}: approve its commands", name = app.label(t))
+        };
+        if fuzzy(q, &text).is_some() {
+            out.push(BarOpt {
+                group: tr("Commands"),
+                icon: "A".into(),
+                text,
+                hint: String::new(),
+                act: BarAct::Run(|app, a| {
+                    if let Some(t) = app.target().and_then(|c| app.tasks.get(&c.item)) {
+                        a.push(Action::SetAuto(t.id.clone(), !t.auto));
+                    }
+                }),
+            });
+        }
     }
     let cmds: [(&str, &str, BarFn); 12] = [
         (tr("New agent"), "✦", |_, a| a.push(Action::NewAgent)),
@@ -5539,6 +5605,7 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::Checkout(b) => app.git_op(move |d| git::checkout(d, &b)),
         Action::Decide(id, allow) => app.decide(id, allow),
+        Action::SetAuto(id, on) => app.set_auto(&id, on),
         Action::NextAttention => app.next_attention(),
         Action::Revert(task, s) => {
             let text = trf!("Revert {task}'s files to #{seq} \"{label}\"?\nA safety snapshot is taken first, so you can undo this.", task = task, seq = s.seq, label = s.label);

@@ -105,6 +105,9 @@ pub struct TaskInfo {
     /// idle status, a redraw while it sits at its prompt doesn't set this.
     #[serde(default)]
     pub turn_done: bool,
+    /// Auto mode: pitwall approves its commands without asking.
+    #[serde(default)]
+    pub auto: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -335,6 +338,11 @@ pub enum Request {
     Decide {
         id: u64,
         allow: bool,
+    },
+    /// Turn a task's auto mode on or off. On approves what it's waiting on too.
+    SetAuto {
+        id: String,
+        on: bool,
     },
 
     Hook(HookRequest),

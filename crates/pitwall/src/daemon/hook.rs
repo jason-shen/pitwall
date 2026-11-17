@@ -179,9 +179,18 @@ async fn pre_tool(
         }
     }
 
-    // 2. Policy.
+    // 2. Policy. Auto mode answers yes to anything that would be asked,
+    // here or on the agent's own prompt (file edits, MCP tools); deny rules
+    // and destructive commands are still refused.
+    let auto = task
+        .as_ref()
+        .is_some_and(|t| t.auto.load(std::sync::atomic::Ordering::Relaxed));
+    let auto_yes = || HookReply {
+        decision: Some(Decision::Allow),
+        reason: "pitwall auto mode".into(),
+    };
     let (Some(command), Some(c)) = (command, c) else {
-        return none();
+        return if auto { auto_yes() } else { none() };
     };
     let task_id = task.as_ref().map(|t| t.id.clone());
     let log = |outcome: &str| {
@@ -194,7 +203,9 @@ async fn pre_tool(
     match c.decision {
         Decision::Allow => {
             log("allowed");
-            if d.cfg.hooks.auto_allow_read_only && c.tier == Tier::ReadOnly
+            if auto {
+                auto_yes()
+            } else if d.cfg.hooks.auto_allow_read_only && c.tier == Tier::ReadOnly
                 || c.reason.starts_with("rule")
             {
                 HookReply {
@@ -217,6 +228,10 @@ async fn pre_tool(
             }
         }
         Decision::Ask => {
+            if auto {
+                log("auto-approved");
+                return auto_yes();
+            }
             if d.cfg.hooks.mode != "queue" || task.is_none() {
                 log("deferred to agent prompt");
                 return HookReply {

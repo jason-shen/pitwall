@@ -352,6 +352,31 @@ impl Daemon {
         Ok(())
     }
 
+    /// Turning it on also lets through whatever the task is waiting on, so
+    /// the "auto mode" answer to an approval approves that one as well.
+    pub fn set_auto(&self, id: &str, on: bool) -> Result<()> {
+        let t = self.task(id)?;
+        t.auto.store(on, Ordering::Relaxed);
+        if on {
+            let waiting: Vec<u64> = self
+                .approvals
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|p| {
+                    matches!(&p.info.source, ApprovalSource::Task { task_id, .. } if task_id == &t.id)
+                })
+                .map(|p| p.info.id)
+                .collect();
+            for a in waiting {
+                let _ = self.decide(a, true);
+            }
+        }
+        self.save();
+        self.emit_task(&t);
+        Ok(())
+    }
+
     pub fn approvals(&self) -> Vec<Approval> {
         self.approvals
             .lock()

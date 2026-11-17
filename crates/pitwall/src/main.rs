@@ -122,6 +122,9 @@ enum Cmd {
     Approve { id: u64 },
     /// Deny a pending command.
     Deny { id: u64 },
+    /// Auto mode for a task: `on` approves what pitwall would ask about
+    /// (deny rules still hold), `off` asks again.
+    Auto { id: String, state: String },
 
     /// Take a snapshot of a task's working tree now.
     Snap { id: String, label: Vec<String> },
