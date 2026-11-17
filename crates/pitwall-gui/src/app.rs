@@ -1358,11 +1358,12 @@ impl App {
     }
 
     pub fn project_roots(&self) -> Vec<String> {
+        // Opened from the Dock, the launch folder is your home folder: only a
+        // repo counts as a project before anything runs in it.
         let launch = self
             .workspace_repo
             .clone()
-            .unwrap_or_else(|| self.workspace.display().to_string());
-        let launch = Some(launch).filter(|l| !self.settings.hidden_projects.contains(l));
+            .filter(|l| !self.settings.hidden_projects.contains(l));
         let mut v: Vec<String> = self
             .tasks
             .values()
@@ -1885,9 +1886,6 @@ impl App {
                         for id in gone {
                             self.forget_task(&id);
                         }
-                        if self.tabs.is_empty() {
-                            self.new_shell();
-                        }
                     }
                 }
                 Ev::Disconnected => {
@@ -2040,9 +2038,10 @@ impl App {
             .find(|id| self.tasks[**id].attention)
             .or(mine.first())
             .map(|s| s.to_string());
-        match pick {
-            Some(id) => self.open_item(&id),
-            None => self.new_shell(),
+        // Nothing running here leaves the stage empty; its welcome screen
+        // offers what to start.
+        if let Some(id) = pick {
+            self.open_item(&id);
         }
     }
 

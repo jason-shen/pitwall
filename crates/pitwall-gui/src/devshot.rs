@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -20,6 +20,8 @@ pub struct DevShot {
     pub dropped: Option<std::path::PathBuf>,
     /// Set by the screenshot callback once the file is written.
     waiting: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Whether a terminal was started for the steps to work in.
+    primed: bool,
 }
 
 impl DevShot {
@@ -36,6 +38,7 @@ impl DevShot {
             next: 0,
             at: Instant::now() + Duration::from_secs(4),
             waiting: None,
+            primed: false,
             key: None,
             typed: None,
             dropped: None,
@@ -51,7 +54,17 @@ impl DevShot {
             self.waiting = None;
             self.at = Instant::now() + Duration::from_millis(1500);
         }
-        if Instant::now() < self.at || app.tabs.is_empty() {
+        if Instant::now() < self.at || app.client.is_none() {
+            return;
+        }
+        // The app opens nothing at launch; most steps want a terminal to act
+        // on. A first step of `empty` shoots the app as it starts.
+        if !std::mem::replace(&mut self.primed, true)
+            && app.tabs.is_empty()
+            && self.steps.first().map(String::as_str) != Some("empty")
+        {
+            app.new_shell();
+            self.at = Instant::now() + Duration::from_millis(1500);
             return;
         }
         let Some(step) = self.steps.get(self.next).cloned() else {

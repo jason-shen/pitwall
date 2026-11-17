@@ -750,6 +750,14 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
 /// so the tree only moves when you move it.
 fn side_list(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
     let here = app.project.clone().unwrap_or_default();
+    if project_list(app).is_empty() {
+        ui.label(
+            RichText::new(tr("No projects yet. + opens a folder; agents and terminals you start show up here."))
+                .small()
+                .color(MUTED),
+        );
+        return;
+    }
     for (i, root) in project_list(app).into_iter().enumerate() {
         let current = root == here;
         let open = !app.settings.folded_projects.contains(&root);
@@ -790,6 +798,16 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         ('\u{f0306}', tr("Keys"), SidebarTab::Keys),
     ];
     let third = rect.width() / tabs.len() as f32;
+    // All labelled or all icons: a narrow sidebar keeps just the icons, named
+    // on hover.
+    let roomy = tabs.iter().all(|(_, label, _)| {
+        let w = ui.fonts_mut(|f| {
+            f.layout_no_wrap(label.to_string(), FontId::proportional(13.0), TEXT)
+                .size()
+                .x
+        });
+        14.0 + 6.0 + w + 14.0 <= third - 6.0
+    });
     for (i, (icon, label, tab)) in tabs.into_iter().enumerate() {
         let r = Rect::from_min_size(rect.min + vec2(third * i as f32, 0.0), vec2(third, rect.height()))
             .shrink(3.0);
@@ -805,10 +823,7 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         let text = ui.fonts_mut(|f| {
             f.layout_no_wrap(label.to_string(), FontId::proportional(13.0), color)
         });
-        // A narrow sidebar keeps just the icons, named on hover.
-        let full = 14.0 + 6.0 + text.size().x;
-        let roomy = full + 14.0 <= r.width();
-        let w = if roomy { full } else { 14.0 };
+        let w = if roomy { 14.0 + 6.0 + text.size().x } else { 14.0 };
         let x = r.center().x - w / 2.0;
         p.text(
             pos2(x + 7.0, r.center().y),
