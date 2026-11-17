@@ -173,7 +173,8 @@ else
 		echo "  gh repo create $(TAP) --public --add-readme"; exit 1; }
 	sed -e 's/@VERSION@/$(VERSION)/g' -e "s/@SHA256@/$$(cut -d' ' -f1 $(ZIP).sha256)/g" \
 		-e 's#@REPO@#$(REPO)#g' scripts/pitwall.rb > $(DIST)/pitwall.rb
-	@sha=$$(gh api repos/$(TAP)/contents/Casks/pitwall.rb --jq .sha 2>/dev/null || true); \
+	@# On a 404 gh still prints the error body to stdout, so drop it rather than send it as the sha.
+	@sha=$$(gh api repos/$(TAP)/contents/Casks/pitwall.rb --jq .sha 2>/dev/null) || sha=; \
 	gh api -X PUT repos/$(TAP)/contents/Casks/pitwall.rb \
 		-f message="pitwall $(VERSION)" \
 		-f content="$$(base64 < $(DIST)/pitwall.rb | tr -d '\n')" \
