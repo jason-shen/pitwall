@@ -256,6 +256,7 @@
 "nothing needs you" = "rien ne requiert votre attention"
 "Nothing running here yet" = "Rien ne tourne ici pour l’instant"
 "nothing staged: space stages a file, a stages everything" = "rien d’indexé : espace indexe un fichier, a indexe tout"
+"Notifications" = "Notifications"
 "Notify me when an agent needs me or finishes while pitwall is in the background" = "M’avertir quand un agent a besoin de moi ou termine pendant que pitwall est en arrière-plan"
 "odd path" = "chemin invalide"
 "Open" = "Ouvrir"

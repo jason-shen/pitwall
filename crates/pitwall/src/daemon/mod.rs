@@ -267,6 +267,9 @@ impl Daemon {
             let mut st = t.state.lock().unwrap();
             let first = !st.had_turn;
             st.had_turn = true;
+            // Ended even if pitwall didn't see what started it.
+            st.turn_open = true;
+            st.close_turn();
             first
         };
         if first {
@@ -532,15 +535,19 @@ async fn ticker(d: Arc<Daemon>) {
         let tasks: Vec<Arc<Task>> = d.tasks.lock().unwrap().values().cloned().collect();
         reported.retain(|k, _| tasks.iter().any(|t| &t.id == k));
         for t in tasks {
-            let (status, since_output, since_status, pending) = {
+            let (status, since_output, since_status, pending, turn_open) = {
                 let st = t.state.lock().unwrap();
                 (
                     st.status.clone(),
                     st.last_output.elapsed(),
                     st.status_since.elapsed(),
                     st.pending_approvals,
+                    st.turn_open,
                 )
             };
+            // An agent at its prompt redraws now and then (a status line, a
+            // resize). That's not work unless something started a turn.
+            let redraw_only = t.agent != "shell" && !turn_open;
             let next = match &status {
                 TaskStatus::Exited { .. } => None,
                 TaskStatus::Running if since_output >= idle => {
@@ -562,6 +569,7 @@ async fn ticker(d: Arc<Daemon>) {
                 // Fresh output after we flagged it means it's working again.
                 TaskStatus::Waiting { .. } | TaskStatus::Idle
                     if pending == 0
+                        && !redraw_only
                         && since_output + Duration::from_millis(300) < since_status
                         && since_output < idle =>
                 {
@@ -572,6 +580,11 @@ async fn ticker(d: Arc<Daemon>) {
             if let Some(n) = next {
                 let turn_end =
                     matches!(status, TaskStatus::Running) && !matches!(n, TaskStatus::Running);
+                // With hooks, only Stop ends a turn: an agent can go quiet
+                // mid-turn (a long tool call) and still be at it.
+                if turn_end && t.agent_cfg.hooks.is_none() {
+                    t.state.lock().unwrap().close_turn();
+                }
                 d.set_status(&t, n);
                 if turn_end && d.cfg.snapshots.auto {
                     d.snapshot(&t, "turn ended".into()).await;

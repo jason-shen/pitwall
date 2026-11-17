@@ -88,6 +88,32 @@ pub struct TaskState {
     /// Someone typed into it or messaged it. With no prompt and no input,
     /// going quiet isn't a turn: it's just sitting at its prompt.
     pub had_input: bool,
+    /// Something was submitted (Enter, a paste, a message, its starting
+    /// prompt) and the turn it started hasn't ended yet.
+    pub turn_open: bool,
+    /// A turn ended and nothing has been submitted since: the agent is
+    /// waiting on you. Going quiet after a redraw isn't this.
+    pub turn_done: bool,
+}
+
+impl TaskState {
+    pub fn open_turn(&mut self) {
+        self.had_input = true;
+        self.turn_open = true;
+        self.turn_done = false;
+    }
+
+    pub fn close_turn(&mut self) {
+        if self.turn_open {
+            self.turn_open = false;
+            self.turn_done = true;
+        }
+    }
+}
+
+/// Keys that submit: Return, as plain CR or in the kitty keyboard protocol.
+pub fn submits(data: &[u8]) -> bool {
+    data.contains(&b'\r') || data.windows(5).any(|w| w == b"\x1b[13u" || w == b"\x1b[13;")
 }
 
 pub struct Task {
@@ -578,6 +604,7 @@ impl Saved {
             title: None,
             brief: self.brief.clone(),
             base_branch: self.place.base_branch.clone(),
+            turn_done: false,
         }
     }
 }
@@ -656,7 +683,12 @@ impl Task {
             &extra,
             saved.created_unix,
         )?;
-        t.state.lock().unwrap().had_turn = saved.had_turn;
+        {
+            // A resumed session sits at its prompt until you give it something.
+            let mut st = t.state.lock().unwrap();
+            st.had_turn = saved.had_turn;
+            st.turn_open = false;
+        }
         Ok(t)
     }
 
@@ -839,6 +871,8 @@ impl Task {
                 status_since: Instant::now(),
                 had_turn: false,
                 had_input: false,
+                turn_open: req.prompt.is_some(),
+                turn_done: false,
             }),
             term: Mutex::new(vt100::Parser::new_with_callbacks(
                 nz(rows, 40),
@@ -1007,8 +1041,9 @@ impl Task {
             || match &st.status {
                 TaskStatus::Running => false,
                 TaskStatus::Waiting { .. } | TaskStatus::Exited { .. } => true,
-                TaskStatus::Idle => self.agent_cfg.attention_on_idle,
+                TaskStatus::Idle => self.agent_cfg.attention_on_idle && st.turn_done,
             };
+        let turn_done = st.turn_done;
         let status = st.status.clone();
         let last = st.last_activity_unix;
         let pending = st.pending_approvals;
@@ -1048,6 +1083,7 @@ impl Task {
             choices,
             title: self.title(),
             brief: self.brief.clone(),
+            turn_done,
             base_branch: self.base_branch.clone(),
         }
     }
@@ -1452,6 +1488,51 @@ mod tests {
         let got = super::proc_program(child.id());
         let _ = child.kill();
         assert_eq!(got.as_deref(), Some("sleep"));
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+
+    fn state() -> TaskState {
+        TaskState {
+            status: TaskStatus::Idle,
+            last_output: Instant::now(),
+            last_activity_unix: 0,
+            pending_approvals: 0,
+            snap_count: 0,
+            status_since: Instant::now(),
+            had_turn: false,
+            had_input: false,
+            turn_open: false,
+            turn_done: false,
+        }
+    }
+
+    #[test]
+    fn only_a_submitted_turn_ends() {
+        let mut st = state();
+        // Quiet at its prompt, nothing submitted: not a finished turn.
+        st.close_turn();
+        assert!(!st.turn_done);
+        st.open_turn();
+        st.close_turn();
+        assert!(st.turn_done);
+        // A second quiet spell (a redraw) changes nothing; typing clears it.
+        st.close_turn();
+        assert!(st.turn_done);
+        st.open_turn();
+        assert!(!st.turn_done && st.turn_open);
+    }
+
+    #[test]
+    fn return_submits_in_either_keyboard_protocol() {
+        assert!(submits(b"fix the bug\r"));
+        assert!(submits(b"\x1b[13u"));
+        assert!(submits(b"\x1b[13;1u"));
+        assert!(!submits(b"typing"));
+        assert!(!submits(b"\x1b[A"));
     }
 }
 

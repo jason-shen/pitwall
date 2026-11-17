@@ -256,6 +256,7 @@
 "nothing needs you" = "没有需要你处理的事项"
 "Nothing running here yet" = "这里还没有运行任何东西"
 "nothing staged: space stages a file, a stages everything" = "没有已暂存的内容：空格暂存一个文件，a 暂存全部"
+"Notifications" = "通知"
 "Notify me when an agent needs me or finishes while pitwall is in the background" = "pitwall 在后台时，若智能体需要我或已完成，通知我"
 "odd path" = "路径异常"
 "Open" = "打开"

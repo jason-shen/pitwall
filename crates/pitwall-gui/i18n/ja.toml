@@ -256,6 +256,7 @@
 "nothing needs you" = "対応が必要なものはありません"
 "Nothing running here yet" = "まだ何も実行されていません"
 "nothing staged: space stages a file, a stages everything" = "ステージされたものはありません：space でファイルを、a ですべてをステージします"
+"Notifications" = "通知"
 "Notify me when an agent needs me or finishes while pitwall is in the background" = "pitwall がバックグラウンドのとき、エージェントが対応を求めたり完了したりしたら通知する"
 "odd path" = "不正なパス"
 "Open" = "開く"

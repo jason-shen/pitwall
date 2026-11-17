@@ -101,6 +101,10 @@ pub struct TaskInfo {
     /// The branch its worktree forked from, which is where Accept merges it.
     #[serde(default)]
     pub base_branch: Option<String>,
+    /// It finished a turn and nothing has been submitted since. Unlike an
+    /// idle status, a redraw while it sits at its prompt doesn't set this.
+    #[serde(default)]
+    pub turn_done: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

@@ -1996,12 +1996,14 @@ impl App {
                     && self.tasks.get(&t.id).map(task_dir) != Some(task_dir(&t));
                 // The daemon doesn't flag a terminal's agent as needing you when
                 // it goes quiet, so a finished turn you didn't see is tracked here.
+                // Its turn signal, not running-then-idle: claude redraws at its
+                // prompt, and each redraw going quiet looked like a turn.
                 let mut t = t;
-                let prev = self.tasks.get(&t.id).map(|o| o.status.clone());
+                let prev_done = self.tasks.get(&t.id).is_some_and(|o| o.turn_done);
                 if t.agent == "shell"
                     && is_agent(&t)
-                    && matches!(prev, Some(TaskStatus::Running))
-                    && t.status == TaskStatus::Idle
+                    && t.turn_done
+                    && !prev_done
                     && !self.watching(&t.id)
                 {
                     self.done_unseen.insert(t.id.clone());

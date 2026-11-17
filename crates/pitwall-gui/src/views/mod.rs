@@ -4864,13 +4864,16 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                         });
                 });
                 ui.checkbox(&mut s.worktree, tr("Give each agent its own branch and worktree"));
-                ui.checkbox(
-                    &mut s.system_notifications,
-                    tr("Notify me when an agent needs me or finishes while pitwall is in the background"),
-                );
+
+                ui.add_space(8.0);
+                settings_heading(ui, tr("Notifications"));
                 ui.checkbox(
                     &mut s.notify_sound,
                     tr("Play a sound when an agent needs me"),
+                );
+                ui.checkbox(
+                    &mut s.system_notifications,
+                    tr("Notify me when an agent needs me or finishes while pitwall is in the background"),
                 );
 
                 ui.add_space(8.0);

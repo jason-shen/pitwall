@@ -211,7 +211,13 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
         }
         Request::Input { id, data } => {
             let t = d.task(&id)?;
-            t.state.lock().unwrap().had_input = true;
+            {
+                let mut st = t.state.lock().unwrap();
+                st.had_input = true;
+                if super::task::submits(&data) {
+                    st.open_turn();
+                }
+            }
             // A program that isn't reading its input would block this write;
             // that shouldn't hold up a runtime thread.
             tokio::task::spawn_blocking(move || t.write(&data)).await??;
@@ -231,7 +237,7 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             }
             let line = pitwall_core::agents::message_line(from.as_deref(), &text);
             let _turn = t.typing.lock().await;
-            t.state.lock().unwrap().had_input = true;
+            t.state.lock().unwrap().open_turn();
             t.write(line.as_bytes())?;
             // A Return in the same write reads as part of a paste to TUIs
             // like Claude Code, which then don't submit it.
