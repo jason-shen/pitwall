@@ -3234,6 +3234,38 @@ fn overlays(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     }
 }
 
+/// The command as shell script in the editor's colours. Worked out once per
+/// approval; a long script would otherwise be highlighted every frame.
+fn command_job(ui: &Ui, a: &pitwall_core::proto::Approval, theme: &str) -> egui::text::LayoutJob {
+    let id = Id::unique(("approval-hl", a.id));
+    if let Some(job) = ui.data(|d| d.get_temp::<egui::text::LayoutJob>(id)) {
+        return job;
+    }
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::default();
+    let runs = pitwall_core::editor::highlight_code(&a.command, "sh", theme);
+    for (i, line) in a.command.split('\n').enumerate() {
+        if i > 0 {
+            job.append("\n", 0.0, egui::TextFormat::simple(font.clone(), TEXT));
+        }
+        let mut at = 0;
+        for &((r, g, b), len) in runs.get(i).into_iter().flatten() {
+            // The runs cover the line's newline too; stop at its end.
+            let end = (at + len).min(line.len());
+            if end > at {
+                let fmt = egui::TextFormat::simple(font.clone(), Color32::from_rgb(r, g, b));
+                job.append(&line[at..end], 0.0, fmt);
+            }
+            at = end;
+        }
+        if at < line.len() {
+            job.append(&line[at..], 0.0, egui::TextFormat::simple(font.clone(), TEXT));
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(id, job.clone()));
+    job
+}
+
 /// A command an agent is waiting to run, in the middle of the window. A long
 /// one (a heredoc, a script) scrolls rather than running off the screen. It
 /// doesn't block the window, so the terminal behind stays usable.
@@ -3241,6 +3273,7 @@ fn approval_panel(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     let Some(a) = app.shown_approval().cloned() else {
         return;
     };
+    let theme = app.cfg.tui.theme.clone();
     let total = app.approvals.len();
     let (who, task) = match &a.source {
         ApprovalSource::Task { task_id, .. } => (
@@ -3306,12 +3339,9 @@ fn approval_panel(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                                 .max_height(code_h)
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&a.command).monospace().color(TEXT),
-                                        )
-                                        .wrap(),
-                                    );
+                                    let mut job = command_job(ui, &a, &theme);
+                                    job.wrap.max_width = ui.available_width();
+                                    ui.add(egui::Label::new(job).wrap());
                                 });
                         });
                     ui.add_space(12.0);

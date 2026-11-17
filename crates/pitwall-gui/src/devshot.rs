@@ -179,10 +179,22 @@ impl DevShot {
                     "approval" => {
                         use pitwall_core::proto::{Approval, ApprovalSource, Tier};
                         let task_id = app.target().map(|t| t.item.clone()).unwrap_or_default();
-                        let command = (1..=60)
-                            .map(|i| format!("echo \"step {i} of a long generated script\""))
-                            .collect::<Vec<_>>()
-                            .join(" && \\\n  ");
+                        let command = r##"# Rebuild the release and push it to the staging box
+set -euo pipefail
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+for target in aarch64-apple-darwin x86_64-apple-darwin; do
+  cargo build --release --target "$target" -p pitwall-gui
+done
+lipo -create target/*/release/pitwall-gui -output dist/pitwall-gui
+if [ -n "${DEPLOY_HOST:-}" ]; then
+  rsync -az --delete dist/ "deploy@$DEPLOY_HOST:/opt/pitwall/$VERSION/"
+  ssh "deploy@$DEPLOY_HOST" 'sudo systemctl restart pitwall && echo restarted'
+fi
+cat > dist/NOTES.md <<EOF
+Pitwall $VERSION built on $(date +%F)
+EOF
+grep -c "warning" build.log | xargs -I{} echo "{} warnings""##
+                        .to_string();
                         app.approvals.insert(
                             9001,
                             Approval {

@@ -25,6 +25,36 @@ pub type Rgb = (u8, u8, u8);
 
 const MAX_HIGHLIGHT_LINES: usize = 20_000;
 
+/// Colour runs for a snippet that isn't a file, such as a command waiting
+/// on approval: one list of (colour, byte length) per line, in the editor's
+/// theme. `ext` picks the syntax ("sh"); unknown ones come back plain.
+pub fn highlight_code(text: &str, ext: &str, theme: &str) -> Vec<Vec<(Rgb, usize)>> {
+    let ss = syntaxes();
+    let Some(syntax) = ss.find_syntax_by_extension(ext) else {
+        return vec![];
+    };
+    let ts = themes();
+    let Some(theme) = ts
+        .themes
+        .get(theme)
+        .or_else(|| ts.themes.get("base16-ocean.dark"))
+    else {
+        return vec![];
+    };
+    let mut h = HighlightLines::new(syntax, theme);
+    text.split('\n')
+        .map(|line| {
+            h.highlight_line(&format!("{line}\n"), ss)
+                .map(|r| {
+                    r.into_iter()
+                        .map(|(st, t)| ((st.foreground.r, st.foreground.g, st.foreground.b), t.len()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 struct UndoState {
     lines: Vec<String>,
