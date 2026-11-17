@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Muster.app for this Mac and install it, so muster opens from the Dock
+# Build Pitwall.app for this Mac and install it, so pitwall opens from the Dock
 # and Spotlight like any app. Same as `make install`.
 # Usage: scripts/macos-app.sh [install-dir]   (default: /Applications)
 set -euo pipefail

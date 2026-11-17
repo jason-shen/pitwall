@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- pitwall.svg for 16 and 32 pixels: fills more of the square, with a
+       heavier prompt and bigger dots so they don't blur into the background. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2e36"/>
+      <stop offset="1" stop-color="#101215"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+
+  <path d="M220 350 l160 162 l-160 162" fill="none" stroke="#e9e7e3" stroke-width="100" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="500" cy="618" r="62" fill="#8cd05c"/>
+  <circle cx="660" cy="618" r="62" fill="#f0a13c"/>
+  <circle cx="820" cy="618" r="62" fill="#2bc4ae"/>
+</svg>

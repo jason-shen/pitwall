@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/muster-core", "crates/muster", "crates/muster-gui"]
+members = ["crates/pitwall-core", "crates/pitwall", "crates/pitwall-gui"]
 
 [workspace.package]
 version = "0.1.0"

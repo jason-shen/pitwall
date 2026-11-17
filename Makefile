@@ -1,10 +1,10 @@
-# Build and publish Muster for macOS: a universal Muster.app, zipped and
+# Build and publish Pitwall for macOS: a universal Pitwall.app, zipped and
 # attached to a GitHub release, and a Homebrew cask in your tap.
 #
 #   make tools      Rust targets for both Mac architectures
 #   make test       tests and clippy
-#   make icon       Muster.icns and the window icon, from assets/*.svg
-#   make app        dist/Muster.app (universal, signed)
+#   make icon       Pitwall.icns and the window icon, from assets/*.svg
+#   make app        dist/Pitwall.app (universal, signed)
 #   make install    build for this Mac only, into /Applications, CLI on PATH
 #   make dist       the zip and its checksum
 #   make release    test, build, and publish vVERSION on GitHub
@@ -18,21 +18,21 @@
 
 VERSION   ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 TAG       := v$(VERSION)
-REPO      ?= jason-shen/muster
+REPO      ?= jason-shen/pitwall
 TAP       ?= jason-shen/homebrew-tap
 TARGETS   ?= aarch64-apple-darwin x86_64-apple-darwin
 DEST      ?= /Applications
-BUNDLE_ID ?= nz.muster.app
+BUNDLE_ID ?= nz.pitwall.app
 DEVELOPER_ID   ?=
 NOTARY_PROFILE ?=
 
 HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 DIST := dist
-APP  := $(DIST)/Muster.app
-ICON := assets/Muster.icns
-ZIP  := $(DIST)/Muster-$(VERSION)-macos.zip
-BINS := muster muster-gui
-# `brew install --cask jason-shen/tap/muster` for jason-shen/homebrew-tap.
+APP  := $(DIST)/Pitwall.app
+ICON := assets/Pitwall.icns
+ZIP  := $(DIST)/Pitwall-$(VERSION)-macos.zip
+BINS := pitwall pitwall-gui
+# `brew install --cask jason-shen/tap/pitwall` for jason-shen/homebrew-tap.
 TAP_NAME := $(subst homebrew-,,$(TAP))
 # 1.2.0-beta.1 is a prerelease: on GitHub, but not in the cask.
 PRERELEASE := $(findstring -,$(VERSION))
@@ -49,7 +49,7 @@ test:
 	cargo test --workspace --locked
 	cargo clippy --workspace --all-targets --locked
 
-# Every size macOS asks for. 16 and 32 pixels come from muster-small.svg,
+# Every size macOS asks for. 16 and 32 pixels come from pitwall-small.svg,
 # drawn to stay readable that small. The results are committed, so building
 # the app doesn't need rsvg-convert; only changing the artwork does.
 ICON_SIZES := 16:icon_16x16:small 32:icon_16x16@2x:small 32:icon_32x32:small \
@@ -59,26 +59,26 @@ ICON_SIZES := 16:icon_16x16:small 32:icon_16x16@2x:small 32:icon_32x32:small \
 
 icon:
 	@command -v rsvg-convert >/dev/null || { echo "needs rsvg-convert: brew install librsvg"; exit 1; }
-	rm -rf $(DIST)/Muster.iconset
-	mkdir -p $(DIST)/Muster.iconset
+	rm -rf $(DIST)/Pitwall.iconset
+	mkdir -p $(DIST)/Pitwall.iconset
 	@set -e; for spec in $(ICON_SIZES); do \
 		px=$${spec%%:*}; rest=$${spec#*:}; name=$${rest%%:*}; art=$${rest#*:}; \
-		svg=assets/muster.svg; [ "$$art" = small ] && svg=assets/muster-small.svg; \
-		rsvg-convert -w $$px -h $$px $$svg -o $(DIST)/Muster.iconset/$$name.png; \
+		svg=assets/pitwall.svg; [ "$$art" = small ] && svg=assets/pitwall-small.svg; \
+		rsvg-convert -w $$px -h $$px $$svg -o $(DIST)/Pitwall.iconset/$$name.png; \
 	done
-	iconutil -c icns $(DIST)/Muster.iconset -o $(ICON)
-	rsvg-convert -w 256 -h 256 assets/muster.svg -o assets/muster-256.png
+	iconutil -c icns $(DIST)/Pitwall.iconset -o $(ICON)
+	rsvg-convert -w 256 -h 256 assets/pitwall.svg -o assets/pitwall-256.png
 
 # One binary per architecture, then lipo puts them together.
 build:
 	@for t in $(TARGETS); do \
-		cargo build --release --locked --target $$t -p muster -p muster-gui || exit 1; \
+		cargo build --release --locked --target $$t -p pitwall -p pitwall-gui || exit 1; \
 	done
 	@mkdir -p $(DIST)/bin
 	@for b in $(BINS); do \
 		lipo -create $(foreach t,$(TARGETS),target/$(t)/release/$$b) -output $(DIST)/bin/$$b || exit 1; \
 	done
-	@lipo -info $(DIST)/bin/muster-gui
+	@lipo -info $(DIST)/bin/pitwall-gui
 
 # Apple Silicon won't run an unsigned binary; ad hoc is the least it takes.
 # The CLI is signed first, since signing the app seals what's inside it.
@@ -86,14 +86,14 @@ app: build
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp $(addprefix $(DIST)/bin/,$(BINS)) $(APP)/Contents/MacOS/
-	cp $(ICON) $(APP)/Contents/Resources/Muster.icns
+	cp $(ICON) $(APP)/Contents/Resources/Pitwall.icns
 	sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/g' \
 		scripts/Info.plist > $(APP)/Contents/Info.plist
 ifeq ($(DEVELOPER_ID),)
-	codesign --force --sign - $(APP)/Contents/MacOS/muster
+	codesign --force --sign - $(APP)/Contents/MacOS/pitwall
 	codesign --force --sign - $(APP)
 else
-	codesign --force --options runtime --timestamp --sign "$(DEVELOPER_ID)" $(APP)/Contents/MacOS/muster
+	codesign --force --options runtime --timestamp --sign "$(DEVELOPER_ID)" $(APP)/Contents/MacOS/pitwall
 	codesign --force --options runtime --timestamp --sign "$(DEVELOPER_ID)" $(APP)
 endif
 	codesign --verify --strict $(APP)
@@ -102,13 +102,13 @@ endif
 install: TARGETS := $(HOST)
 install: app
 	@mkdir -p "$(DEST)" 2>/dev/null; test -w "$(DEST)" || { echo "can't write to $(DEST); run it as an admin user, or pick a folder: make install DEST=~/Applications"; exit 1; }
-	rm -rf "$(DEST)/Muster.app"
+	rm -rf "$(DEST)/Pitwall.app"
 	cp -R $(APP) "$(DEST)/"
 	@if [ -d "$(HOME)/.local/bin" ]; then \
-		ln -sf "$(DEST)/Muster.app/Contents/MacOS/muster" "$(HOME)/.local/bin/muster"; \
-		echo "muster linked into ~/.local/bin"; \
+		ln -sf "$(DEST)/Pitwall.app/Contents/MacOS/pitwall" "$(HOME)/.local/bin/pitwall"; \
+		echo "pitwall linked into ~/.local/bin"; \
 	fi
-	@echo "Installed $(DEST)/Muster.app: open it from Spotlight, or: open -a Muster --args ~/code/your-repo"
+	@echo "Installed $(DEST)/Pitwall.app: open it from Spotlight, or: open -a Pitwall --args ~/code/your-repo"
 
 dist: app
 	rm -f $(ZIP) $(ZIP).sha256
@@ -140,7 +140,7 @@ check:
 
 release: check test dist
 	gh release create $(TAG) $(ZIP) $(ZIP).sha256 -R $(REPO) --verify-tag \
-		--title "Muster $(VERSION)" --generate-notes $(if $(PRERELEASE),--prerelease)
+		--title "Pitwall $(VERSION)" --generate-notes $(if $(PRERELEASE),--prerelease)
 	@echo "Released: https://github.com/$(REPO)/releases/tag/$(TAG)"
 
 # Written straight to the tap through the GitHub API, so no clone is needed.
@@ -153,13 +153,13 @@ else
 		echo "There's no tap $(TAP). Create it, or set TAP=owner/homebrew-name:"; \
 		echo "  gh repo create $(TAP) --public --add-readme"; exit 1; }
 	sed -e 's/@VERSION@/$(VERSION)/g' -e "s/@SHA256@/$$(cut -d' ' -f1 $(ZIP).sha256)/g" \
-		-e 's#@REPO@#$(REPO)#g' scripts/muster.rb > $(DIST)/muster.rb
-	@sha=$$(gh api repos/$(TAP)/contents/Casks/muster.rb --jq .sha 2>/dev/null || true); \
-	gh api -X PUT repos/$(TAP)/contents/Casks/muster.rb \
-		-f message="muster $(VERSION)" \
-		-f content="$$(base64 < $(DIST)/muster.rb | tr -d '\n')" \
+		-e 's#@REPO@#$(REPO)#g' scripts/pitwall.rb > $(DIST)/pitwall.rb
+	@sha=$$(gh api repos/$(TAP)/contents/Casks/pitwall.rb --jq .sha 2>/dev/null || true); \
+	gh api -X PUT repos/$(TAP)/contents/Casks/pitwall.rb \
+		-f message="pitwall $(VERSION)" \
+		-f content="$$(base64 < $(DIST)/pitwall.rb | tr -d '\n')" \
 		$${sha:+-f sha=$$sha} >/dev/null
-	@echo "Cask updated: brew install --cask $(TAP_NAME)/muster"
+	@echo "Cask updated: brew install --cask $(TAP_NAME)/pitwall"
 endif
 
 publish: release cask

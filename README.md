@@ -1,12 +1,12 @@
-# muster
+# pitwall
 
-**The workspace for agentic coding.** Write what you want, run agents on it in parallel, review what they did and merge it, all in one window.
+**The agentic IDE.** Write what you want, run agents on it in parallel, review what they did and merge it, all in one window.
 
-![muster: the project tree and agents on the left, an agent and a file open in two cards](docs/screenshot.png)
+![pitwall: the project tree and agents on the left, an agent and a file open in two cards](docs/screenshot.png)
 
 Running more than one coding agent usually means a terminal tab per agent, a chat window for planning, lazygit for the diffs and an editor for the fixes, and keeping in your head which agent is waiting on you. Agents edit the same checkout and trip over each other. Reviewing means reading a diff and typing your notes back into a prompt.
 
-muster puts that whole loop in one place:
+pitwall puts that whole loop in one place:
 
 1. **Write the brief.** Say what you want in a Markdown brief made from a template (feature, bug, refactor, UI, spike). Let Claude fill in the rest from your code while you watch it write: the problem, the files involved, the steps, the open questions.
 2. **Hand it to an agent.** Claude Code, Codex or another agent CLI starts on its own git worktree and branch, so agents in parallel never touch your checkout or each other's.
@@ -19,10 +19,10 @@ It's also a real terminal, drawn on the GPU, so the agents run in their own TUIs
 ### What's in it
 
 - **Agents in their own worktrees**, with an undo timeline of snapshots and an approval bar for the commands they want to run.
-- **A command policy that only ever adds restrictions.** muster denies what your rules deny and queues what needs a look; it never quietly allows something on its own reading of a shell command.
+- **A command policy that only ever adds restrictions.** pitwall denies what your rules deny and queues what needs a look; it never quietly allows something on its own reading of a shell command.
 - **Briefs** linked to the agents building them: the agent ticks off each step as it finishes it, and **Review →** takes you to its diff.
 - **Review built for agents:** diff against the agent's base, line comments sent back to it, discard a hunk, Accept to commit and merge.
-- **Agents that talk to each other** through the `muster` command: list, message, wait on and read one another.
+- **Agents that talk to each other** through the `pitwall` command: list, message, wait on and read one another.
 - **Projects first.** The sidebar is a tree of your projects, each with its Changes, Files, briefs and terminals.
 - **Git and an editor built in**: lazygit-style staging and commits, a file tree, a built-in editor with Markdown preview, or nvim, helix, VS Code and friends.
 - **A terminal that holds up**: tabs and tiles, scrollback that survives restarts, text that rewraps when a card narrows, mouse reporting, IME, OSC 52, synchronized output, the kitty keyboard protocol for Shift+Return in Claude Code and Codex.
@@ -32,28 +32,28 @@ It's also a real terminal, drawn on the GPU, so the agents run in their own TUIs
 On macOS, with Homebrew:
 
 ```sh
-brew install --cask jason-shen/tap/muster   # Muster.app, and `muster` on your PATH
+brew install --cask jason-shen/tap/pitwall   # Pitwall.app, and `pitwall` on your PATH
 ```
 
 From source you need Rust 1.80+ and `git`. macOS and Linux are supported. Windows isn't yet, since the daemon uses Unix sockets.
 
 ```sh
-make install                             # macOS: Muster.app in /Applications, `muster` in ~/.local/bin
-cargo install --path crates/muster       # elsewhere: the daemon, CLI and terminal UI
-cargo install --path crates/muster-gui   # and the app
-muster-gui ~/code/my-app                 # or run `muster-gui` inside a repo
+make install                             # macOS: Pitwall.app in /Applications, `pitwall` in ~/.local/bin
+cargo install --path crates/pitwall       # elsewhere: the daemon, CLI and terminal UI
+cargo install --path crates/pitwall-gui   # and the app
+pitwall-gui ~/code/my-app                 # or run `pitwall-gui` inside a repo
 ```
 
 The daemon starts on its own the first time anything needs it. Opened from Spotlight or the Dock, the app loads your login shell's environment (`PATH`, API keys), so `claude` and `codex` are found.
 
-**Renderer:** muster draws with wgpu (Metal on macOS) by default. `cargo install --path crates/muster-gui --no-default-features --features glow` builds an OpenGL version instead: 10.5 MB against 14.5 MB, with the same memory use and no difference at idle.
+**Renderer:** pitwall draws with wgpu (Metal on macOS) by default. `cargo install --path crates/pitwall-gui --no-default-features --features glow` builds an OpenGL version instead: 10.5 MB against 14.5 MB, with the same memory use and no difference at idle.
 
 ## A quick tour
 
-1. **Open a project.** Run `muster-gui` in a repo, or press **+** beside PROJECTS and pick a folder. It opens with a terminal; name its tab and press Enter (or just Enter to keep `term-1`).
+1. **Open a project.** Run `pitwall-gui` in a repo, or press **+** beside PROJECTS and pick a folder. It opens with a terminal; name its tab and press Enter (or just Enter to keep `term-1`).
 2. **Write a brief.** **+ Brief** under the project (⌘⌥B), pick a template and a title, and write what you want on the **Ask:** line. **✦ Finish with AI** (⌘⌥F) has Claude read the code and fill in the rest.
 3. **Hand it off.** **Hand to agent →** (⌘⌥↵) opens the New agent form with the brief as the task. Or skip the brief: **+ Agent** (⌘⇧N), or type a task into the command bar (⌘⇧P) and press Enter.
-4. **Watch it.** It appears under AGENTS with its status, what it's doing and how far through the brief it is. When it needs you (an approval, a question, a finished turn), it moves to the top, the project shows "1 waiting", and the dock bounces if muster is in the background. ⌘⇧A jumps to the next one that needs you.
+4. **Watch it.** It appears under AGENTS with its status, what it's doing and how far through the brief it is. When it needs you (an approval, a question, a finished turn), it moves to the top, the project shows "1 waiting", and the dock bounces if pitwall is in the background. ⌘⇧A jumps to the next one that needs you.
 5. **Review it.** **Review →** on the brief, or **± Changes** on the agent: its diff against where it started. `r` comments on a line, **send to agent** hands your comments back, `d` throws away a hunk, and ⌘⇧U shows every step it took, to revert to any of them.
 6. **Accept it.** `m` commits what it left, merges its branch into yours and offers to remove the worktree.
 
@@ -61,8 +61,8 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 
 ```
 ┌ ⌕ Search or start a task  ⌘⇧P ┐┌ ● server   ● reviewer  ● tests   +     ± Changes 6  ▤ Files ┐
-│ PROJECTS                    + ││┌ muster › reviewer › Agent ──┐┌ muster › README.md ─────────┐│
-│ ▾ ● muster                    │││                             ││                             ││
+│ PROJECTS                    + ││┌ pitwall › reviewer › Agent ──┐┌ pitwall › README.md ─────────┐│
+│ ▾ ● pitwall                    │││                             ││                             ││
 │     ± Changes        6 files  │││   the agent's terminal      ││   the file, in your editor  ││
 │     ▤ Files                   │││                             ││                             ││
 │     · README.md               │││                             ││                             ││
@@ -72,7 +72,7 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 │     + Agent  + Terminal       ││                                                             │
 │ ▸ ● augur          1 waiting  ││                                                             │
 │ AGENTS             priority + ││                                                             │
-│ ● muster · reviewer           ││                                                             │
+│ ● pitwall · reviewer           ││                                                             │
 │   Reviewing the login fix     ││                                                             │
 │ ⚙ Settings  ? Shortcuts  ● daemon                                                            │
 └───────────────────────────────┘└─────────────────────────────────────────────────────────────┘
@@ -88,7 +88,7 @@ Terminals follow `cd`. A terminal that moves into another repo moves to that pro
 
 AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. An agent with its own worktree shows how much it has changed so far (files, lines added and removed), so you can tell finished agents apart without opening each. An agent handed a brief shows the brief's title and how many of its steps are ticked. Right-click for its Changes, its brief, Accept, kill or remove.
 
-Any terminal running claude, codex, opencode, gemini, aider, goose, amp and other agent CLIs counts as an agent, whether muster started it or you typed it. When one is blocked on a numbered prompt, its choices show as buttons under it in the tree, so you can answer without opening it.
+Any terminal running claude, codex, opencode, gemini, aider, goose, amp and other agent CLIs counts as an agent, whether pitwall started it or you typed it. When one is blocked on a numbered prompt, its choices show as buttons under it in the tree, so you can answer without opening it.
 
 ### Tabs and cards
 
@@ -108,7 +108,7 @@ Whatever is on screen sits in a **card**. ⌘⇧D splits, and you can tile as ma
 
 lazygit's layout and keys for the project's repo: Status, Changed files, Branches, Commits and (for agents) the undo history, with the diff beside them. Stage and unstage whole files or single hunks, discard, commit, check out a branch, and double-click a diff line to open the file there. An agent with its own worktree has its own Changes, with **vs base** (everything the agent did on its branch).
 
-Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch it forked from. Your checkout has to be on that branch, clean, and without untracked files where the agent's work would land; Accept checks all of that before it commits anything. Afterwards muster offers to remove the agent, its worktree, its snapshots and (now that it's merged) its branch. To throw away part of what it did first, **discard hunk** (`d`) undoes one hunk in its worktree, in vs base as well as in Unstaged. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
+Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch it forked from. Your checkout has to be on that branch, clean, and without untracked files where the agent's work would land; Accept checks all of that before it commits anything. Afterwards pitwall offers to remove the agent, its worktree, its snapshots and (now that it's merged) its branch. To throw away part of what it did first, **discard hunk** (`d`) undoes one hunk in its worktree, in vs base as well as in Unstaged. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
 
 ### Files and editors
 
@@ -139,9 +139,9 @@ A brief is a short Markdown doc you write before handing work to an agent. **+ B
 The cursor lands on the **Ask:** line, where you say what you want in your own words. Fill in as much as you know, then:
 
 - **✦ Finish with AI** runs `claude -p` in the background with read-only tools (Read, Grep, Glob). It reads the code and fills in the rest, following the guide comment at the top of the template. Its reply streams straight into the brief, so you watch it write in the preview; the toolbar shows what it's reading meanwhile, with **Stop** to cancel. The brief is locked while it writes; if you stop it or it fails, the brief goes back to exactly what you had. It can't ask you anything mid-run, so choices that change what gets built come back as options and a recommendation under Choices (or Open questions).
-- **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it with `muster brief tick <n>` (the daemon writes the brief, so this works for sandboxed agents too, and it's allowed without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
+- **Hand to agent →** opens the New agent form with the brief as its task and its title as the name, ready to start on its own branch. The agent stays linked to the brief: it ticks each step as it finishes it with `pitwall brief tick <n>` (the daemon writes the brief, so this works for sandboxed agents too, and it's allowed without asking), the brief's row shows who's building it and how far along it is, and the toolbar's **Review →** opens the agent's Changes.
 
-Briefs are listed under their project and saved in `.muster/briefs/` in the project, which is git-ignored by default (delete `.muster/.gitignore` to commit them). Right-click one and **Move to Trash…** to delete it.
+Briefs are listed under their project and saved in `.pitwall/briefs/` in the project, which is git-ignored by default (delete `.pitwall/.gitignore` to commit them). Right-click one and **Move to Trash…** to delete it.
 
 ### Markdown
 
@@ -151,7 +151,7 @@ Markdown is always edited in the built-in editor, the way inkterm does it, with 
 
 ### Approvals and undo
 
-muster hooks into Claude Code for that session only, through `--settings`. Codex is hooked the same way (`hooks = "codex"`, the default); Codex asks you once to trust muster's hook. Before a Codex agent starts, muster checks that this Codex reads the hook config, and starts it without the hook if not. Commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. muster only adds restrictions: it says "allow" only for your own allow rules, and leaves everything else to the agent's own permission prompt, so a command it misreads can't run silently. (`auto_allow_read_only = true` under `[hooks]` lets commands it judges read-only through without the agent asking.) ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. It doesn't cover output sent into a file (`cargo test > ~/.zshrc`) or flags that make the tool run another program (`cargo --config`, `go test -exec`, npm's `--script-shell`). Deny rules hold anywhere in the line, including behind `FOO=1`, `sudo` or `git -C dir`, and inside `bash -c '…'`, which is judged by the script it runs. Agents' own `muster agents`, `read`, `wait` and `tell` are allowed.
+pitwall hooks into Claude Code for that session only, through `--settings`. Codex is hooked the same way (`hooks = "codex"`, the default); Codex asks you once to trust pitwall's hook. Before a Codex agent starts, pitwall checks that this Codex reads the hook config, and starts it without the hook if not. Commands that change things wait in an approval bar (**Approve** ⌘⇧Y, **Reject** ⌘⇧R), and destructive ones are refused. pitwall only adds restrictions: it says "allow" only for your own allow rules, and leaves everything else to the agent's own permission prompt, so a command it misreads can't run silently. (`auto_allow_read_only = true` under `[hooks]` lets commands it judges read-only through without the agent asking.) ⌘⇧Y and ⌘⇧R only answer the agent you're looking at. The rules are yours to change in the config. An allow rule covers one command: in `cargo test && rm -rf ~`, each part is judged on its own and the strictest answer wins. It doesn't cover output sent into a file (`cargo test > ~/.zshrc`) or flags that make the tool run another program (`cargo --config`, `go test -exec`, npm's `--script-shell`). Deny rules hold anywhere in the line, including behind `FOO=1`, `sudo` or `git -C dir`, and inside `bash -c '…'`, which is judged by the script it runs. Agents' own `pitwall agents`, `read`, `wait` and `tell` are allowed.
 
 Finish with AI and agents rewriting an open file don't cost you your text: the version before is one ⌘Z away in the editor.
 
@@ -159,28 +159,28 @@ Every agent also has a shadow-git timeline: a snapshot before each tool call tha
 
 ### Notifications
 
-Agents' own notifications (OSC 9 / 777 / 99; Claude Code sends them with `preferredNotifChannel` set to `iterm2` or `ghostty`) show as toasts. While muster is in the background, an agent that needs you or finishes also posts a system notification (Settings → New agents turns that off).
+Agents' own notifications (OSC 9 / 777 / 99; Claude Code sends them with `preferredNotifChannel` set to `iterm2` or `ghostty`) show as toasts. While pitwall is in the background, an agent that needs you or finishes also posts a system notification (Settings → New agents turns that off).
 
 ## Agents working together
 
-Agents coordinate through the `muster` command, which every muster terminal has on its `PATH`. Each terminal also knows its own id as `$MUSTER_TASK_ID`.
+Agents coordinate through the `pitwall` command, which every pitwall terminal has on its `PATH`. Each terminal also knows its own id as `$PITWALL_TASK_ID`.
 
 ```sh
-muster agents                          # every agent and terminal: status, folder, what it's doing
-muster tell reviewer "check the login fix, then tell me"
-muster wait reviewer                   # block until its turn ends
-muster read reviewer -n 60             # the end of its screen
-muster brief                           # the steps of the brief you were handed
-muster brief tick 2                    # mark step 2 done (untick to undo)
+pitwall agents                          # every agent and terminal: status, folder, what it's doing
+pitwall tell reviewer "check the login fix, then tell me"
+pitwall wait reviewer                   # block until its turn ends
+pitwall read reviewer -n 60             # the end of its screen
+pitwall brief                           # the steps of the brief you were handed
+pitwall brief tick 2                    # mark step 2 done (untick to undo)
 ```
 
-`muster tell` types the message into the other agent's prompt and submits it, marked with who it's from and how to answer:
+`pitwall tell` types the message into the other agent's prompt and submits it, marked with who it's from and how to answer:
 
 ```
-[message from agent builder; reply with: muster tell builder "..."] check the login fix, then tell me
+[message from agent builder; reply with: pitwall tell builder "..."] check the login fix, then tell me
 ```
 
-Claude Code agents started by muster are told all of this in their system prompt. For an agent you started yourself in a terminal, ask it to run `muster guide`. Every message shows as a toast in the app and is kept in the audit log.
+Claude Code agents started by pitwall are told all of this in their system prompt. For an agent you started yourself in a terminal, ask it to run `pitwall guide`. Every message shows as a toast in the app and is kept in the audit log.
 
 ## Shortcuts
 
@@ -219,7 +219,7 @@ Clashes are flagged in Settings, and **⌘⇧/** lists everything as it's set no
 
 The keys inside a card (the terminal's, the editor's and Changes', below) are fixed.
 
-**Terminal:** ⇧Return is a newline in Claude Code and Codex, which ask for distinct keys (the kitty keyboard protocol), full screen or not; at a shell prompt it's a newline too, and in vim or less it's Return · Option is Meta, so Option shortcuts and ⌥B / ⌥F work, while the characters your layout types with Option (`@`, `{` …) still type (Settings → Terminal turns Meta off) · ⌥← / ⌥→ jump words · ⌘C / ⌘V copy and paste (Ctrl+Shift+C / V on Linux) · selections stay on their text as output scrolls, and dragging past the edge scrolls · ⌘F find in the scrollback · ⌘↑ / ⌘↓ previous / next command · ⌘K clear · ⌘-click a link or path · double-click a word, triple-click a line · Shift+PageUp / PageDown scroll back · mouse reporting for vim, htop and tmux (hold Shift to select instead) · right-click for copy, paste, copy the last command's output and snippets (Shift+right-click when the program takes the mouse). Programs can set the cursor shape, put text on the clipboard (OSC 52) and draw in italics; input methods for Chinese, Japanese and Korean work, and redraws a program marks as one update are drawn whole. Scrollback comes back when muster restarts. Making a card narrower or wider rewraps what's in it, scrollback included, so long lines aren't cut.
+**Terminal:** ⇧Return is a newline in Claude Code and Codex, which ask for distinct keys (the kitty keyboard protocol), full screen or not; at a shell prompt it's a newline too, and in vim or less it's Return · Option is Meta, so Option shortcuts and ⌥B / ⌥F work, while the characters your layout types with Option (`@`, `{` …) still type (Settings → Terminal turns Meta off) · ⌥← / ⌥→ jump words · ⌘C / ⌘V copy and paste (Ctrl+Shift+C / V on Linux) · selections stay on their text as output scrolls, and dragging past the edge scrolls · ⌘F find in the scrollback · ⌘↑ / ⌘↓ previous / next command · ⌘K clear · ⌘-click a link or path · double-click a word, triple-click a line · Shift+PageUp / PageDown scroll back · mouse reporting for vim, htop and tmux (hold Shift to select instead) · right-click for copy, paste, copy the last command's output and snippets (Shift+right-click when the program takes the mouse). Programs can set the cursor shape, put text on the clipboard (OSC 52) and draw in italics; input methods for Chinese, Japanese and Korean work, and redraws a program marks as one update are drawn whole. Scrollback comes back when pitwall restarts. Making a card narrower or wider rewraps what's in it, scrollback included, so long lines aren't cut.
 
 **Changes:** `1`–`5` or `h` / `l` pick a panel · `j` / `k` move, the diff follows · Enter into the diff, Esc back · space stage or unstage, `a` everything, `d` discard, `e` edit · `c` commit · in the diff: `n` / `p` next or previous hunk, `s` / `u` stage or unstage the hunk · `b` diff against the agent's base · `r` comment on the line · `d` discard the hunk · `m` accept (commit and merge) · undo history: `r` revert to here, `n` checkpoint.
 
@@ -227,27 +227,27 @@ The keys inside a card (the terminal's, the editor's and Changes', below) are fi
 
 ## Command line
 
-The daemon owns every terminal, so the app, the terminal UI (`muster` on its own) and the CLI all drive the same sessions:
+The daemon owns every terminal, so the app, the terminal UI (`pitwall` on its own) and the CLI all drive the same sessions:
 
 ```sh
-muster ls                                # tasks and their status
-muster inbox                             # what's waiting on you
-muster new fix-auth -p "fix the login redirect loop"   # an agent on its own branch
-muster attach fix-auth                   # one session full screen in any terminal (Ctrl-] detaches)
-muster approve 3 | deny 3                # answer a pending approval
-muster snaps fix-auth                    # its undo history
-muster diff fix-auth '#5^' '#5'          # what one step changed
-muster revert fix-auth '#4'              # roll back to a step
-muster run tag:web -- 'journalctl -u nginx -n 50'   # policy-checked SSH across hosts
-muster ask "why is prod-3 returning 502s?"          # an LLM investigation over SSH, saved as a runbook
-muster stop                              # stop the daemon and everything it runs
+pitwall ls                                # tasks and their status
+pitwall inbox                             # what's waiting on you
+pitwall new fix-auth -p "fix the login redirect loop"   # an agent on its own branch
+pitwall attach fix-auth                   # one session full screen in any terminal (Ctrl-] detaches)
+pitwall approve 3 | deny 3                # answer a pending approval
+pitwall snaps fix-auth                    # its undo history
+pitwall diff fix-auth '#5^' '#5'          # what one step changed
+pitwall revert fix-auth '#4'              # roll back to a step
+pitwall run tag:web -- 'journalctl -u nginx -n 50'   # policy-checked SSH across hosts
+pitwall ask "why is prod-3 returning 502s?"          # an LLM investigation over SSH, saved as a runbook
+pitwall stop                              # stop the daemon and everything it runs
 ```
 
 ![the terminal UI](docs/tui.png)
 
 ## Configure
 
-**`~/.config/muster/config.toml`** holds every setting: the daemon's, the CLI's and both apps'. `muster init` writes it with every option documented (an older `~/.muster/config.toml` is moved here the first time muster runs). The daemon's sections look like this:
+**`~/.config/pitwall/config.toml`** holds every setting: the daemon's, the CLI's and both apps'. `pitwall init` writes it with every option documented (an older `~/.pitwall/config.toml` is moved here the first time pitwall runs). The daemon's sections look like this:
 
 ```toml
 [agents.aider]
@@ -262,14 +262,14 @@ destructive = "deny"
 rules = [{ pattern = "cargo test*", decision = "allow" }]
 
 [hooks]                     # how agents' commands are gated
-mode = "queue"              # "queue": approvals wait in muster · "agent": the agent's own prompt
+mode = "queue"              # "queue": approvals wait in pitwall · "agent": the agent's own prompt
 auto_allow_read_only = false
 
 [tui]
 theme = "base16-ocean.dark" # the editor's syntax theme
 ```
 
-**Settings** (⌘, or ⚙ at the foot of the sidebar) is the app's half of the same file, written as `[app]` and `[keys]` at the end of it. Change things in either place: muster picks up a hand edit within a couple of seconds, and keeps your comments and the daemon's sections when it saves.
+**Settings** (⌘, or ⚙ at the foot of the sidebar) is the app's half of the same file, written as `[app]` and `[keys]` at the end of it. Change things in either place: pitwall picks up a hand edit within a couple of seconds, and keeps your comments and the daemon's sections when it saves.
 
 - font (any installed monospace font or a font file), weight, bold weight, size and line height; pick a Nerd Font if your prompt uses icons;
 - one of 26 colour themes, cursor style, transparency and blur (a see-through window costs the system some GPU to blend what's behind it, so it has no shadow and turns opaque while another app is in front);
@@ -278,18 +278,18 @@ theme = "base16-ocean.dark" # the editor's syntax theme
 - every shortcut (below);
 - snippets: commands you run often, from the command bar or a terminal's right-click menu.
 
-Without a chosen font muster uses SF Mono or Menlo (JetBrains Mono or DejaVu on Linux) with symbol, CJK and colour emoji fallbacks, or `MUSTER_FONT=/path/to/font.ttf`.
+Without a chosen font pitwall uses SF Mono or Menlo (JetBrains Mono or DejaVu on Linux) with symbol, CJK and colour emoji fallbacks, or `PITWALL_FONT=/path/to/font.ttf`.
 
-What isn't a setting stays in `~/.muster`: the layout (projects, tabs, cards and open files) in `layout.json`, put back on the next launch, and the names you give projects and tabs, and which projects are folded, in `state.json`.
+What isn't a setting stays in `~/.pitwall`: the layout (projects, tabs, cards and open files) in `layout.json`, put back on the next launch, and the names you give projects and tabs, and which projects are folded, in `state.json`.
 
 ## How it works
 
 ```
-muster-gui (egui + wgpu)    muster (terminal UI)    muster <cmd> (CLI)    Claude Code / Codex hooks
+pitwall-gui (egui + wgpu)    pitwall (terminal UI)    pitwall <cmd> (CLI)    Claude Code / Codex hooks
         └──────────────────────────┬─────────────────────┬────────────────────┘
-                       ~/.muster/muster.sock (msgpack)
+                       ~/.pitwall/pitwall.sock (msgpack)
                                    │
-            muster daemon: PTYs and vt100 screens, worktrees, shadow-git snapshots,
+            pitwall daemon: PTYs and vt100 screens, worktrees, shadow-git snapshots,
                      approvals, command policy, agent messages, audit log
 ```
 
@@ -297,10 +297,10 @@ The daemon owns the terminals; the app keeps a local copy of each screen, fed by
 
 ```
 crates/
-  muster-core/   protocol, config, command policy, agent detection, git, editor, file tree, client
-  muster/        the `muster` binary: daemon, CLI and terminal UI
-  muster-gui/    the app: state and actions (app.rs), the UI (views/), the terminal view, tiling, settings
-assets/          the icon: muster.svg (and a simpler muster-small.svg for 16 and 32 px); `make icon` rebuilds Muster.icns
+  pitwall-core/   protocol, config, command policy, agent detection, git, editor, file tree, client
+  pitwall/        the `pitwall` binary: daemon, CLI and terminal UI
+  pitwall-gui/    the app: state and actions (app.rs), the UI (views/), the terminal view, tiling, settings
+assets/          the icon: pitwall.svg (and a simpler pitwall-small.svg for 16 and 32 px); `make icon` rebuilds Pitwall.icns
 scripts/         the app bundle's Info.plist, the Homebrew cask template, macos-app.sh
 Makefile         build, install and publish (`make help`)
 ```
@@ -314,14 +314,14 @@ Makefile         build, install and publish (`make help`)
 ```sh
 make tools                               # once: Rust targets for both Mac architectures
 git tag v0.2.0 && git push origin v0.2.0
-make publish                             # test, build a universal Muster.app, release it on GitHub, update the cask
+make publish                             # test, build a universal Pitwall.app, release it on GitHub, update the cask
 ```
 
-The app is signed ad hoc, and the cask clears the quarantine flag so Gatekeeper opens it. With a Developer ID, `make publish DEVELOPER_ID="Developer ID Application: …" NOTARY_PROFILE=muster` signs and notarizes it instead. `REPO` and `TAP` name the GitHub repo and the Homebrew tap (`jason-shen/muster` and `jason-shen/homebrew-tap` by default); `make check` says what's missing before anything is built or uploaded.
+The app is signed ad hoc, and the cask clears the quarantine flag so Gatekeeper opens it. With a Developer ID, `make publish DEVELOPER_ID="Developer ID Application: …" NOTARY_PROFILE=pitwall` signs and notarizes it instead. `REPO` and `TAP` name the GitHub repo and the Homebrew tap (`jason-shen/pitwall` and `jason-shen/homebrew-tap` by default); `make check` says what's missing before anything is built or uploaded.
 
 ## Known limitations
 
-- Terminals survive the app closing. When the daemon stops (`muster stop`, a reboot) their processes end; the next daemon starts them again in the same folders, with the same command (an editor card comes back as its editor), and agents that had finished a turn resume their session (`resume_args` in each agent's config); one that never got going starts over with its task. A shell comes back as a fresh shell. A task that can't start again (its folder is on a drive that isn't mounted, say) is kept for the next start rather than forgotten.
+- Terminals survive the app closing. When the daemon stops (`pitwall stop`, a reboot) their processes end; the next daemon starts them again in the same folders, with the same command (an editor card comes back as its editor), and agents that had finished a turn resume their session (`resume_args` in each agent's config); one that never got going starts over with its task. A shell comes back as a fresh shell. A task that can't start again (its folder is on a drive that isn't mounted, say) is kept for the next start rather than forgotten.
 - The approval bar works with Claude Code and Codex. Other agents' own prompts show as *waiting* and are answered in their tab.
 - The built-in editor has no multi-cursor. With nothing selected, copy and cut take the whole line.
 - Card sizes reset when the app restarts.

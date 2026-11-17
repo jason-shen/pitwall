@@ -2,13 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Muster</string>
-  <key>CFBundleDisplayName</key><string>Muster</string>
+  <key>CFBundleName</key><string>Pitwall</string>
+  <key>CFBundleDisplayName</key><string>Pitwall</string>
   <key>CFBundleIdentifier</key><string>@BUNDLE_ID@</string>
   <key>CFBundleVersion</key><string>@VERSION@</string>
   <key>CFBundleShortVersionString</key><string>@VERSION@</string>
-  <key>CFBundleExecutable</key><string>muster-gui</string>
-  <key>CFBundleIconFile</key><string>Muster</string>
+  <key>CFBundleExecutable</key><string>pitwall-gui</string>
+  <key>CFBundleIconFile</key><string>Pitwall</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>

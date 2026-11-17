@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>muster · the workspace for agentic coding</title>
+  <title>pitwall · the agentic IDE</title>
   <meta name="description" content="Write a brief, run coding agents in parallel on their own worktrees, review what they did and merge it. All in one GPU-drawn window.">
-  <meta property="og:title" content="muster · the workspace for agentic coding">
+  <meta property="og:title" content="pitwall · the agentic IDE">
   <meta property="og:description" content="Run agents in parallel. Merge what they build. Claude Code, Codex and friends in one window, each on its own worktree.">
   <meta property="og:image" content="assets/screenshot.png">
   <meta name="theme-color" content="#0b0d10">
-  <link rel="icon" href="assets/muster.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="assets/muster-256.png">
+  <link rel="icon" href="assets/pitwall.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/pitwall-256.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -19,12 +19,12 @@
 <body>
 
 <header class="nav">
-  <a class="brand" href="#top"><img src="assets/muster.svg" alt="" width="34" height="34"><span>muster</span></a>
+  <a class="brand" href="#top"><img src="assets/pitwall.svg" alt="" width="34" height="34"><span>pitwall</span></a>
   <nav class="nav-links">
     <a href="#loop">How it works</a>
     <a href="#safety">Safety</a>
     <a href="#terminal">Terminal</a>
-    <a href="https://github.com/jason-shen/muster">GitHub</a>
+    <a href="https://github.com/jason-shen/pitwall">GitHub</a>
   </nav>
   <a class="btn btn-small" href="#install">Install</a>
 </header>
@@ -37,15 +37,15 @@
     <div class="glow glow-teal"></div>
 
     <div class="hero-copy">
-      <p class="eyebrow"><span class="dot dot-green pulse"></span>The workspace for agentic coding</p>
+      <p class="eyebrow"><span class="dot dot-green pulse"></span>The agentic IDE</p>
       <h1>Run agents in parallel.<br><span class="grad">Merge what they build.</span></h1>
       <p class="lede">Write what you want. Hand it to Claude Code, Codex or any agent CLI on its own worktree. Watch every agent by what needs you, review the diff, and merge. One window, no tab juggling.</p>
       <div class="cta-row">
-        <button class="install-pill" data-copy="brew install --cask jason-shen/tap/muster">
-          <span class="prompt">$</span> brew install --cask jason-shen/tap/muster
+        <button class="install-pill" data-copy="brew install --cask jason-shen/tap/pitwall">
+          <span class="prompt">$</span> brew install --cask jason-shen/tap/pitwall
           <span class="copy-label">copy</span>
         </button>
-        <a class="btn btn-ghost" href="https://github.com/jason-shen/muster">View on GitHub →</a>
+        <a class="btn btn-ghost" href="https://github.com/jason-shen/pitwall">View on GitHub →</a>
       </div>
       <p class="fine">macOS and Linux · Free and MIT licensed</p>
     </div>
@@ -53,7 +53,7 @@
     <div class="hero-shot">
       <div class="window">
         <div class="window-bar"><i></i><i></i><i></i></div>
-        <img src="assets/screenshot.png" alt="muster: projects and agents in the sidebar, an agent and a file open in two tiled cards" width="1200" height="1199">
+        <img src="assets/screenshot.png" alt="pitwall: projects and agents in the sidebar, an agent and a file open in two tiled cards" width="1200" height="1199">
       </div>
       <div class="chip chip-a"><span class="dot dot-amber"></span>add-metrics wants to run <code>npm install</code><b>Approve</b></div>
       <div class="chip chip-b"><span class="dot dot-teal"></span>reviewer · done <em>+124 −18</em></div>
@@ -71,7 +71,7 @@
       <li>An editor for the fixes</li>
       <li>Your head, for who's waiting on you</li>
     </ul>
-    <p class="mess-tail">Agents edit the same checkout and trip over each other. Reviewing means reading a diff and retyping your notes into a prompt.<br><strong>muster puts the whole loop in one window.</strong></p>
+    <p class="mess-tail">Agents edit the same checkout and trip over each other. Reviewing means reading a diff and retyping your notes into a prompt.<br><strong>pitwall puts the whole loop in one window.</strong></p>
   </section>
 
   <section class="loop" id="loop">
@@ -110,10 +110,10 @@
       </div>
       <div class="mock mock-tree">
         <div class="branch trunk"><span class="node"></span><b>main</b><em>your checkout · untouched</em></div>
-        <div class="branch"><span class="node n-green"></span><code>muster/fix-login</code><span class="who">claude</span></div>
-        <div class="branch"><span class="node n-amber"></span><code>muster/add-metrics</code><span class="who">codex</span></div>
-        <div class="branch"><span class="node n-teal"></span><code>muster/docs-tour</code><span class="who">claude</span></div>
-        <div class="branch"><span class="node n-green"></span><code>muster/flaky-tests</code><span class="who">opencode</span></div>
+        <div class="branch"><span class="node n-green"></span><code>pitwall/fix-login</code><span class="who">claude</span></div>
+        <div class="branch"><span class="node n-amber"></span><code>pitwall/add-metrics</code><span class="who">codex</span></div>
+        <div class="branch"><span class="node n-teal"></span><code>pitwall/docs-tour</code><span class="who">claude</span></div>
+        <div class="branch"><span class="node n-green"></span><code>pitwall/flaky-tests</code><span class="who">opencode</span></div>
       </div>
     </article>
 
@@ -125,10 +125,10 @@
       </div>
       <div class="mock mock-agents">
         <div class="mock-label">AGENTS <span>priority</span></div>
-        <div class="agent"><span class="dot dot-amber pulse"></span><div><b>muster · add-metrics</b><small>approve: npm install --save-dev jest</small></div><span class="pill pill-amber">approve</span></div>
+        <div class="agent"><span class="dot dot-amber pulse"></span><div><b>pitwall · add-metrics</b><small>approve: npm install --save-dev jest</small></div><span class="pill pill-amber">approve</span></div>
         <div class="agent"><span class="dot dot-amber"></span><div><b>augur · api</b><small>Reuse the existing cache layer?</small><span class="choices"><i>1 Yes</i><i>2 No</i></span></div></div>
-        <div class="agent"><span class="dot dot-teal"></span><div><b>muster · reviewer</b><small>6 files <ins>+124</ins> <del>−18</del></small></div><span class="pill pill-teal">done</span></div>
-        <div class="agent"><span class="dot dot-green pulse"></span><div><b>muster · fix-login</b><small>Fix the login redirect loop · 3/5</small><span class="bar"><i style="width:60%"></i></span></div></div>
+        <div class="agent"><span class="dot dot-teal"></span><div><b>pitwall · reviewer</b><small>6 files <ins>+124</ins> <del>−18</del></small></div><span class="pill pill-teal">done</span></div>
+        <div class="agent"><span class="dot dot-green pulse"></span><div><b>pitwall · fix-login</b><small>Fix the login redirect loop · 3/5</small><span class="bar"><i style="width:60%"></i></span></div></div>
       </div>
     </article>
 
@@ -155,13 +155,13 @@
       <div class="step-copy">
         <span class="num">05</span>
         <h3>Accept. Merged.</h3>
-        <p>One step commits what the agent left, merges its branch into the one it came from, and offers to clean up the worktree, snapshots and branch. muster checks your checkout is clean first, so nothing lands on top of your own work.</p>
+        <p>One step commits what the agent left, merges its branch into the one it came from, and offers to clean up the worktree, snapshots and branch. pitwall checks your checkout is clean first, so nothing lands on top of your own work.</p>
       </div>
       <div class="mock mock-accept">
         <div class="accept-title"><span class="check">✓</span> Accept fix-login</div>
         <label>Commit message</label>
         <div class="field">Fix the login redirect loop</div>
-        <div class="accept-row"><code>muster/fix-login</code><span class="arrow">→</span><code>main</code></div>
+        <div class="accept-row"><code>pitwall/fix-login</code><span class="arrow">→</span><code>main</code></div>
         <div class="accept-actions"><span class="btn-mini">Cancel</span><span class="btn-mini btn-mini-go">Commit &amp; merge</span></div>
       </div>
     </article>
@@ -171,7 +171,7 @@
     <div class="section-head">
       <p class="kicker">Safety</p>
       <h2 class="big">Guardrails that only tighten.</h2>
-      <p class="sub">muster never quietly allows a command on its own reading of the shell. It denies what your rules deny, queues what needs a look, and leaves the rest to the agent's own prompt.</p>
+      <p class="sub">pitwall never quietly allows a command on its own reading of the shell. It denies what your rules deny, queues what needs a look, and leaves the rest to the agent's own prompt.</p>
     </div>
 
     <div class="approval reveal">
@@ -204,17 +204,17 @@
     <div class="team-copy reveal">
       <p class="kicker">Agents together</p>
       <h2 class="big">Agents that talk to each other.</h2>
-      <p class="sub">Every muster terminal has the <code>muster</code> command on its PATH. Agents list, message, wait on and read one another, so a builder can hand off to a reviewer without you in the middle.</p>
+      <p class="sub">Every pitwall terminal has the <code>pitwall</code> command on its PATH. Agents list, message, wait on and read one another, so a builder can hand off to a reviewer without you in the middle.</p>
     </div>
     <div class="term reveal">
       <div class="window-bar"><i></i><i></i><i></i><span>builder</span></div>
-<pre><span class="c">$</span> muster agents
+<pre><span class="c">$</span> pitwall agents
   <span class="g">●</span> builder    working   ~/code/app
   <span class="t">●</span> reviewer   idle      ~/code/app
-<span class="c">$</span> muster tell reviewer "check the login fix, then tell me"
+<span class="c">$</span> pitwall tell reviewer "check the login fix, then tell me"
   sent to reviewer
-<span class="c">$</span> muster wait reviewer
-<span class="c">$</span> muster read reviewer -n 4
+<span class="c">$</span> pitwall wait reviewer
+<span class="c">$</span> pitwall read reviewer -n 4
   <span class="m">[message from agent reviewer]</span> Looks right. Two small
   notes on the cookie flags, left as comments.</pre>
     </div>
@@ -253,24 +253,24 @@
   <section class="final" id="install">
     <div class="glow glow-green"></div>
     <div class="glow glow-teal"></div>
-    <img src="assets/muster.svg" alt="" width="120" height="120" class="final-icon">
-    <h2 class="huge">Muster your agents.</h2>
-    <button class="install-pill install-pill-lg" data-copy="brew install --cask jason-shen/tap/muster">
-      <span class="prompt">$</span> brew install --cask jason-shen/tap/muster
+    <img src="assets/pitwall.svg" alt="" width="120" height="120" class="final-icon">
+    <h2 class="huge">Pitwall your agents.</h2>
+    <button class="install-pill install-pill-lg" data-copy="brew install --cask jason-shen/tap/pitwall">
+      <span class="prompt">$</span> brew install --cask jason-shen/tap/pitwall
       <span class="copy-label">copy</span>
     </button>
-    <p class="fine">Or from source with Rust 1.80+: <code>cargo install --path crates/muster-gui</code></p>
+    <p class="fine">Or from source with Rust 1.80+: <code>cargo install --path crates/pitwall-gui</code></p>
     <p class="fine">macOS and Linux. Windows isn't supported yet.</p>
   </section>
 
 </main>
 
 <footer class="foot">
-  <a class="brand" href="#top"><img src="assets/muster.svg" alt="" width="26" height="26"><span>muster</span></a>
+  <a class="brand" href="#top"><img src="assets/pitwall.svg" alt="" width="26" height="26"><span>pitwall</span></a>
   <span>MIT licensed</span>
-  <a href="https://github.com/jason-shen/muster">GitHub</a>
-  <a href="https://github.com/jason-shen/muster#readme">Docs</a>
-  <a href="https://github.com/jason-shen/muster/releases">Releases</a>
+  <a href="https://github.com/jason-shen/pitwall">GitHub</a>
+  <a href="https://github.com/jason-shen/pitwall#readme">Docs</a>
+  <a href="https://github.com/jason-shen/pitwall/releases">Releases</a>
 </footer>
 
 <script src="main.js"></script>
