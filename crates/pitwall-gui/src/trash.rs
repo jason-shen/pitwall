@@ -2,14 +2,14 @@
 
 use std::path::Path;
 
-use crate::i18n::{tr, trf};
+use crate::i18n::tr;
 
 /// macOS: the Finder's own Trash (NSFileManager), so Put Back works.
 #[cfg(target_os = "macos")]
 pub fn trash(path: &Path) -> std::io::Result<()> {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     let fail = |what: &str| {
-        std::io::Error::other(trf!(
+        std::io::Error::other(crate::i18n::trf!(
             "couldn't move {file} to the Trash: {why}",
             file = path.display(),
             why = tr(what)

@@ -37,6 +37,8 @@ On macOS, with Homebrew:
 brew install --cask jason-shen/tap/pitwall   # Pitwall.app, and `pitwall` on your PATH
 ```
 
+On Linux (x86_64 or arm64), download `pitwall-<version>-linux-<arch>.tar.gz` from the [releases](https://github.com/jason-shen/pitwall/releases), unpack it and run `./install.sh`: the binaries go in `~/.local/bin`, with a menu entry and icon.
+
 From source you need Rust 1.80+ and `git`. macOS and Linux are supported. Windows isn't yet, since the daemon uses Unix sockets.
 
 ```sh
@@ -341,13 +343,15 @@ Makefile         build, install and publish (`make help`)
 
 ## Releasing
 
-`make help` lists the steps. A release is the version in `Cargo.toml`, on a tag you push yourself:
+A release is the version in `Cargo.toml`, on a tag you push yourself. Pushing the tag is all it takes: `.github/workflows/release.yml` checks the tag matches `Cargo.toml`, runs the tests on macOS and Linux, builds the universal Pitwall.app and Linux tarballs for x86_64 and arm64, publishes them as the GitHub release and points the Homebrew cask at it.
 
 ```sh
-make tools                               # once: Rust targets for both Mac architectures
-git tag v0.2.0 && git push origin v0.2.0
-make publish                             # test, build a universal Pitwall.app, release it on GitHub, update the cask
+git tag v0.2.0 && git push origin main v0.2.0
 ```
+
+Updating the cask needs a token for the tap: a fine-grained token with **Contents: read and write** on `homebrew-tap`, saved in this repo as the Actions secret `TAP_TOKEN` (`gh secret set TAP_TOKEN`). Without it the release still goes out, and `make cask` updates the cask from here. Running the workflow by hand from the Actions tab builds everything without releasing, to check a build before tagging. A version with a hyphen (`0.3.0-beta.1`) is published as a prerelease and leaves the cask alone.
+
+`make help` lists the same steps to run here instead: `make tools` once for both Mac targets, then `make publish` to test, build, release and update the cask from this Mac, or `make dist-linux` on a Linux machine.
 
 The app is signed ad hoc, and the cask clears the quarantine flag so Gatekeeper opens it. With a Developer ID, `make publish DEVELOPER_ID="Developer ID Application: …" NOTARY_PROFILE=pitwall` signs and notarizes it instead. `REPO` and `TAP` name the GitHub repo and the Homebrew tap (`jason-shen/pitwall` and `jason-shen/homebrew-tap` by default); `make check` says what's missing before anything is built or uploaded.
 

@@ -7,12 +7,15 @@
 #   make app        dist/Pitwall.app (universal, signed)
 #   make install    build for this Mac only, into /Applications, CLI on PATH
 #   make dist       the zip and its checksum
+#   make dist-linux on Linux: a tarball for this machine's architecture
 #   make release    test, build, and publish vVERSION on GitHub
 #   make cask       point the Homebrew cask at that release
 #   make publish    release, then cask
 #
 # The version comes from Cargo.toml. The release goes on a tag you've pushed
-# yourself; this never makes one. Set DEVELOPER_ID to sign with your
+# yourself; this never makes one. Pushing the tag also starts
+# .github/workflows/release.yml, which builds macOS and Linux and publishes
+# the release and cask itself; `make publish` is the same thing done here. Set DEVELOPER_ID to sign with your
 # certificate and NOTARY_PROFILE (a `xcrun notarytool store-credentials`
 # profile) to notarize; without them the app is signed ad hoc.
 
@@ -37,7 +40,7 @@ TAP_NAME := $(subst homebrew-,,$(TAP))
 # 1.2.0-beta.1 is a prerelease: on GitHub, but not in the cask.
 PRERELEASE := $(findstring -,$(VERSION))
 
-.PHONY: help tools test icon build app install dist check release cask publish clean
+.PHONY: help tools test icon build app install dist dist-linux check release cask publish clean
 
 help:
 	@sed -n 's/^#   //p' Makefile
@@ -121,6 +124,22 @@ ifneq ($(NOTARY_PROFILE),)
 endif
 	cd $(DIST) && shasum -a 256 $(notdir $(ZIP)) > $(notdir $(ZIP)).sha256
 	@cat $(ZIP).sha256
+
+# Linux has no app bundle: both binaries, a menu entry, the icon and an
+# installer script, built for whichever architecture this runs on.
+LINUX_NAME := pitwall-$(VERSION)-linux-$(shell uname -m)
+LINUX_TGZ  := $(DIST)/$(LINUX_NAME).tar.gz
+
+dist-linux:
+	cargo build --release --locked -p pitwall -p pitwall-gui
+	rm -rf $(DIST)/$(LINUX_NAME) $(LINUX_TGZ) $(LINUX_TGZ).sha256
+	mkdir -p $(DIST)/$(LINUX_NAME)
+	cp $(addprefix target/release/,$(BINS)) README.md scripts/pitwall.desktop $(DIST)/$(LINUX_NAME)/
+	cp assets/pitwall-256.png $(DIST)/$(LINUX_NAME)/pitwall.png
+	cp scripts/linux-install.sh $(DIST)/$(LINUX_NAME)/install.sh
+	tar -C $(DIST) -czf $(LINUX_TGZ) $(LINUX_NAME)
+	cd $(DIST) && sha256sum $(notdir $(LINUX_TGZ)) > $(notdir $(LINUX_TGZ)).sha256
+	@cat $(LINUX_TGZ).sha256
 
 # Everything a release needs, checked before anything is built or uploaded.
 check:

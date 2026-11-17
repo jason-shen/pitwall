@@ -1762,6 +1762,19 @@ fn agents_section(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
         });
 }
 
+/// A status for a one-line row: its first line, marked when there's more. A
+/// command waiting on approval can run to several lines, and drawn whole it
+/// spilled up over the row's title.
+fn one_line(s: &str) -> String {
+    let mut lines = s.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.next().unwrap_or_default().to_string();
+    if lines.next().is_some() {
+        format!("{first} …")
+    } else {
+        first
+    }
+}
+
 fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
     let t = &app.tasks[id];
     let (mark, color) = status_mark(t, app.frame);
@@ -1858,13 +1871,11 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
         },
     };
     if let Some((what, c)) = what {
-        clip.text(
-            pos2(text.left(), bottom),
-            Align2::LEFT_CENTER,
-            what,
-            FontId::proportional(12.0),
-            c,
-        );
+        let mut job =
+            egui::text::LayoutJob::simple_singleline(one_line(&what), FontId::proportional(12.0), c);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text.width());
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        clip.galley(pos2(text.left(), bottom - g.size().y / 2.0), g, c);
     }
     if r.clicked() {
         acts.push(Action::OpenTerm(id.to_string()));
@@ -2030,7 +2041,7 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             };
             if !sub.is_empty() {
                 ui.add(
-                    egui::Label::new(RichText::new(sub).small().color(if urgent {
+                    egui::Label::new(RichText::new(one_line(&sub)).small().color(if urgent {
                         AMBER
                     } else {
                         MUTED
@@ -5954,5 +5965,20 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::External(path, line) => app.open_external(&path, line),
         Action::ToggleDir(rel) => app.tree.toggle(&rel),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::one_line;
+
+    #[test]
+    fn statuses_fit_one_line() {
+        assert_eq!(one_line("Claude needs your permission"), "Claude needs your permission");
+        assert_eq!(
+            one_line("\n  rg -n 'macro_rules'\nsed -n '1,230p' crates/i18n.rs\n"),
+            "rg -n 'macro_rules' …"
+        );
+        assert_eq!(one_line(""), "");
     }
 }

@@ -1,0 +1,119 @@
+name: Release
+
+# A pushed tag (v0.2.0) tests, builds macOS and Linux, publishes the GitHub
+# release and points the Homebrew cask at it. Run it by hand from the Actions
+# tab to build everything without releasing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Some tests commit in scratch repos; a runner has no git identity.
+      - run: |
+          git config --global user.name ci
+          git config --global user.email ci@localhost
+      - run: cargo test --workspace --locked
+
+  macos:
+    needs: test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      # Universal Pitwall.app, signed ad hoc, zipped with its checksum.
+      - run: make dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/Pitwall-*-macos.zip*
+          if-no-files-found: error
+
+  linux:
+    needs: test
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # winit and wgpu load X11, Wayland and Vulkan at run time, so the build
+      # needs no -dev packages.
+      - run: make dist-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.runner }}
+          path: dist/pitwall-*-linux-*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    needs: [macos, linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # v1.2.0-beta.1 is a prerelease, as in the Makefile.
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
+            --title "Pitwall ${GITHUB_REF_NAME#v}" --generate-notes $pre
+
+  cask:
+    needs: release
+    # Prereleases leave the cask on the last full release.
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: dist
+      # Writing to the tap repo needs a token for it: a fine-grained token
+      # with Contents read and write on homebrew-tap, saved as TAP_TOKEN.
+      - name: Update the Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::no TAP_TOKEN secret, so the cask wasn't updated; run make cask locally"
+            exit 0
+          fi
+          make cask REPO="$GITHUB_REPOSITORY" TAP="$GITHUB_REPOSITORY_OWNER/homebrew-tap"

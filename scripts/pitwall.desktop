@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pitwall
+Comment=Run, review and merge coding agents
+Exec=pitwall-gui %F
+Icon=pitwall
+Terminal=false
+Categories=Development;IDE;
+StartupWMClass=pitwall-gui
