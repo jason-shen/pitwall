@@ -94,6 +94,10 @@ pub struct Settings {
     /// AGENTS sorted by latest activity instead of what needs you.
     #[serde(skip)]
     pub agents_by_recent: bool,
+    /// Tab order you dragged into, by project root. Tabs not listed (new
+    /// ones) go after, oldest first.
+    #[serde(skip)]
+    pub tab_order: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// What's kept in state.json. Also how the old gui.json is read for it.
@@ -105,6 +109,7 @@ struct State {
     folded_projects: std::collections::BTreeSet<String>,
     hidden_projects: std::collections::BTreeSet<String>,
     agents_by_recent: bool,
+    tab_order: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 pub const FONT_SIZE_MIN: f32 = 8.0;
@@ -142,6 +147,7 @@ impl Default for Settings {
             folded_projects: Default::default(),
             hidden_projects: Default::default(),
             agents_by_recent: false,
+            tab_order: Default::default(),
             project_names: Default::default(),
             // Ctrl+Alt: Alt+h/j/k/l, Alt+Enter and friends belong to the
             // programs in the terminal.
@@ -242,6 +248,7 @@ impl Settings {
         s.folded_projects = state.folded_projects;
         s.hidden_projects = state.hidden_projects;
         s.agents_by_recent = state.agents_by_recent;
+        s.tab_order = state.tab_order;
         // Until [keys] is written, the card keys follow the old setting.
         let cards = match (table.contains_key("keys"), s.tile_mod) {
             (true, _) | (false, crate::tiling::TileMod::Alt | crate::tiling::TileMod::CtrlAlt) => {
@@ -322,6 +329,7 @@ impl Settings {
             folded_projects: self.folded_projects.clone(),
             hidden_projects: self.hidden_projects.clone(),
             agents_by_recent: self.agents_by_recent,
+            tab_order: self.tab_order.clone(),
         };
         let sp = state_path();
         if let Some(dir) = sp.parent() {

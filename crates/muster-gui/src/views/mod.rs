@@ -107,6 +107,8 @@ enum Action {
     SwapCards(usize, usize),
     /// A tab dropped on another tab: tile the first beside the second.
     TileOnTab(String, String),
+    /// Move a tab next to another: (moved, beside, after it).
+    MoveTab(String, String, bool),
     /// A tab dropped on a card: tile it beside that card.
     TileOnCard(String, usize),
     ToggleZoom,
@@ -825,18 +827,11 @@ fn project_header(
     });
 }
 
-/// A project's terminals, in the order they were opened, the ones running an
-/// agent included: starting claude in one doesn't move it out of the tree,
-/// it's just listed under AGENTS as well.
+/// A project's terminals in tab order, the ones running an agent included:
+/// starting claude in one doesn't move it out of the tree, it's just listed
+/// under AGENTS as well.
 fn project_body(ui: &mut Ui, app: &mut App, root: &str, acts: &mut Vec<Action>) {
-    let mut shells: Vec<&TaskInfo> = app
-        .tasks
-        .values()
-        .filter(|t| !crate::editors::is_editor_task(&t.id))
-        .filter(|t| app.project_of(t) == root)
-        .collect();
-    shells.sort_by_key(|t| (t.created_unix, t.id.clone()));
-    let shells: Vec<String> = shells.into_iter().map(|t| t.id.clone()).collect();
+    let shells = tab_ids_in(app, root);
     project_rows(ui, app, root, acts);
     if shells.is_empty() {
         ui.label(RichText::new(tr("No terminals yet.")).small().color(MUTED));
@@ -1079,17 +1074,27 @@ fn where_in(app: &App, t: &TaskInfo) -> String {
     }
 }
 
-/// The current project's agents and terminals as tabs, oldest first so a tab
-/// stays where you left it.
+/// The current project's agents and terminals as tabs: in the order you
+/// dragged them to, then any newer ones oldest first, so a tab stays where
+/// you left it.
 fn tab_ids(app: &App) -> Vec<String> {
-    let here = app.project.clone().unwrap_or_default();
+    tab_ids_in(app, app.project.as_deref().unwrap_or(""))
+}
+
+fn tab_ids_in(app: &App, here: &str) -> Vec<String> {
+    let order = app.settings.tab_order.get(here);
+    let at = |id: &str| {
+        order
+            .and_then(|o| o.iter().position(|x| x == id))
+            .unwrap_or(usize::MAX)
+    };
     let mut v: Vec<&TaskInfo> = app
         .tasks
         .values()
         .filter(|t| !crate::editors::is_editor_task(&t.id))
         .filter(|t| app.project_of(t) == here)
         .collect();
-    v.sort_by_key(|t| (t.created_unix, t.id.clone()));
+    v.sort_by_key(|t| (at(&t.id), t.created_unix, t.id.clone()));
     v.into_iter().map(|t| t.id.clone()).collect()
 }
 
@@ -1259,15 +1264,34 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
     let close =
         Rect::from_center_size(pos2(rect.right() - 16.0, rect.center().y), vec2(20.0, 20.0));
     let cr = shell.then(|| ui.interact(close, Id::unique(("tab_close", id)), Sense::click()));
-    // Drag a tab onto another tab, or onto a card, to tile it there.
+    // Drag a tab onto either end of another to move it there, onto its
+    // middle (or onto a card) to tile the two.
     r.dnd_set_drag_payload(TabDrag(id.to_string()));
     if r.dragged() {
         drag_ghost(ui.ctx(), &label);
     }
-    let dropping = r.dnd_hover_payload::<TabDrag>().is_some_and(|p| p.0 != id);
+    let zone = |ui: &Ui| {
+        let x = ui.ctx().pointer_latest_pos().map_or(rect.center().x, |p| p.x);
+        let third = rect.width() / 3.0;
+        if x < rect.left() + third {
+            TabDrop::Before
+        } else if x > rect.right() - third {
+            TabDrop::After
+        } else {
+            TabDrop::Tile
+        }
+    };
+    let dropping = r
+        .dnd_hover_payload::<TabDrag>()
+        .filter(|p| p.0 != id)
+        .map(|_| zone(ui));
     if let Some(p) = r.dnd_release_payload::<TabDrag>() {
         if p.0 != id {
-            acts.push(Action::TileOnTab(p.0.clone(), id.to_string()));
+            acts.push(match zone(ui) {
+                TabDrop::Tile => Action::TileOnTab(p.0.clone(), id.to_string()),
+                TabDrop::Before => Action::MoveTab(p.0.clone(), id.to_string(), false),
+                TabDrop::After => Action::MoveTab(p.0.clone(), id.to_string(), true),
+            });
         }
     }
     let close_hovered = cr.as_ref().is_some_and(|c| c.hovered());
@@ -1281,13 +1305,29 @@ fn tab(ui: &mut Ui, app: &App, id: &str, width: f32, acts: &mut Vec<Action>) {
             theme::surface(c::CARD, theme::scheme(&app.settings.scheme).bg),
         );
     }
-    if dropping {
-        p.rect_stroke(
-            body,
-            3.0,
-            Stroke::new(2.0, ACCENT),
-            egui::StrokeKind::Inside,
-        );
+    match dropping {
+        Some(TabDrop::Tile) => {
+            p.rect_stroke(
+                body,
+                3.0,
+                Stroke::new(2.0, ACCENT),
+                egui::StrokeKind::Inside,
+            );
+        }
+        // Where it'll land: a bar in the gap on that side.
+        Some(side) => {
+            let x = if side == TabDrop::Before {
+                rect.left() - 1.0
+            } else {
+                rect.right() + 1.0
+            };
+            p.rect_filled(
+                Rect::from_center_size(pos2(x, body.center().y), vec2(3.0, body.height())),
+                1.5,
+                ACCENT,
+            );
+        }
+        None => {}
     }
     if active {
         // Under the tab, or over it when the strip runs along the bottom.
@@ -2145,6 +2185,14 @@ fn splitters(ui: &mut Ui, app: &mut App, area: Rect, rects: &[Rect], gap: egui::
 
 /// Drag payload for a tab: its task id.
 struct TabDrag(String);
+
+/// Which part of a tab another one is dropped on.
+#[derive(Clone, Copy, PartialEq)]
+enum TabDrop {
+    Before,
+    Tile,
+    After,
+}
 
 /// Drag payload for a card's title bar: its index on the stage.
 struct CardDrag(usize);
@@ -5436,6 +5484,15 @@ fn apply(app: &mut App, a: Action) {
         }
         Action::Resize(id, rows, cols) => app.sync_term(&id, rows, cols),
         Action::SwapCards(a, b) => app.swap_cards(a, b),
+        Action::MoveTab(id, beside, after) => {
+            let mut ids = tab_ids(app);
+            ids.retain(|x| *x != id);
+            if let Some(i) = ids.iter().position(|x| *x == beside) {
+                ids.insert(if after { i + 1 } else { i }, id);
+                let here = app.project.clone().unwrap_or_default();
+                app.settings.tab_order.insert(here, ids);
+            }
+        }
         Action::TileOnTab(id, onto) => {
             let at = match app
                 .cards
