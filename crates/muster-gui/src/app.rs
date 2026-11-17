@@ -516,6 +516,9 @@ pub struct App {
     pub marks: Marks,
     /// The `muster` binary was rebuilt after the running daemon started.
     pub daemon_outdated: bool,
+    /// Set from a disconnect until the next connect: Some(true) when you
+    /// asked for the restart, Some(false) when the daemon went away.
+    reconnecting: Option<bool>,
     /// Terminal agents that finished a turn while you weren't looking.
     pub done_unseen: std::collections::HashSet<String>,
     git_inflight: bool,
@@ -669,6 +672,7 @@ impl App {
             marks: Marks::default(),
             done_unseen: Default::default(),
             daemon_outdated: false,
+            reconnecting: None,
             git_inflight: false,
             last_git: Instant::now() - Duration::from_secs(60),
             diffstats: HashMap::new(),
@@ -1660,6 +1664,13 @@ impl App {
                     approvals,
                 } => {
                     self.client = Some(client);
+                    // The disconnect's toast would otherwise sit there until
+                    // it timed out, saying the opposite of what's true.
+                    match self.reconnecting.take() {
+                        Some(true) => self.notify(tr("daemon restarted"), false),
+                        Some(false) => self.notify(tr("reconnected to the muster daemon"), false),
+                        None => {}
+                    }
                     // Otherwise a restarted daemon keeps the "older build"
                     // banner up until the next periodic check, which an idle
                     // window can take most of a minute to reach.
@@ -1690,10 +1701,15 @@ impl App {
                 }
                 Ev::Disconnected => {
                     self.client = None;
-                    self.notify(
-                        tr("lost connection to the muster daemon — reconnecting…"),
-                        true,
-                    );
+                    if self.reconnecting == Some(true) {
+                        self.notify(tr("restarting the daemon…"), false);
+                    } else {
+                        self.reconnecting = Some(false);
+                        self.notify(
+                            tr("lost connection to the muster daemon — reconnecting…"),
+                            true,
+                        );
+                    }
                 }
                 Ev::Push(p) => self.on_push(p),
                 Ev::Reply(r) => self.on_reply(r),
@@ -3326,6 +3342,7 @@ impl App {
                 // The connection loop notices the daemon is gone and starts
                 // the one built alongside this app.
                 self.call(Request::Shutdown, |_| None);
+                self.reconnecting = Some(true);
                 self.daemon_outdated = false;
                 self.notify(tr("restarting the daemon…"), false);
             }
