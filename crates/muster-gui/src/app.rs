@@ -294,6 +294,13 @@ impl TermState {
     }
 }
 
+enum ProjectSetup {
+    /// The agent is starting; the terminal follows in this folder.
+    Agent(PathBuf),
+    /// The terminal is starting; focus goes back to this agent after.
+    Terminal(Option<String>),
+}
+
 pub enum Reply {
     Snapshots {
         task: String,
@@ -306,6 +313,8 @@ pub enum Reply {
         result: Result<ParsedDiff, String>,
     },
     Created(TaskInfo, bool),
+    /// The daemon couldn't start a task; the message says why.
+    CreateFailed(String),
     Notice(String, bool),
     Brief(PathBuf, crate::briefs::Update),
     /// A git command run off the UI thread finished.
@@ -462,6 +471,9 @@ pub struct App {
     pub parent_of: std::collections::BTreeMap<String, String>,
     /// The terminal being created belongs to this agent.
     pending_parent: Option<String>,
+    /// A new project's two tabs, started one after the other so the agent's
+    /// is first whichever the daemon finishes starting first.
+    project_setup: Option<ProjectSetup>,
     /// The repo root whose agents the sidebar lists ("" for tasks outside any).
     pub project: Option<String>,
     pub bar: Option<CmdBar>,
@@ -625,6 +637,7 @@ impl App {
             saved_layout: None,
             parent_of: Default::default(),
             pending_parent: None,
+            project_setup: None,
             active: 0,
             project: None,
             rename_in_tab: false,
@@ -2009,6 +2022,21 @@ impl App {
                 } else {
                     self.open_item(&id);
                 }
+                let name = self.tasks[&id].name.clone();
+                if let Some(ProjectSetup::Agent(root)) =
+                    self.project_setup.take_if(|_| !shell && name == "agent")
+                {
+                    self.project_setup = Some(ProjectSetup::Terminal(Some(id.clone())));
+                    self.create_task("shell".into(), "terminal".into(), None, false, root);
+                } else if let Some(ProjectSetup::Terminal(agent)) =
+                    self.project_setup.take_if(|_| shell && name == "terminal")
+                {
+                    // Named already, so no rename box; the agent keeps focus.
+                    if let Some(a) = agent {
+                        self.open_item(&a);
+                    }
+                    return;
+                }
                 // A new terminal asks for its name in its tab. Enter on an
                 // empty box keeps the one it got (term-3).
                 if shell {
@@ -2024,6 +2052,14 @@ impl App {
                         },
                         false,
                     );
+                }
+            }
+            Reply::CreateFailed(e) => {
+                self.notify(e, true);
+                // A project whose agent wouldn't start still gets its terminal.
+                if let Some(ProjectSetup::Agent(root)) = self.project_setup.take() {
+                    self.project_setup = Some(ProjectSetup::Terminal(None));
+                    self.create_task("shell".into(), "terminal".into(), None, false, root);
                 }
             }
             Reply::Notice(m, e) => self.notify(m, e),
@@ -2541,13 +2577,16 @@ impl App {
                 self.project = Some(key);
                 self.cards.clear();
                 self.active = 0;
-                let mut i = self.tasks.values().filter(|t| t.agent == "shell").count() + 1;
-                let mut term = format!("term-{i}");
-                while self.tasks.contains_key(&term) {
-                    i += 1;
-                    term = format!("term-{i}");
+                // The default agent runs in the project itself, not a worktree:
+                // it's the project's own agent, not one off on a branch.
+                let agent = self.settings.default_agent.clone();
+                if agent != "shell" && self.cfg.agents.contains_key(&agent) {
+                    self.project_setup = Some(ProjectSetup::Agent(root.clone()));
+                    self.create_task(agent, "agent".into(), None, false, root);
+                } else {
+                    self.project_setup = Some(ProjectSetup::Terminal(None));
+                    self.create_task("shell".into(), "terminal".into(), None, false, root);
                 }
-                self.create_task("shell".into(), term, None, false, root);
             }
         }
         self.focus_pane = true;
@@ -2591,7 +2630,7 @@ impl App {
         };
         self.call(Request::NewTask(req), move |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t, shell)),
-            Err(e) => Some(Reply::Notice(e, true)),
+            Err(e) => Some(Reply::CreateFailed(e)),
             _ => None,
         });
     }
