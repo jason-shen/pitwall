@@ -134,7 +134,7 @@ dist-linux:
 	cargo build --release --locked -p pitwall -p pitwall-gui
 	rm -rf $(DIST)/$(LINUX_NAME) $(LINUX_TGZ) $(LINUX_TGZ).sha256
 	mkdir -p $(DIST)/$(LINUX_NAME)
-	cp $(addprefix target/release/,$(BINS)) README.md scripts/pitwall.desktop $(DIST)/$(LINUX_NAME)/
+	cp $(addprefix target/release/,$(BINS)) README.md LICENSE scripts/pitwall.desktop $(DIST)/$(LINUX_NAME)/
 	cp assets/pitwall-256.png $(DIST)/$(LINUX_NAME)/pitwall.png
 	cp scripts/linux-install.sh $(DIST)/$(LINUX_NAME)/install.sh
 	tar -C $(DIST) -czf $(LINUX_TGZ) $(LINUX_NAME)

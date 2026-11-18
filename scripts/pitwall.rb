@@ -6,7 +6,7 @@ cask "pitwall" do
   url "https://github.com/@REPO@/releases/download/v#{version}/Pitwall-#{version}-macos.zip"
   name "Pitwall"
   desc "Agentic IDE: run, review and merge coding agents"
-  homepage "https://github.com/@REPO@"
+  homepage "https://pitwallide.com"
 
   depends_on macos: ">= :big_sur"
 

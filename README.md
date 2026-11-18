@@ -2,6 +2,8 @@
 
 **The agentic IDE.** Write what you want, run agents on it in parallel, review what they did and merge it, all in one window.
 
+[pitwallide.com](https://pitwallide.com)
+
 ![pitwall: the project tree and agents on the left, an agent and a file open in two cards](docs/screenshot.png)
 
 Running more than one coding agent usually means a terminal tab per agent, a chat window for planning, lazygit for the diffs and an editor for the fixes, and keeping in your head which agent is waiting on you. Agents edit the same checkout and trip over each other. Reviewing means reading a diff and typing your notes back into a prompt.
@@ -366,4 +368,4 @@ The app is signed ad hoc, and the cask clears the quarantine flag so Gatekeeper 
 
 ## License
 
-MIT
+Apache License 2.0. See [LICENSE](LICENSE).
