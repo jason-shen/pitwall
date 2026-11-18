@@ -70,9 +70,11 @@ if [ "$next" != "$current" ]; then
   rm -f Cargo.toml.bak
   # Rewrites just the workspace crates' entries in the lock file.
   cargo update --workspace --quiet
-  sed -i.bak "s#releases/tag/v[^\"]*\">v[^<]*</a>#releases/tag/$tag\">$tag</a>#g" website/index.html
-  rm -f website/index.html.bak
-  git add Cargo.toml Cargo.lock website/index.html
+  for page in website/index.html website/zh/index.html; do
+    sed -i.bak "s#releases/tag/v[^\"]*\">v[^<]*</a>#releases/tag/$tag\">$tag</a>#g" "$page"
+    rm -f "$page.bak"
+  done
+  git add Cargo.toml Cargo.lock website/index.html website/zh/index.html
   git commit --quiet -m "Release $tag"
 fi
 git tag -a "$tag" -m "Pitwall $next"

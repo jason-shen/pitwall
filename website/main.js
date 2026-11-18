@@ -1,6 +1,10 @@
 document.documentElement.classList.add("js");
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const zh = document.documentElement.lang.startsWith("zh");
+const words = zh
+  ? { copy: "复制", copied: "已复制", select: "请手动选择" }
+  : { copy: "copy", copied: "copied", select: "select it" };
 
 for (const btn of document.querySelectorAll("[data-copy]")) {
   btn.addEventListener("click", async () => {
@@ -8,13 +12,13 @@ for (const btn of document.querySelectorAll("[data-copy]")) {
     try {
       await navigator.clipboard.writeText(btn.dataset.copy);
       btn.classList.add("copied");
-      label.textContent = "copied";
+      label.textContent = words.copied;
     } catch {
-      label.textContent = "select it";
+      label.textContent = words.select;
     }
     setTimeout(() => {
       btn.classList.remove("copied");
-      label.textContent = "copy";
+      label.textContent = words.copy;
     }, 1800);
   });
 }

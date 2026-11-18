@@ -52,6 +52,8 @@ section { position: relative; padding: 120px 24px; }
 .brand { display: flex; align-items: center; gap: 10px; font: 800 22px var(--display); letter-spacing: -0.02em; }
 .nav-links { display: flex; gap: 28px; margin-left: auto; font-size: 15px; color: var(--muted); }
 .nav-links a:hover { color: var(--text); }
+.lang { font-size: 14px; color: var(--muted); padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 8px; }
+.lang:hover { color: var(--text); }
 
 .btn {
   display: inline-flex; align-items: center; gap: 8px;
@@ -439,7 +441,7 @@ h4 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.
   body { font-size: 16px; }
   .nav { gap: 16px; padding: 12px 16px; }
   .nav-links { display: none; }
-  .nav .btn { margin-left: auto; }
+  .nav .lang { margin-left: auto; }
   section { padding: 72px 16px; }
   .hero { padding: 48px 16px 72px; }
   .chip { font-size: 12px; padding: 8px 11px; }
@@ -461,3 +463,17 @@ h4 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .js .reveal { opacity: 1; transform: none; }
 }
+
+/* Chinese: the Latin fonts carry no CJK, so the system's take over for it.
+   Tight tracking and sub-1 leading crush CJK headings. */
+:root:lang(zh) {
+  --display: "Bricolage Grotesque", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --body: "Instrument Sans", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+:lang(zh) body { line-height: 1.75; }
+:lang(zh) :is(h1, h2, h3, h4, .big, .huge, .tile-wide h4, .mess-tail strong) { letter-spacing: 0; line-height: 1.2; }
+:lang(zh) .eyebrow, :lang(zh) .kicker { letter-spacing: 0.08em; }
+/* A CJK glyph is a full em wide, so the Latin sizes break the hero mid-word. */
+:lang(zh) h1 { font-size: clamp(40px, 4.8vw, 72px); }
+:lang(zh) .big { font-size: clamp(32px, 4.4vw, 60px); }
+:lang(zh) .huge { font-size: clamp(44px, 7vw, 104px); }

@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pitwall · 智能体 IDE</title>
+  <meta name="description" content="写一份简报，让多个编码智能体在各自的工作树上并行工作，审查它们的改动并合并。全部在一个 GPU 绘制的窗口里。">
+  <meta property="og:title" content="pitwall · 智能体 IDE">
+  <meta property="og:description" content="并行运行智能体，合并它们的成果。Claude Code、Codex 等等都在一个窗口里，各自拥有独立的工作树。">
+  <meta property="og:image" content="../assets/screenshot.png">
+  <meta name="theme-color" content="#0b0d10">
+  <link rel="alternate" hreflang="en" href="../">
+  <link rel="alternate" hreflang="zh-CN" href="./">
+  <link rel="icon" href="../assets/pitwall.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../assets/pitwall-256.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="#top"><img src="../assets/pitwall.svg" alt="" width="34" height="34"><span>pitwall</span></a>
+  <nav class="nav-links">
+    <a href="#loop">工作流程</a>
+    <a href="#safety">安全</a>
+    <a href="#remotes">远程</a>
+    <a href="#terminal">终端</a>
+    <a href="https://github.com/jason-shen/pitwall">GitHub</a>
+  </nav>
+  <a class="lang" href="../" hreflang="en" lang="en">English</a>
+  <a class="btn btn-small" href="#install">安装</a>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="glow glow-green"></div>
+    <div class="glow glow-amber"></div>
+    <div class="glow glow-teal"></div>
+
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="dot dot-green pulse"></span>智能体 IDE</p>
+      <h1>并行运行智能体，<br><span class="grad">合并它们的成果。</span></h1>
+      <p class="lede">写下你想要的，交给 Claude Code、Codex 或任何智能体 CLI，各自在独立的工作树上完成。按“谁在等你”查看每个智能体，审查改动，然后合并。一个窗口，不用在标签页之间来回切换。</p>
+      <div class="cta-row">
+        <button class="install-pill" data-copy="brew install --cask jason-shen/tap/pitwall">
+          <span class="prompt">$</span> brew install --cask jason-shen/tap/pitwall
+          <span class="copy-label">复制</span>
+        </button>
+        <a class="btn btn-ghost" href="https://github.com/jason-shen/pitwall">在 GitHub 上查看 →</a>
+      </div>
+      <p class="fine"><a class="version" href="https://github.com/jason-shen/pitwall/releases/tag/v0.1.0">v0.1.0</a> · macOS 和 Linux · 免费，Apache 2.0 许可</p>
+    </div>
+
+    <div class="hero-shot">
+      <div class="window">
+        <div class="window-bar"><i></i><i></i><i></i></div>
+        <img src="../assets/screenshot.png" alt="pitwall：侧边栏里的项目和智能体，两张平铺的卡片里分别打开着一个智能体和一个文件" width="1200" height="1199">
+      </div>
+      <div class="chip chip-a"><span class="dot dot-amber"></span>add-metrics 想运行 <code>npm install</code><b>批准</b></div>
+      <div class="chip chip-b"><span class="dot dot-teal"></span>reviewer · 完成 <em>+124 −18</em></div>
+      <div class="chip chip-c"><span class="dot dot-green pulse"></span>fix-login · 工作中 <em>简报 3/5</em></div>
+    </div>
+  </section>
+
+  <section class="mess">
+    <p class="kicker">现在怎么跑智能体</p>
+    <h2 class="big">五个工具，外加考验记性。</h2>
+    <ul class="strike">
+      <li>每个智能体一个终端标签页</li>
+      <li>一个用来做规划的聊天窗口</li>
+      <li>用 lazygit 看改动</li>
+      <li>用编辑器修修补补</li>
+      <li>用脑子记谁在等你</li>
+    </ul>
+    <p class="mess-tail">智能体改的是同一份代码，互相踩脚。审查就是读完 diff，再把意见重新敲进提示词。<br><strong>pitwall 把整个流程放进一个窗口。</strong></p>
+  </section>
+
+  <section class="loop" id="loop">
+    <div class="section-head">
+      <p class="kicker">工作流程</p>
+      <h2 class="big">简报，构建，审查，<span class="grad">发布。</span></h2>
+    </div>
+
+    <article class="step reveal">
+      <div class="step-copy">
+        <span class="num">01</span>
+        <h3>写简报。</h3>
+        <p>从专为智能体工作准备的模板开始：新功能、修 bug、重构、界面打磨、技术探索。用你自己的话写下需求，然后点 <b>✦ 用 AI 完成</b>。Claude 会读你的代码，把问题、涉及的文件、步骤和待定问题一一补全，你可以看着它写。</p>
+      </div>
+      <div class="mock mock-brief">
+        <div class="mock-bar"><span class="path">briefs › fix-login-redirect.md</span><span class="tag tag-ai">✦ 正在读 src/auth.rs</span></div>
+        <div class="md">
+          <p class="h"># 修复登录重定向循环</p>
+          <p><b>需求：</b>在 Safari 上登录后，又被直接弹回 /login。</p>
+          <p class="h2">## 原因</p>
+          <p class="stream" data-stream="会话 cookie 设置了 SameSite=Strict，所以从 OAuth 回调跳转回来时没有带上它，is_valid() 看不到 token。"></p>
+          <p class="h2">## 步骤</p>
+          <p class="task done">- [x] 用一个失败的测试复现问题</p>
+          <p class="task done">- [x] 把会话 cookie 改成 SameSite=Lax</p>
+          <p class="task">- [ ] 在 is_valid() 里检查过期时间</p>
+        </div>
+        <div class="mock-foot"><span class="btn-mini">停止</span><span class="btn-mini btn-mini-on">交给智能体 →</span></div>
+      </div>
+    </article>
+
+    <article class="step reveal flip">
+      <div class="step-copy">
+        <span class="num">02</span>
+        <h3>交给智能体。</h3>
+        <p>每个智能体都在自己的 git 工作树和分支上开始。想跑多少就跑多少：它们既不会碰你的代码，也不会碰彼此的。智能体会边做边勾掉简报里的每一步。</p>
+      </div>
+      <div class="mock mock-tree">
+        <div class="branch trunk"><span class="node"></span><b>main</b><em>你的代码 · 原封不动</em></div>
+        <div class="branch"><span class="node n-green"></span><code>pitwall/fix-login</code><span class="who">claude</span></div>
+        <div class="branch"><span class="node n-amber"></span><code>pitwall/add-metrics</code><span class="who">codex</span></div>
+        <div class="branch"><span class="node n-teal"></span><code>pitwall/docs-tour</code><span class="who">claude</span></div>
+        <div class="branch"><span class="node n-green"></span><code>pitwall/flaky-tests</code><span class="who">opencode</span></div>
+      </div>
+    </article>
+
+    <article class="step reveal">
+      <div class="step-copy">
+        <span class="num">03</span>
+        <h3>一眼看出谁在等你。</h3>
+        <p>所有项目里的所有智能体，按需要你的程度排序：等你批准、在问你问题、已完成、工作中。每一行都显示它的简报进行到哪、改了多少。带编号的提问，直接在侧边栏回答。</p>
+      </div>
+      <div class="mock mock-agents">
+        <div class="mock-label">智能体 <span>优先</span></div>
+        <div class="agent"><span class="dot dot-amber pulse"></span><div><b>pitwall · add-metrics</b><small>待批准：npm install --save-dev jest</small></div><span class="pill pill-amber">待批准</span></div>
+        <div class="agent"><span class="dot dot-amber"></span><div><b>augur · api</b><small>复用现有的缓存层吗？</small><span class="choices"><i>1 是</i><i>2 否</i></span></div></div>
+        <div class="agent"><span class="dot dot-teal"></span><div><b>pitwall · reviewer</b><small>6 个文件 <ins>+124</ins> <del>−18</del></small></div><span class="pill pill-teal">完成</span></div>
+        <div class="agent"><span class="dot dot-green pulse"></span><div><b>pitwall · fix-login</b><small>修复登录重定向循环 · 3/5</small><span class="bar"><i style="width:60%"></i></span></div></div>
+      </div>
+    </article>
+
+    <article class="step reveal flip">
+      <div class="step-copy">
+        <span class="num">04</span>
+        <h3>像负责人一样审查，而不是当打字员。</h3>
+        <p>对照智能体的起点读它的 diff。在任意一行留言，再把所有留言合成一条消息，交给它下一轮处理。不想要的代码块直接丢掉。它走过的每一步都是一个快照，随时可以回退。</p>
+      </div>
+      <div class="mock mock-diff">
+        <div class="mock-bar"><span class="path">fix-login · 对比基线</span><span class="btn-mini btn-mini-on">发送 2 条给智能体</span></div>
+        <pre><span class="ln">11</span>  pub fn is_valid(&amp;self) -&gt; bool {
+<span class="ln">12</span><del>-     self.token.is_some()</del>
+<span class="ln">12</span><ins>+     self.token.is_some() &amp;&amp; self.expires_at &gt; now()</ins>
+<span class="ln">13</span>  }
+<span class="ln">14</span>
+<span class="ln">15</span><ins>+ fn now() -&gt; u64 {</ins>
+<span class="ln">16</span><ins>+     SystemTime::now().duration_since(UNIX_EPOCH)</ins></pre>
+        <div class="comment"><b>💬 你</b> 用 <code>util::time</code> 里的时钟，这样测试可以伪造时间。</div>
+      </div>
+    </article>
+
+    <article class="step reveal">
+      <div class="step-copy">
+        <span class="num">05</span>
+        <h3>接受，合并完成。</h3>
+        <p>一步提交智能体留下的改动，把它的分支合并回它出发的那个分支，再顺手提议清理工作树、快照和分支。pitwall 会先确认你的代码是干净的，所以不会有东西落在你自己的改动上。</p>
+      </div>
+      <div class="mock mock-accept">
+        <div class="accept-title"><span class="check">✓</span> 接受 fix-login</div>
+        <label>提交信息</label>
+        <div class="field">修复登录重定向循环</div>
+        <div class="accept-row"><code>pitwall/fix-login</code><span class="arrow">→</span><code>main</code></div>
+        <div class="accept-actions"><span class="btn-mini">取消</span><span class="btn-mini btn-mini-go">提交并合并</span></div>
+      </div>
+    </article>
+  </section>
+
+  <section class="safety" id="safety">
+    <div class="section-head">
+      <p class="kicker">安全</p>
+      <h2 class="big">护栏只会收紧。</h2>
+      <p class="sub">pitwall 从不凭自己对 shell 的理解悄悄放行命令。你的规则拒绝的，它就拒绝；需要看一眼的，它排队等你；其余的交给智能体自己的确认提示。</p>
+    </div>
+
+    <div class="approval reveal">
+      <span class="badge">会修改</span>
+      <span class="approval-text"><b>add-metrics</b> 想运行 <code>npm install --save-dev jest &amp;&amp; cargo test</code></span>
+      <span class="approval-btns"><span class="btn-mini">查看</span><span class="btn-mini btn-mini-go">批准 ⌘⇧Y</span><span class="btn-mini btn-mini-no">拒绝 ⌘⇧R</span></span>
+    </div>
+    <div class="denied reveal"><span class="x">✕ 已拒绝</span><code>cargo test &amp;&amp; <mark>rm -rf ~</mark></code><em>每一部分单独判断，最严格的结果说了算</em></div>
+
+    <div class="trio">
+      <div class="tile reveal">
+        <h4>拒绝规则处处有效</h4>
+        <p>藏在 <code>sudo</code>、<code>FOO=1</code>、<code>git -C dir</code> 后面，或者写在 <code>bash -c '…'</code> 里，都一样拦得住。</p>
+      </div>
+      <div class="tile reveal">
+        <h4>每一步之前都有快照</h4>
+        <p>每个智能体都有一条影子 git 时间线。对比任意一步，回退到那里，也能撤销回退。</p>
+        <div class="timeline">
+          <span>#5</span><span>#4</span><span class="here">#3 ↺</span><span>#2</span><span>#1</span>
+        </div>
+      </div>
+      <div class="tile reveal">
+        <h4>你的文字不会丢</h4>
+        <p>智能体改写了你正打开的文件？之前的版本按一下 ⌘Z 就回来。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="team">
+    <div class="team-copy reveal">
+      <p class="kicker">智能体协作</p>
+      <h2 class="big">会互相沟通的智能体。</h2>
+      <p class="sub">每个 pitwall 终端的 PATH 里都有 <code>pitwall</code> 命令。智能体可以列出、发消息、等待和读取彼此，所以负责构建的可以直接交给负责审查的，不用你在中间传话。</p>
+    </div>
+    <div class="term reveal">
+      <div class="window-bar"><i></i><i></i><i></i><span>builder</span></div>
+<pre><span class="c">$</span> pitwall agents
+  <span class="g">●</span> builder    working   ~/code/app
+  <span class="t">●</span> reviewer   idle      ~/code/app
+<span class="c">$</span> pitwall tell reviewer "看看登录的修复，然后告诉我"
+  sent to reviewer
+<span class="c">$</span> pitwall wait reviewer
+<span class="c">$</span> pitwall read reviewer -n 4
+  <span class="m">[message from agent reviewer]</span> 看起来没问题。cookie 的
+  标志位有两处小意见，已经留言了。</pre>
+    </div>
+  </section>
+
+  <section class="remotes" id="remotes">
+    <div class="section-head">
+      <p class="kicker">远程</p>
+      <h2 class="big">所有服务器，<span class="grad">并排摆开。</span></h2>
+      <p class="sub">你的 SSH 服务器就在侧边栏里，按你建的分组排好。打开一台，或者把整组平铺在一起，同时向它们输入。服务器上运行的智能体也会和其他智能体一起出现在列表里。</p>
+    </div>
+
+    <div class="remote-grid">
+      <div class="mock mock-remotes reveal">
+        <div class="side-tabs"><span>项目</span><span class="on">远程</span><span>密钥</span><b>+</b></div>
+        <div class="side-tools"><span>全部连接</span><span>运行…</span></div>
+        <div class="group open"><i class="caret">▾</i><span class="folder"></span>家庭实验室<em>2</em></div>
+        <div class="remote live"><span class="srv"></span>build box<code>192.168.50.226</code></div>
+        <div class="remote live"><span class="srv"></span>nas<code>192.168.50.59</code></div>
+        <div class="group open"><i class="caret">▾</i><span class="folder"></span>工作<em>1</em></div>
+        <div class="remote dragging"><span class="srv"></span>staging<code>10.0.0.42</code></div>
+        <div class="group dim"><i class="caret">▸</i><span class="folder"></span>未分组<em>3</em></div>
+        <div class="mock-label agents-label">智能体 <span>优先</span></div>
+        <div class="agent remote-agent"><span class="dot dot-green pulse"></span><div><b>build box · claude</b><small>修复不稳定的部署脚本</small></div><span class="pill pill-remote">远程</span></div>
+      </div>
+
+      <div class="sessions reveal">
+        <div class="bstrip"><span>正在向 3 个终端广播输入</span><span class="btn-mini btn-mini-on">停止广播</span></div>
+        <div class="tiles">
+          <div class="sess"><div class="sess-bar">远程 › build box</div><pre><span class="c">$</span> sudo apt upgrade -y<span class="cursor"></span></pre></div>
+          <div class="sess"><div class="sess-bar">远程 › nas</div><pre><span class="c">$</span> sudo apt upgrade -y<span class="cursor"></span></pre></div>
+          <div class="sess wide"><div class="sess-bar">远程 › staging</div><pre><span class="c">$</span> sudo apt upgrade -y<span class="cursor"></span></pre></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="trio">
+      <div class="tile reveal">
+        <h4>你的 ssh，你的配置</h4>
+        <p>会话用的就是你自己的 <code>ssh</code>，所以 ProxyJump 和 ssh-agent 都照常工作。<code>~/.ssh/config</code> 里的主机会自动出现；其他的在应用里添加。</p>
+      </div>
+      <div class="tile reveal">
+        <h4>一条命令，所有机器</h4>
+        <p><b>运行…</b> 把一条命令发给一组服务器，并显示每台的退出码和输出。会改动东西的命令会先问你。</p>
+      </div>
+      <div class="tile reveal">
+        <h4>服务器上的智能体也看得到</h4>
+        <p>服务器上运行的 <code>claude</code> 会从屏幕上识别出来，以 <b>build box · claude</b> 列出，并标上“远程”。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="terminal" id="terminal">
+    <div class="section-head">
+      <p class="kicker">底层</p>
+      <h2 class="big">它也是一个真正的终端。</h2>
+      <p class="sub">由 GPU 绘制。智能体跑在它们自己的 TUI 里，你的 shell、vim 和 lazygit 就平铺在旁边。</p>
+    </div>
+    <div class="grid">
+      <div class="tile tile-wide reveal">
+        <h4>关掉窗口，什么都不会停。</h4>
+        <p>后台的守护进程管理着每一个终端。退出应用，智能体照样工作。重启电脑，它们会回到各自的文件夹，接着之前的会话继续。</p>
+      </div>
+      <div class="tile reveal"><h4>标签页和平铺</h4><p>拆分、拖动、交换、调整卡片大小。还能把输入广播到所有卡片。</p></div>
+      <div class="tile reveal"><h4>内置 Git</h4><p>lazygit 的布局和按键：暂存代码块、提交、切换分支，都在窗口里完成。</p></div>
+      <div class="tile reveal"><h4>用你的编辑器，或者我们的</h4><p>内置编辑器会实时重新加载，也可以用 nvim、helix、VS Code、Cursor、Zed。</p></div>
+      <div class="tile reveal"><h4>回滚记录不会丢</h4><p>重启后依然保留。把卡片拉窄，文字会重新换行，而不是被截断。</p></div>
+      <div class="tile reveal"><h4>按键都好用</h4><p>支持 kitty 键盘协议，所以在 Claude Code 和 Codex 里 Shift+Return 就是换行。</p></div>
+      <div class="tile reveal"><h4>多语言</h4><p>支持中文、日文和韩文输入法。界面有七种语言。</p></div>
+      <div class="tile reveal">
+        <h4>API 密钥，锁好了</h4>
+        <p>令牌用 AES-256-GCM 加密，由单独的密码保护。每次显示或复制都要确认；剪贴板会自动清空。</p>
+        <div class="keyrow"><span class="k">OpenAI</span><code>••••••••1234</code></div>
+      </div>
+      <div class="tile reveal">
+        <h4>每个文件都有图标</h4>
+        <p>文件树里按语言显示 Nerd Font 图标，字体已内置，换什么字体都能显示。</p>
+        <div class="icons"><span class="rs">rs</span><span class="ts">ts</span><span class="py">py</span><span class="go">go</span><span class="md">md</span></div>
+      </div>
+      <div class="tile reveal"><h4>干净地启动</h4><p>启动时不会多开一个 shell。项目、远程和密钥在侧边栏里各占一个标签页。</p></div>
+    </div>
+  </section>
+
+  <section class="works">
+    <p class="kicker">支持你已经在用的智能体</p>
+    <div class="marquee" aria-label="Claude Code, Codex, opencode, Gemini, aider, goose, amp">
+      <div class="marquee-track">
+        <span>Claude Code</span><span>Codex</span><span>opencode</span><span>Gemini</span><span>aider</span><span>goose</span><span>amp</span>
+        <span aria-hidden="true">Claude Code</span><span aria-hidden="true">Codex</span><span aria-hidden="true">opencode</span><span aria-hidden="true">Gemini</span><span aria-hidden="true">aider</span><span aria-hidden="true">goose</span><span aria-hidden="true">amp</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="final" id="install">
+    <div class="glow glow-green"></div>
+    <div class="glow glow-teal"></div>
+    <img src="../assets/pitwall.svg" alt="" width="120" height="120" class="final-icon">
+    <h2 class="huge">让智能体各就各位。</h2>
+    <button class="install-pill install-pill-lg" data-copy="brew install --cask jason-shen/tap/pitwall">
+      <span class="prompt">$</span> brew install --cask jason-shen/tap/pitwall
+      <span class="copy-label">复制</span>
+    </button>
+    <p class="fine">或者用 Rust 1.80+ 从源码安装：<code>cargo install --path crates/pitwall-gui</code></p>
+    <p class="fine">Linux 上，<a href="https://github.com/jason-shen/pitwall/releases/latest">下载</a>适合你机器的压缩包，运行里面的 <code>install.sh</code>。暂不支持 Windows。</p>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <a class="brand" href="#top"><img src="../assets/pitwall.svg" alt="" width="26" height="26"><span>pitwall</span></a>
+  <span>Apache 2.0 许可</span>
+  <a href="https://github.com/jason-shen/pitwall">GitHub</a>
+  <a href="https://github.com/jason-shen/pitwall#readme">文档</a>
+  <a href="https://github.com/jason-shen/pitwall/releases">版本发布</a>
+  <a href="../" hreflang="en" lang="en">English</a>
+</footer>
+
+<script src="../main.js"></script>
+</body>
+</html>
