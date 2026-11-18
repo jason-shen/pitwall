@@ -11,11 +11,14 @@
 #   make release    test, build, and publish vVERSION on GitHub
 #   make cask       point the Homebrew cask at that release
 #   make publish    release, then cask
+#   make bump       next patch version: commit, tag and push it (PART=minor,
+#                   PART=major, or V=1.2.0-beta.1; DRY_RUN=1 to just check)
 #
-# The version comes from Cargo.toml. The release goes on a tag you've pushed
-# yourself; this never makes one. Pushing the tag also starts
-# .github/workflows/release.yml, which builds macOS and Linux and publishes
-# the release and cask itself; `make publish` is the same thing done here. Set DEVELOPER_ID to sign with your
+# The version comes from Cargo.toml. `make bump` raises it and pushes the
+# tag, which starts .github/workflows/release.yml: it builds macOS and Linux,
+# publishes the release and cask, then the website picks up the new version.
+# `make release` and `make publish` do the same from this Mac for a tag that's
+# already pushed, and never make one themselves. Set DEVELOPER_ID to sign with your
 # certificate and NOTARY_PROFILE (a `xcrun notarytool store-credentials`
 # profile) to notarize; without them the app is signed ad hoc.
 
@@ -40,7 +43,7 @@ TAP_NAME := $(subst homebrew-,,$(TAP))
 # 1.2.0-beta.1 is a prerelease: on GitHub, but not in the cask.
 PRERELEASE := $(findstring -,$(VERSION))
 
-.PHONY: help tools test icon build app install dist dist-linux check release cask publish clean
+.PHONY: help tools test icon build app install dist dist-linux check release cask publish bump clean
 
 help:
 	@sed -n 's/^#   //p' Makefile
@@ -183,6 +186,10 @@ else
 endif
 
 publish: release cask
+
+PART ?= patch
+bump:
+	@scripts/bump.sh $(or $(V),$(PART))
 
 clean:
 	rm -rf $(DIST)

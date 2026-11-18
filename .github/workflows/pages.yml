@@ -1,9 +1,15 @@
 name: Website
 
+# A release bumps the version on the site in the same push as its tag, so a
+# push that names an unreleased version waits; the Release workflow
+# finishing deploys it.
 on:
   push:
     branches: [main]
     paths: ["website/**", ".github/workflows/pages.yml"]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -17,15 +23,31 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Is its version released?
+        id: released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(grep -o 'releases/tag/v[^"]*' website/index.html | head -1 | sed 's#releases/tag/##')
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -z "$tag" ] || gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$tag isn't released yet; the site deploys when the Release workflow finishes"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.released.outputs.ok == 'true'
+        uses: actions/configure-pages@v5
+      - if: steps.released.outputs.ok == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: website
-      - id: deployment
+      - if: steps.released.outputs.ok == 'true'
+        id: deployment
         uses: actions/deploy-pages@v4

@@ -345,11 +345,18 @@ Makefile         build, install and publish (`make help`)
 
 ## Releasing
 
-A release is the version in `Cargo.toml`, on a tag you push yourself. Pushing the tag is all it takes: `.github/workflows/release.yml` checks the tag matches `Cargo.toml`, runs the tests on macOS and Linux, builds the universal Pitwall.app and Linux tarballs for x86_64 and arm64, publishes them as the GitHub release and points the Homebrew cask at it.
+One command ships a release:
 
 ```sh
-git tag v0.2.0 && git push origin main v0.2.0
+make bump              # 0.1.0 -> 0.1.1
+make bump PART=minor   # -> 0.2.0
+make bump PART=major   # -> 1.0.0
+make bump V=0.3.0-beta.1
+make bump V=0.1.0      # the current version, the first time
+make bump DRY_RUN=1    # check everything, change nothing
 ```
+
+It refuses unless you're on `main` with nothing uncommitted and nothing to pull. It runs the tests, writes the new version into `Cargo.toml`, `Cargo.lock` and the website, commits that as "Release vX.Y.Z", tags it and pushes both. The tag starts `.github/workflows/release.yml`: it checks the tag matches `Cargo.toml`, runs the tests on macOS and Linux, builds the universal Pitwall.app and Linux tarballs for x86_64 and arm64, publishes them as the GitHub release and points the Homebrew cask at it. When it finishes, the website deploys with the new version; a push that names a version not released yet doesn't deploy the site on its own.
 
 Updating the cask needs a token for the tap: a fine-grained token with **Contents: read and write** on `homebrew-tap`, saved in this repo as the Actions secret `TAP_TOKEN` (`gh secret set TAP_TOKEN`). Without it the release still goes out, and `make cask` updates the cask from here. Running the workflow by hand from the Actions tab builds everything without releasing, to check a build before tagging. A version with a hyphen (`0.3.0-beta.1`) is published as a prerelease and leaves the cask alone.
 
