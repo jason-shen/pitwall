@@ -124,6 +124,9 @@ pub struct Settings {
     pub agents_by_recent: bool,
     #[serde(skip)]
     pub sidebar_tab: SidebarTab,
+    /// The first-run language picker has been shown.
+    #[serde(skip)]
+    pub welcomed: bool,
     /// Tab order you dragged into, by project root. Tabs not listed (new
     /// ones) go after, oldest first.
     #[serde(skip)]
@@ -146,6 +149,8 @@ struct State {
     agents_by_recent: bool,
     sidebar_tab: SidebarTab,
     tab_order: std::collections::BTreeMap<String, Vec<String>>,
+    /// None in a state.json from before the welcome existed.
+    welcomed: Option<bool>,
 }
 
 pub const FONT_SIZE_MIN: f32 = 8.0;
@@ -190,6 +195,7 @@ impl Default for Settings {
             hidden_projects: Default::default(),
             agents_by_recent: false,
             sidebar_tab: SidebarTab::Projects,
+            welcomed: false,
             tab_order: Default::default(),
             project_names: Default::default(),
             // Ctrl+Alt: Alt+h/j/k/l, Alt+Enter and friends belong to the
@@ -260,6 +266,31 @@ fn place_last(doc: &mut toml_edit::DocumentMut) {
     }
 }
 
+/// The language the system is set to, for the first-run picker to start on.
+/// An app opened from the Dock has no LANG, so macOS is asked directly.
+fn system_language() -> crate::i18n::Lang {
+    use crate::i18n::Lang;
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() && v != "C" && v != "POSIX" {
+                return Lang::from_code(&v);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(out) = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleLanguages"])
+        .output()
+    {
+        // ( "zh-Hans-CN", "en-US" ): the first is the one in use.
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(first) = text.split('"').nth(1) {
+            return Lang::from_code(first);
+        }
+    }
+    Lang::En
+}
+
 impl Settings {
     /// Read the settings, and anything in the file that couldn't be used.
     pub fn load() -> (Self, Vec<String>) {
@@ -281,11 +312,18 @@ impl Settings {
                 .and_then(|b| serde_json::from_slice(b).ok())
                 .unwrap_or_default(),
         };
-        let state: State = std::fs::read(state_path())
-            .ok()
+        let state_file = std::fs::read(state_path()).ok();
+        // Someone who used the app before the welcome existed has a state
+        // file or an [app] table already, and doesn't need it.
+        let used_before = state_file.is_some() || legacy.is_some() || table.contains_key("app");
+        let state: State = state_file
             .or(legacy)
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        s.welcomed = state.welcomed.unwrap_or(used_before);
+        if !s.welcomed && !table.contains_key("app") {
+            s.language = system_language().code().to_string();
+        }
         s.project_names = state.project_names;
         s.labels = state.labels;
         s.remote_names = state.remote_names;
@@ -385,6 +423,7 @@ impl Settings {
             agents_by_recent: self.agents_by_recent,
             sidebar_tab: self.sidebar_tab,
             tab_order: self.tab_order.clone(),
+            welcomed: Some(self.welcomed),
         };
         let sp = state_path();
         if let Some(dir) = sp.parent() {

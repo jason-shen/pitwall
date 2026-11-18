@@ -15,6 +15,9 @@ mod fileicon;
 mod gitview;
 mod hosts;
 mod keys;
+mod tour;
+
+pub use tour::Onboard;
 
 use crate::app::{
     agent_kind, is_agent, item_project, project_item, task_dir, App, Child, CmdBar, Confirm,
@@ -285,6 +288,7 @@ pub fn draw(ui: &mut Ui, app: &mut App) {
     command_bar(&ctx, app, &mut acts);
     shortcuts_sheet(&ctx, app);
     settings_window(&ctx, app);
+    tour::draw(&ctx, app);
 
     for a in acts {
         apply(app, a);
@@ -345,7 +349,7 @@ fn project_color(root: &str) -> Color32 {
 
 fn shortcuts(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     // While Settings waits for new keys, every key goes there.
-    if app.capturing.is_some() {
+    if app.capturing.is_some() || app.onboard.is_some() {
         return;
     }
     let keys = app.settings.keys.clone();
@@ -650,7 +654,7 @@ fn project_tasks(app: &App, here: &str) -> Vec<String> {
 }
 
 fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
-    egui::Panel::bottom("side_foot")
+    let foot = egui::Panel::bottom("side_foot")
         .frame(Frame::new().inner_margin(Margin {
             left: 0,
             right: 0,
@@ -658,7 +662,8 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             bottom: 0,
         }))
         .show(ui, |ui| side_footer(ui, app, acts));
-    egui::Panel::bottom("side_agents")
+    tour::mark(ui.ctx(), tour::Spot::Footer, foot.response.rect);
+    let agents = egui::Panel::bottom("side_agents")
         .resizable(true)
         .default_size(280.0)
         .size_range(80.0..=700.0)
@@ -669,6 +674,7 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             bottom: 4,
         }))
         .show(ui, |ui| agents_section(ui, app, acts));
+    tour::mark(ui.ctx(), tour::Spot::Agents, agents.response.rect);
 
     egui::CentralPanel::default()
         .frame(Frame::new())
@@ -685,6 +691,7 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                 .fill(Color32::from_white_alpha(12))
                 .corner_radius(CornerRadius::same(8)),
             );
+            tour::mark(ui.ctx(), tour::Spot::Search, omni.rect);
             if omni.clicked() {
                 acts.push(Action::OpenBar(false));
             }
@@ -735,7 +742,7 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                 hosts::toolbar(ui, app, acts);
             }
             // Each tab keeps its own scroll position.
-            ScrollArea::vertical()
+            let list = ScrollArea::vertical()
                 .id_salt(("side", tab as u8))
                 .auto_shrink([false, false])
                 .show(ui, |ui| match tab {
@@ -743,6 +750,9 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                     SidebarTab::Remotes => hosts::section(ui, app, acts),
                     SidebarTab::Keys => keys::section(ui, app, acts),
                 });
+            if tab == SidebarTab::Projects {
+                tour::mark(ui.ctx(), tour::Spot::Projects, list.inner_rect);
+            }
         });
 }
 
@@ -789,6 +799,7 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         .values()
         .any(|t| t.host.is_some() && !matches!(t.status, TaskStatus::Exited { .. }));
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+    tour::mark(ui.ctx(), tour::Spot::Tabs, rect);
     let p = ui.painter();
     p.rect_filled(rect, 8.0, Color32::from_white_alpha(10));
     let tabs = [
@@ -2308,6 +2319,8 @@ fn stage(ui: &mut Ui, app: &mut App, accent: Color32, acts: &mut Vec<Action>) {
         )
     };
     tab_strip(ui, app, strip, acts);
+    tour::mark(ui.ctx(), tour::Spot::Strip, strip);
+    tour::mark(ui.ctx(), tour::Spot::Stage, rect);
     if app.cards.is_empty() {
         let mut c = ui.new_child(egui::UiBuilder::new().id_salt("welcome").max_rect(rect));
         welcome(&mut c, app, acts);

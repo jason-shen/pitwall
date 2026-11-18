@@ -591,6 +591,8 @@ pub struct App {
     /// Settings → Shortcuts is waiting for keys for this command.
     pub capturing: Option<&'static str>,
     pub settings_ui: Option<SettingsUi>,
+    /// The first-run welcome and tour, while one is showing.
+    pub onboard: Option<crate::views::Onboard>,
     fonts: FontSet,
     applied_font: Option<(Option<TermFont>, u16, u16, crate::i18n::Lang)>,
     pub font_error: Option<String>,
@@ -664,6 +666,7 @@ impl App {
         let font_error = fonts
             .apply(&ctx, want.0.as_ref(), want.1, want.2, want.3)
             .err();
+        let onboard = (!settings.welcomed).then_some(crate::views::Onboard::Language);
         App {
             rt,
             client: None,
@@ -748,6 +751,7 @@ impl App {
             capturing: None,
             settings,
             settings_ui: None,
+            onboard,
             fonts,
             applied_font: Some(want),
             font_error,

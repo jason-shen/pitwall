@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, welcome, tour:<n>, lang:<code>, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -56,6 +56,10 @@ impl DevShot {
         }
         if Instant::now() < self.at || app.client.is_none() {
             return;
+        }
+        // A fresh PITWALL_HOME is a first run; only the welcome steps want it.
+        if !self.primed && !self.steps.iter().any(|s| s == "welcome" || s.starts_with("tour:")) {
+            app.onboard = None;
         }
         // The app opens nothing at launch; most steps want a terminal to act
         // on. A first step of `empty` shoots the app as it starts.
@@ -222,6 +226,10 @@ impl DevShot {
                         f.name_edited = true;
                     }
                 }
+                Some(("tour", n)) => {
+                    app.onboard = Some(crate::views::Onboard::Tour(n.parse().unwrap_or(0)))
+                }
+                Some(("lang", code)) => app.settings.language = code.to_string(),
                 Some(("bar", q)) => {
                     app.bar = Some(crate::app::CmdBar {
                         query: q.to_string(),
@@ -229,6 +237,7 @@ impl DevShot {
                     })
                 }
                 _ => match step.as_str() {
+                    "welcome" => app.onboard = Some(crate::views::Onboard::Language),
                     "changes" => app.toggle_child(Child::Changes),
                     "files" => app.toggle_child(Child::Files),
                     "saveremote" => app.save_remote_form(false),
