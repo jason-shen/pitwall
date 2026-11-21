@@ -65,6 +65,9 @@ if [ "${SKIP_TESTS:-}" != 1 ]; then
 fi
 
 if [ "$next" != "$current" ]; then
+  files="Cargo.toml Cargo.lock website/index.html website/zh/index.html"
+  # The tree was clean, so a step failing here puts the files back as committed.
+  trap 'echo "bump: stopped; putting the files back" >&2; git checkout -- $files' EXIT
   # Only the [workspace.package] line starts a line with `version =`.
   sed -i.bak "s/^version = \"$current\"/version = \"$next\"/" Cargo.toml
   rm -f Cargo.toml.bak
@@ -74,8 +77,11 @@ if [ "$next" != "$current" ]; then
     sed -i.bak "s#releases/tag/v[^\"]*\">v[^<]*</a>#releases/tag/$tag\">$tag</a>#g" "$page"
     rm -f "$page.bak"
   done
-  git add Cargo.toml Cargo.lock website/index.html website/zh/index.html
+  # A build that doesn't take the new version stops here, not in CI.
+  cargo metadata --format-version 1 --locked >/dev/null
+  git add $files
   git commit --quiet -m "Release $tag"
+  trap - EXIT
 fi
 git tag -a "$tag" -m "Pitwall $next"
 # Atomic, so the tag never lands without the commit that it names.

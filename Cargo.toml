@@ -8,6 +8,10 @@ edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.80"
 
+# Path only: a version here would have to be bumped with every release.
+[workspace.dependencies]
+pitwall-core = { path = "crates/pitwall-core" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

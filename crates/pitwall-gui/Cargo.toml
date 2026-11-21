@@ -11,7 +11,7 @@ eframe = { version = "0.37.0", default-features = false, features = ["default_fo
 # Starship's default symbols (📦, 🦀, 🐍) and agents' output use emoji, which
 # no Nerd Font has; this bundles Noto Emoji, as keel does.
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
-pitwall-core = { version = "0.1.0", path = "../pitwall-core" }
+pitwall-core.workspace = true
 # config.toml: read with toml, rewritten with toml_edit so the user's
 # comments and the daemon's sections survive the app saving its own.
 toml = "1.2"
