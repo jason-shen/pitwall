@@ -89,12 +89,7 @@ pub fn draw_box(painter: &egui::Painter, ch: char, r: Rect, color: Color32) -> b
             return true;
         }
         '░' | '▒' | '▓' => {
-            let a = match ch {
-                '░' => 0.25,
-                '▒' => 0.5,
-                _ => 0.75,
-            };
-            painter.rect_filled(r, 0.0, color.gamma_multiply(a));
+            shade(painter, ch, r, color);
             return true;
         }
         _ => return false,
@@ -111,6 +106,49 @@ pub fn draw_box(painter: &egui::Painter, ch: char, r: Rect, color: Color32) -> b
     seg(pos2(r.min.x, c.y), c, l);
     seg(c, pos2(r.max.x, c.y), rt);
     true
+}
+
+/// ░ ▒ ▓ as a dot pattern on the screen's own pixels, as keel draws them,
+/// rather than a flat tint that reads as a dimmer block. The pattern is
+/// laid on the whole window's pixel grid, so a run of cells tiles without
+/// seams; each cell covers the pixels from its left/top edge up to, not
+/// including, its right/bottom one.
+fn shade(painter: &egui::Painter, ch: char, r: Rect, color: Color32) {
+    let ppp = painter.ctx().pixels_per_point();
+    let px = 1.0 / ppp;
+    let (x0, x1) = ((r.min.x * ppp).ceil() as i64, (r.max.x * ppp).ceil() as i64);
+    let (y0, y1) = ((r.min.y * ppp).ceil() as i64, (r.max.y * ppp).ceil() as i64);
+    let lit = |x: i64, y: i64| {
+        let (odd_x, odd_y) = (x.rem_euclid(2) == 1, y.rem_euclid(2) == 1);
+        match ch {
+            '░' => !odd_x && !odd_y,
+            '▒' => odd_x == odd_y,
+            _ => !(odd_x && odd_y),
+        }
+    };
+    let mut mesh = egui::Mesh::default();
+    for y in y0..y1 {
+        // Runs of lit pixels, so a full row of ▓ is one quad, not dozens.
+        let mut x = x0;
+        while x < x1 {
+            if !lit(x, y) {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < x1 && lit(x, y) {
+                x += 1;
+            }
+            mesh.add_colored_rect(
+                Rect::from_min_max(
+                    pos2(start as f32 * px, y as f32 * px),
+                    pos2(x as f32 * px, (y + 1) as f32 * px),
+                ),
+                color,
+            );
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 pub fn cell_size(ui: &Ui, font: &FontId, line_height: f32) -> Vec2 {

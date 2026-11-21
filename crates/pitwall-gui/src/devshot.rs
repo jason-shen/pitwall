@@ -261,6 +261,7 @@ impl DevShot {
                         app.bar = None;
                         app.new_form = None;
                         app.settings_ui = None;
+                        app.renaming = None;
                         if let Some(id) = app.target().map(|t| t.item.clone()) {
                             app.open_item(&id);
                         }
