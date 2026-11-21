@@ -838,9 +838,21 @@ impl App {
     pub fn changes_item(&self, id: &str) -> String {
         match self.tasks.get(id) {
             Some(t) if t.agent != "shell" => id.to_string(),
+            // A terminal that's in a repo of its own inside the project (a
+            // nested clone, a submodule) shows that repo, not the project's.
+            Some(t) if self.in_own_repo(t) => id.to_string(),
             Some(t) => project_item(&self.project_of(t)),
             None => id.to_string(),
         }
+    }
+
+    /// The terminal is in a git repo other than its project's folder.
+    pub fn in_own_repo(&self, t: &TaskInfo) -> bool {
+        let Some(repo) = repo_root_cached(&task_dir(t)) else {
+            return false;
+        };
+        let project = PathBuf::from(self.project_of(t));
+        repo != project && repo != project.canonicalize().unwrap_or_default()
     }
 
     pub fn set_ctx_task(&mut self, id: Option<String>) {
@@ -2552,6 +2564,17 @@ impl App {
             .unwrap_or_else(|| self.ctx_dir())
     }
 
+    /// Where a new agent starts: the repo the focused terminal is in when
+    /// that's one nested inside the project, else the project's folder.
+    fn agent_dir(&self) -> PathBuf {
+        self.ctx_task
+            .as_ref()
+            .and_then(|id| self.tasks.get(id))
+            .filter(|t| t.agent == "shell" && t.worktree.is_none() && self.in_own_repo(t))
+            .and_then(|t| repo_root_cached(&task_dir(t)))
+            .unwrap_or_else(|| self.project_dir())
+    }
+
     /// Ask for a new agent's name (and task), suggested from `task`.
     pub fn open_new_agent(&mut self, task: &str) {
         self.bar = None;
@@ -2562,7 +2585,7 @@ impl App {
             task: task.to_string(),
             agent: self.settings.default_agent.clone(),
             worktree: self.settings.worktree,
-            dir: self.project_dir().display().to_string(),
+            dir: self.agent_dir().display().to_string(),
             focus_set: false,
             template: 0,
             brief: None,
@@ -4012,6 +4035,30 @@ pub fn task_dir(t: &TaskInfo) -> PathBuf {
 
 /// `is_dir`, remembered for a couple of seconds: the sidebar asks for every
 /// task on every frame.
+/// The repo `dir` is in: the nearest folder above it with a `.git` (a
+/// folder, or the file a submodule or worktree has). Found on disk rather
+/// than by running git, since the tab strip asks every frame; remembered
+/// for a couple of seconds.
+pub fn repo_root_cached(dir: &Path) -> Option<PathBuf> {
+    thread_local! {
+        static SEEN: std::cell::RefCell<HashMap<PathBuf, (Instant, Option<PathBuf>)>> = Default::default();
+    }
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some((at, v)) = seen.get(dir) {
+            if at.elapsed() < Duration::from_secs(2) {
+                return v.clone();
+            }
+        }
+        let v = dir.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf);
+        if seen.len() > 512 {
+            seen.clear();
+        }
+        seen.insert(dir.to_path_buf(), (Instant::now(), v.clone()));
+        v
+    })
+}
+
 fn is_dir_cached(p: &str) -> bool {
     thread_local! {
         static SEEN: std::cell::RefCell<HashMap<String, (Instant, bool)>> = Default::default();
@@ -4245,6 +4292,26 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod tests {
+    use super::repo_root_cached;
+
+    #[test]
+    fn a_nested_repo_is_found_before_the_one_around_it() {
+        let d = std::env::temp_dir().join(format!("pitwall-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        std::fs::create_dir_all(d.join("plain/deeper")).unwrap();
+        std::fs::create_dir_all(d.join("vendor/lib/.git")).unwrap();
+        std::fs::create_dir_all(d.join("vendor/lib/src")).unwrap();
+        // A submodule's .git is a file.
+        std::fs::create_dir_all(d.join("mods/sub")).unwrap();
+        std::fs::write(d.join("mods/sub/.git"), "gitdir: ../../.git/modules/sub\n").unwrap();
+
+        assert_eq!(repo_root_cached(&d.join("plain/deeper")), Some(d.clone()));
+        assert_eq!(repo_root_cached(&d.join("vendor/lib/src")), Some(d.join("vendor/lib")));
+        assert_eq!(repo_root_cached(&d.join("mods/sub")), Some(d.join("mods/sub")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn a_synchronized_update_is_drawn_whole() {
         let mut t = super::TermState::new("sync", 3, 20);
