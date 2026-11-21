@@ -7,9 +7,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use pitwall_core::proto::{ClientFrame, Push, Request, Response, ServerFrame};
-use pitwall_core::{hosts, policy, wire};
+use pitwall_core::{hosts, paths, policy, wire};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -136,6 +136,25 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
         }
         Request::Remove { id, prune_worktree } => {
             d.remove_task(&id, prune_worktree).await?;
+            Response::Ok
+        }
+
+        Request::LendWorktree { id, dir } => {
+            let t = d.task(&id)?;
+            if t.agent != "shell" || t.host.is_some() {
+                bail!("{id} isn't a terminal");
+            }
+            let dir = paths::expand(&dir);
+            let t2 = t.clone();
+            let path = tokio::task::spawn_blocking(move || t2.lend_worktree(&dir)).await??;
+            d.saved_changed(&t);
+            Response::Text(path.display().to_string())
+        }
+        Request::ReturnWorktree { id } => {
+            let t = d.task(&id)?;
+            let t2 = t.clone();
+            tokio::task::spawn_blocking(move || t2.return_worktree()).await??;
+            d.saved_changed(&t);
             Response::Ok
         }
 

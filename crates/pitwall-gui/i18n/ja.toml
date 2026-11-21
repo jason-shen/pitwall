@@ -541,3 +541,12 @@
 "Settings and shortcuts" = "設定とショートカット"
 "Language, fonts, colours and the editor are in Settings ({settings}); Shortcuts ({shortcuts}) lists every key. The green dot is the daemon, which keeps agents running after you close the window." = "言語、フォント、配色、エディタは設定（{settings}）にあります。ショートカット（{shortcuts}）ではすべてのキーを確認できます。緑の点はデーモンで、ウィンドウを閉じてもエージェントを動かし続けます。"
 "No projects yet. + opens a folder; agents and terminals you start show up here." = "プロジェクトはまだありません。+ でフォルダを開くと、起動したエージェントとターミナルがここに表示されます。"
+
+# Agents started in terminals get worktrees.
+"• Merge {branch} into" = "• {branch} のマージ先"
+"{id}'s work is merged. Remove its worktree and branch?\n\nThe terminal stays open; the next agent you start in it gets a fresh worktree." = "{id} の作業はマージされました。ワークツリーとブランチを削除しますか？\n\nターミナルは開いたままです。次にそこで起動するエージェントには新しいワークツリーが用意されます。"
+"removed {id}'s worktree" = "{id} のワークツリーを削除しました"
+"{name} is done: review its changes, then merge them" = "{name} が完了しました：変更をレビューしてからマージしてください"
+"Commit the agent's work and merge it into a branch you pick (m)" = "エージェントの作業をコミットし、選んだブランチにマージ (m)"
+"Remove its worktree…" = "ワークツリーを削除…"
+"Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "{id} のワークツリーを削除しますか？マージ済みのブランチは一緒に削除され、未マージのものは残ります。"

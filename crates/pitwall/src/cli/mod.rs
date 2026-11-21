@@ -1,6 +1,7 @@
 //! CLI client commands.
 
 mod attach;
+pub mod wrap;
 
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -707,6 +708,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
         | Cmd::Init { .. }
         | Cmd::Classify { .. }
         | Cmd::Hook { .. }
+        | Cmd::Wrap { .. }
         | Cmd::Guide => {
             unreachable!()
         }

@@ -14,7 +14,7 @@ pitwall puts that whole loop in one place:
 2. **Hand it to an agent.** Claude Code, Codex or another agent CLI starts on its own git worktree and branch, so agents in parallel never touch your checkout or each other's.
 3. **Watch them.** Every agent in every project is listed by what needs you: waiting on an approval, asking a question, done, working. Each row shows how far through its brief it is and how much it has changed. Commands that change things wait for your approval; destructive ones are refused.
 4. **Review.** Read the agent's diff against where it started, comment on lines and send the comments back to it as one message, or throw away a hunk. Every step it took is a snapshot you can revert to.
-5. **Accept.** One step commits what it left, merges its branch into the one it came from and offers to clean up its worktree.
+5. **Accept.** One step commits what it left, merges its branch into the branch you pick (the one it came from, by default) and offers to clean up its worktree.
 
 It's also a real terminal, drawn on the GPU, so the agents run in their own TUIs and your shells, vim and lazygit sit beside them in tiled cards. A background daemon owns every terminal: close the window and everything keeps running; restart the machine and your agents come back in their folders and pick up their sessions.
 
@@ -61,7 +61,7 @@ The daemon starts on its own the first time anything needs it. Opened from Spotl
 3. **Hand it off.** **Hand to agent →** (⌘⌥↵) opens the New agent form with the brief as the task. Or skip the brief: **+ Agent** (⌘⇧N), or type a task into the command bar (⌘⇧P) and press Enter.
 4. **Watch it.** It appears under AGENTS with its status, what it's doing and how far through the brief it is. When it needs you (an approval, a question, a finished turn), it moves to the top, the project shows "1 waiting", and the dock bounces if pitwall is in the background. ⌘⇧A jumps to the next one that needs you.
 5. **Review it.** **Review →** on the brief, or **± Changes** on the agent: its diff against where it started. `r` comments on a line, **send to agent** hands your comments back, `d` throws away a hunk, and ⌘⇧U shows every step it took, to revert to any of them.
-6. **Accept it.** `m` commits what it left, merges its branch into yours and offers to remove the worktree.
+6. **Accept it.** `m` commits what it left, merges its branch into the branch you pick and offers to remove the worktree.
 
 ## The window
 
@@ -95,6 +95,8 @@ Terminals follow `cd`. A terminal that moves into another repo moves to that pro
 ### Agents
 
 AGENTS lists the agents in every project, one row each, as herdr does: a status dot, `project · name`, and the title the agent gives its terminal (Claude Code's summary of the session), or what it's waiting on. Sort by **priority** (approve, blocked, done, working, idle) or **recent**. Clicking an agent switches to its project and shows it. An agent with its own worktree shows how much it has changed so far (files, lines added and removed), so you can tell finished agents apart without opening each. An agent handed a brief shows the brief's title and how many of its steps are ticked. Right-click for its Changes, its brief, Accept, kill or remove.
+
+An agent you start yourself by typing `claude`, `codex` or another agent CLI into a pitwall terminal gets a worktree too, as one started with **+ Agent** does. Inside a repo it starts in the terminal's own worktree, on a `pitwall/term-N` branch, in the same subfolder you were in; the shell stays where it was. Quit the agent and its changes open for review, with Accept over them; start another in the same terminal before accepting and it carries on in the same worktree. After Accept, pitwall offers to remove the worktree, and the terminal stays open. `PITWALL_NO_WORKTREE=1 claude` runs it in place, and turning off worktrees for new agents in Settings does the same for these. This works by putting small `claude`, `codex`, … scripts first on the terminal's PATH (in `~/.pitwall/shims`); for zsh, bash and fish, pitwall loads your own startup files and then puts them back in front, so a `~/.zshrc` that adds `~/.local/bin` doesn't hide them.
 
 Any terminal running claude, codex, opencode, gemini, aider, goose, amp and other agent CLIs counts as an agent, whether pitwall started it or you typed it. When one is blocked on a numbered prompt, its choices show as buttons under it in the tree, so you can answer without opening it.
 
@@ -134,7 +136,7 @@ Each row shows the name, the service and the last four characters. **Reveal** an
 
 lazygit's layout and keys for the project's repo: Status, Changed files, Branches, Commits and (for agents) the undo history, with the diff beside them. Stage and unstage whole files or single hunks, discard, commit, check out a branch, and double-click a diff line to open the file there. An agent with its own worktree has its own Changes, with **vs base** (everything the agent did on its branch).
 
-Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch it forked from. Your checkout has to be on that branch, clean, and without untracked files where the agent's work would land; Accept checks all of that before it commits anything. Afterwards pitwall offers to remove the agent, its worktree, its snapshots and (now that it's merged) its branch. To throw away part of what it did first, **discard hunk** (`d`) undoes one hunk in its worktree, in vs base as well as in Unstaged. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
+Reviewing an agent's work: on any line of its diff, **💬 comment** (`r`) writes a review comment. Comments collect per agent, marked in the diff, and **send N to agent** types them all into its prompt as one message, so it can address them in its next turn. When you're happy, **✓ accept** (`m`) commits whatever it left uncommitted in its worktree, with a message you can edit (the brief's title by default), and merges its branch into the branch you pick: the one it forked from, unless you choose another. The merge happens wherever that branch is checked out, which has to be clean and without untracked files where the agent's work would land; Accept checks all of that before it commits anything. A branch that isn't checked out anywhere is merged off to the side, so your checkout stays on whatever it's on; if that merge conflicts, nothing is merged and Accept says which files clash. When an agent on its own branch is done (it finished its brief, it quit, or its process ended), pitwall opens its changes with Accept over them. Afterwards pitwall offers to remove the agent, its worktree, its snapshots and (now that it's merged) its branch. To throw away part of what it did first, **discard hunk** (`d`) undoes one hunk in its worktree, in vs base as well as in Unstaged. Git work runs in the background, so a slow pre-commit hook doesn't freeze the window.
 
 ### Files and editors
 
@@ -341,7 +343,7 @@ scripts/         the app bundle's Info.plist, the Homebrew cask template, macos-
 Makefile         build, install and publish (`make help`)
 ```
 
-`cargo test --workspace` runs 102 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts, secret redaction, `~/.ssh/config` hosts, agents spotted in remote sessions, and API key encryption.
+`cargo test --workspace` runs 106 tests: the command policy (including compound commands against allow rules), config merging, snapshots (dedupe, diff, revert, undoing a revert), git (hunks, commit, merge), the editor (selection, its Markdown keys and colouring), accepting an agent's work into a real worktree (and into a branch nobody has checked out), a terminal lending its agent a worktree, Codex and Claude hook payloads, the file tree, terminal rendering and key encoding, colour emoji, card layout, agent messages, briefs and their steps, Markdown scroll sync, shortcuts, secret redaction, `~/.ssh/config` hosts, agents spotted in remote sessions, and API key encryption.
 
 ## Releasing
 

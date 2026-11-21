@@ -218,6 +218,18 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
     }
 }
 
+/// A true/false setting from the app's `[app]` table, which the daemon's
+/// Config doesn't read.
+pub fn app_flag(key: &str) -> Option<bool> {
+    std::fs::read_to_string(crate::paths::config())
+        .ok()?
+        .parse::<toml::Table>()
+        .ok()?
+        .get("app")?
+        .get(key)?
+        .as_bool()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

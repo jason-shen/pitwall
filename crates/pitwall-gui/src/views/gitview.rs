@@ -77,7 +77,7 @@ pub(super) fn body(
         return;
     };
     let id = item.id.clone();
-    let is_agent = app.tasks.get(&id).is_some_and(|t| t.agent != "shell");
+    let is_agent = app.tasks.get(&id).is_some_and(|t| t.agent != "shell" || t.worktree.is_some());
     if app.ctx_root.is_none() {
         ui.painter().text(
             body.center(),
@@ -470,7 +470,7 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
             && ui
                 .small_button(tr("✓ accept…"))
                 .on_hover_text(tr(
-                    "Commit the agent's work and merge it into the branch it came from (m)",
+                    "Commit the agent's work and merge it into a branch you pick (m)",
                 ))
                 .clicked()
         {
@@ -490,7 +490,7 @@ fn main_panel(
     let cur = app.cur;
     let active = app.tabs[cur].git.panel == Panel::Main;
     let id = &app.tabs[cur].id;
-    let is_agent = app.tasks.get(id).is_some_and(|t| t.agent != "shell");
+    let is_agent = app.tasks.get(id).is_some_and(|t| t.agent != "shell" || t.worktree.is_some());
     let remarks = app.remarks.get(id).cloned().unwrap_or_default();
     let font = theme::term_font(app.settings.font_size - 0.5);
     let gv = &mut app.tabs[cur].git;

@@ -541,3 +541,12 @@
 "Settings and shortcuts" = "设置和快捷键"
 "Language, fonts, colours and the editor are in Settings ({settings}); Shortcuts ({shortcuts}) lists every key. The green dot is the daemon, which keeps agents running after you close the window." = "语言、字体、配色和编辑器都在设置里（{settings}）；快捷键（{shortcuts}）列出所有按键。绿点表示守护进程，关闭窗口后它仍让智能体继续运行。"
 "No projects yet. + opens a folder; agents and terminals you start show up here." = "还没有项目。+ 打开一个文件夹；你启动的智能体和终端会显示在这里。"
+
+# Agents started in terminals get worktrees.
+"• Merge {branch} into" = "• 将 {branch} 合并到"
+"{id}'s work is merged. Remove its worktree and branch?\n\nThe terminal stays open; the next agent you start in it gets a fresh worktree." = "{id} 的工作已合并。要移除它的工作树和分支吗？\n\n终端会保持打开；之后在里面启动的智能体会得到一个新的工作树。"
+"removed {id}'s worktree" = "已移除 {id} 的工作树"
+"{name} is done: review its changes, then merge them" = "{name} 已完成：先审查它的更改，再合并"
+"Commit the agent's work and merge it into a branch you pick (m)" = "提交智能体的工作，并合并到你选择的分支 (m)"
+"Remove its worktree…" = "移除它的工作树…"
+"Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "移除 {id} 的工作树？已合并的分支会一并删除；未合并的会保留。"

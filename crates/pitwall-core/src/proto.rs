@@ -112,6 +112,10 @@ pub struct TaskInfo {
     /// from the host list.
     #[serde(default)]
     pub host: Option<String>,
+    /// The worktree its work is in: an agent's cwd, or the one a terminal
+    /// lent to an agent started in it.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -278,6 +282,17 @@ pub enum Request {
     Remove {
         id: String,
         prune_worktree: bool,
+    },
+    /// A terminal's own worktree for an agent about to start in it, made
+    /// from the repo `dir` is in. The one it already has comes back again.
+    /// Answers `Text` with the worktree's path.
+    LendWorktree {
+        id: String,
+        dir: String,
+    },
+    /// Remove a terminal's worktree, and its branch once merged.
+    ReturnWorktree {
+        id: String,
     },
 
     Attach {

@@ -58,6 +58,15 @@ pub fn migrate_config() {
 pub fn worktrees() -> PathBuf {
     home().join("worktrees")
 }
+/// `claude`, `codex` and the rest, each a script running `pitwall wrap`;
+/// first on PATH in pitwall's terminals.
+pub fn shims() -> PathBuf {
+    home().join("shims")
+}
+/// Startup files that load yours and then put the shims back in front.
+pub fn shell_init() -> PathBuf {
+    home().join("shell")
+}
 pub fn snapshots() -> PathBuf {
     home().join("snapshots")
 }

@@ -163,6 +163,16 @@ enum Cmd {
     /// Hook entry point used by agents (e.g. `pitwall hook claude`). Reads JSON on stdin.
     #[command(hide = true)]
     Hook { kind: String },
+
+    /// What `claude` and the other agent CLIs run in a pitwall terminal: the
+    /// real one, in the terminal's own worktree when you're in a repo.
+    /// Its own --help would hide the agent's.
+    #[command(hide = true, disable_help_flag = true)]
+    Wrap {
+        program: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() {
@@ -189,6 +199,7 @@ fn main() {
                 daemon::run().await
             }
             Cmd::Hook { kind } => cli::hook(&kind).await,
+            Cmd::Wrap { program, args } => cli::wrap::run(&program, &args).await,
             Cmd::Init { force } => cli::init(force),
             Cmd::Classify { command } => cli::classify(&command.join(" ")),
             Cmd::Stop => cli::stop().await,

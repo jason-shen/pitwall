@@ -541,3 +541,12 @@
 "Settings and shortcuts" = "설정과 단축키"
 "Language, fonts, colours and the editor are in Settings ({settings}); Shortcuts ({shortcuts}) lists every key. The green dot is the daemon, which keeps agents running after you close the window." = "언어, 글꼴, 색상, 편집기는 설정({settings})에 있고, 단축키({shortcuts})에서 모든 키를 볼 수 있습니다. 초록 점은 데몬으로, 창을 닫아도 에이전트가 계속 실행되게 합니다."
 "No projects yet. + opens a folder; agents and terminals you start show up here." = "아직 프로젝트가 없습니다. +로 폴더를 열면, 시작한 에이전트와 터미널이 여기에 나타납니다."
+
+# Agents started in terminals get worktrees.
+"• Merge {branch} into" = "• {branch}을(를) 병합할 브랜치"
+"{id}'s work is merged. Remove its worktree and branch?\n\nThe terminal stays open; the next agent you start in it gets a fresh worktree." = "{id}의 작업이 병합되었습니다. 워크트리와 브랜치를 삭제할까요?\n\n터미널은 열린 채로 남고, 다음에 그 안에서 시작하는 에이전트는 새 워크트리를 받습니다."
+"removed {id}'s worktree" = "{id}의 워크트리를 삭제했습니다"
+"{name} is done: review its changes, then merge them" = "{name} 완료: 변경 사항을 검토한 뒤 병합하세요"
+"Commit the agent's work and merge it into a branch you pick (m)" = "에이전트의 작업을 커밋하고 선택한 브랜치에 병합 (m)"
+"Remove its worktree…" = "워크트리 삭제…"
+"Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "{id}의 워크트리를 삭제할까요? 병합된 브랜치는 함께 삭제되고, 병합되지 않은 브랜치는 남습니다."

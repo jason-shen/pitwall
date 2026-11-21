@@ -541,3 +541,12 @@
 "Settings and shortcuts" = "Réglages et raccourcis"
 "Language, fonts, colours and the editor are in Settings ({settings}); Shortcuts ({shortcuts}) lists every key. The green dot is the daemon, which keeps agents running after you close the window." = "Langue, polices, couleurs et éditeur sont dans les Réglages ({settings}) ; Raccourcis ({shortcuts}) liste toutes les touches. Le point vert est le daemon, qui fait tourner les agents même fenêtre fermée."
 "No projects yet. + opens a folder; agents and terminals you start show up here." = "Pas encore de projet. + ouvre un dossier ; les agents et terminaux que vous lancez apparaissent ici."
+
+# Agents started in terminals get worktrees.
+"• Merge {branch} into" = "• Fusionner {branch} dans"
+"{id}'s work is merged. Remove its worktree and branch?\n\nThe terminal stays open; the next agent you start in it gets a fresh worktree." = "Le travail de {id} est fusionné. Supprimer son worktree et sa branche ?\n\nLe terminal reste ouvert ; le prochain agent que vous y lancez aura un nouveau worktree."
+"removed {id}'s worktree" = "worktree de {id} supprimé"
+"{name} is done: review its changes, then merge them" = "{name} a terminé : relisez ses modifications, puis fusionnez-les"
+"Commit the agent's work and merge it into a branch you pick (m)" = "Valider le travail de l'agent et le fusionner dans la branche de votre choix (m)"
+"Remove its worktree…" = "Supprimer son worktree…"
+"Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "Supprimer le worktree de {id} ? Sa branche part aussi si elle est fusionnée ; sinon elle est gardée."

@@ -80,6 +80,12 @@ impl Daemon {
         self.emit(Push::TaskUpdated(t.info()));
     }
 
+    /// A task's place changed: tell the windows, and keep it for a restart.
+    pub fn saved_changed(&self, t: &Task) {
+        self.emit_task(t);
+        self.save();
+    }
+
     /// Look up by exact id, then by unique prefix.
     pub fn task(&self, id: &str) -> Result<Arc<Task>> {
         let tasks = self.tasks.lock().unwrap();
@@ -393,12 +399,13 @@ impl Daemon {
         } else {
             self.task(id)
         };
-        let (id, place) = match found {
+        let (id, place, lent) = match found {
             Ok(t) => {
                 t.kill();
                 self.watchers.lock().unwrap().remove(&t.id);
                 self.tasks.lock().unwrap().remove(&t.id);
-                (t.id.clone(), t.saved().place)
+                let s = t.saved();
+                (s.id, s.place, s.lent)
             }
             // One that couldn't be restored: there's no process, just the entry.
             Err(e) => {
@@ -407,12 +414,14 @@ impl Daemon {
                     return Err(e);
                 };
                 let s = kept.remove(i);
-                (s.id, s.place)
+                (s.id, s.place, s.lent)
             }
         };
         self.save();
         let mut problem = None;
         if prune {
+            // A terminal's lent worktree goes the way an agent's own does.
+            let place = lent.unwrap_or(place);
             if let (Some(repo), Some(branch)) = (place.repo, place.branch) {
                 let cwd = place.cwd;
                 let r =
@@ -676,6 +685,49 @@ async fn socket_alive(p: &Path) -> bool {
     tokio::net::UnixStream::connect(p).await.is_ok()
 }
 
+/// One script per agent CLI, rewritten at every start since the path to
+/// this binary changes when the app is updated or moved.
+fn write_shims() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = paths::shims();
+    std::fs::create_dir_all(&dir)?;
+    let exe = std::env::current_exe()?;
+    // Single quotes, so a space or $ in the app's path stays literal.
+    let exe = format!("'{}'", exe.display().to_string().replace('\'', "'\\''"));
+    for name in pitwall_core::agents::AGENT_PROGRAMS {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nexec {exe} wrap {name} \"$@\"\n"))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let init = paths::shell_init();
+    std::fs::create_dir_all(init.join("zsh"))?;
+    std::fs::write(init.join("zsh/.zshenv"), ZSHENV)?;
+    std::fs::write(init.join("bashrc"), BASHRC)?;
+    Ok(())
+}
+
+// A ~/.zshrc that puts ~/.local/bin first (where Claude Code installs
+// itself) would hide the shims, so they go back in front before each
+// prompt. zsh reads each startup file from ZDOTDIR as it gets to it, so
+// putting yours back here means the rest load from where they always do.
+const ZSHENV: &str = r#"# Written by pitwall for its terminals.
+if [[ -n "$PITWALL_USER_ZDOTDIR" ]]; then ZDOTDIR="$PITWALL_USER_ZDOTDIR"; else unset ZDOTDIR; fi
+unset PITWALL_USER_ZDOTDIR
+[[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"
+_pitwall_shims() { [[ -n "$PITWALL_SHIMS" ]] && path=("$PITWALL_SHIMS" ${path:#$PITWALL_SHIMS}) }
+typeset -ga precmd_functions
+precmd_functions+=(_pitwall_shims)
+"#;
+
+const BASHRC: &str = r#"# Written by pitwall for its terminals.
+[ -f ~/.bashrc ] && . ~/.bashrc
+_pitwall_shims() {
+  [ -n "$PITWALL_SHIMS" ] || return
+  case ":$PATH:" in ":$PITWALL_SHIMS:"*) ;; *) PATH="$PITWALL_SHIMS:${PATH//$PITWALL_SHIMS:/}" ;; esac
+}
+PROMPT_COMMAND="_pitwall_shims${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+"#;
+
 pub async fn run() -> Result<()> {
     std::fs::create_dir_all(paths::home())?;
     let cfg = Config::load()?;
@@ -687,6 +739,9 @@ pub async fn run() -> Result<()> {
         let _ = std::fs::remove_file(&sock);
     }
 
+    if let Err(e) = write_shims() {
+        tracing::warn!("agents started in terminals won't get worktrees: {e:#}");
+    }
     let (snap_tx, snap_rx) = mpsc::unbounded_channel();
     let d = Arc::new(Daemon::new(cfg, snap_tx));
     tracing::info!(

@@ -86,6 +86,8 @@ enum Action {
     Kill(String),
     Remove(String),
     Accept,
+    /// Ask to remove the worktree a terminal lent its agent.
+    ReturnWorktree(String),
     Stage(String),
     Unstage(String),
     StageAll,
@@ -1921,6 +1923,10 @@ fn agent_row(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
             acts.push(Action::Accept);
             ui.close();
         }
+        if t.agent == "shell" && t.worktree.is_some() && ui.button(tr("Remove its worktree…")).clicked() {
+            acts.push(Action::ReturnWorktree(tid.clone()));
+            ui.close();
+        }
         auto_toggle(ui, t, acts);
         ui.separator();
         if t.agent == "shell" {
@@ -2095,6 +2101,10 @@ fn task_rows(ui: &mut Ui, app: &App, id: &str, acts: &mut Vec<Action>) {
         if t.branch.is_some() && ui.button(tr("Accept: commit and merge…")).clicked() {
             acts.push(Action::OpenTerm(tid.clone()));
             acts.push(Action::Accept);
+            ui.close();
+        }
+        if t.agent == "shell" && t.worktree.is_some() && ui.button(tr("Remove its worktree…")).clicked() {
+            acts.push(Action::ReturnWorktree(tid.clone()));
             ui.close();
         }
         auto_toggle(ui, t, acts);
@@ -4483,11 +4493,25 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
                     | Confirm::DeleteApiKey { .. }
                     | Confirm::ResetApiKeys { .. }
                     | Confirm::TrashFile { .. }
+                    | Confirm::ReturnWorktree { .. }
             );
         let mut answer: Option<bool> = None;
         let m = egui::Modal::new(Id::unique("confirm")).show(ctx, |ui| {
             ui.set_width(440.0);
             ui.label(RichText::new(text).size(14.0));
+            if let Some(Confirm::Accept { branch, target, branches, .. }) = app.confirm.as_mut() {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(trf!("• Merge {branch} into", branch = branch));
+                    egui::ComboBox::from_id_salt("accept-target")
+                        .selected_text(target.as_str())
+                        .show_ui(ui, |ui| {
+                            for b in branches.iter() {
+                                ui.selectable_value(target, b.clone(), b);
+                            }
+                        });
+                });
+            }
             if let Some(Confirm::Accept { message, .. }) = app.confirm.as_mut() {
                 ui.add_space(8.0);
                 ui.label(RichText::new(tr("Commit message")).small().color(MUTED));
@@ -5784,6 +5808,15 @@ fn apply(app: &mut App, a: Action) {
             app.confirm = Some(Confirm::Remove { id, prune, text });
         }
         Action::Accept => app.accept_prompt(),
+        Action::ReturnWorktree(id) => {
+            app.confirm = Some(Confirm::ReturnWorktree {
+                text: trf!(
+                    "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept.",
+                    id = id
+                ),
+                id,
+            });
+        }
         Action::Stage(p) => {
             app.git_op(move |d| git::stage_file(d, &p).map(|_| trf!("staged {file}", file = p)))
         }

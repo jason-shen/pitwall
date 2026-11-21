@@ -155,6 +155,9 @@ pub struct Task {
     pub snaps: Option<Store>,
     /// Auto mode: commands pitwall would ask about are approved without asking.
     pub auto: AtomicBool,
+    /// A terminal's worktree, made when an agent was started in it, so the
+    /// agent works on a branch of its own as one pitwall started would.
+    pub lent: Mutex<Option<Place>>,
 }
 
 pub fn slug(s: &str) -> String {
@@ -201,7 +204,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// Create `pitwall/<id>` branch + worktree under ~/.pitwall/worktrees.
-fn create_worktree(
+pub fn create_worktree(
     repo: &Path,
     id: &str,
     base: Option<&str>,
@@ -584,6 +587,8 @@ pub struct Saved {
     pub auto: bool,
     #[serde(default)]
     pub host: Option<String>,
+    #[serde(default)]
+    pub lent: Option<Place>,
     pub created_unix: i64,
 }
 
@@ -616,6 +621,12 @@ impl Saved {
             turn_done: false,
             auto: self.auto,
             host: self.host.clone(),
+            worktree: self
+                .lent
+                .as_ref()
+                .map(|l| &l.cwd)
+                .or(self.place.branch.as_ref().map(|_| &self.place.cwd))
+                .map(|p| p.display().to_string()),
         }
     }
 }
@@ -702,6 +713,8 @@ impl Task {
             st.turn_open = false;
         }
         t.auto.store(saved.auto, Ordering::Relaxed);
+        // A worktree removed by hand while the daemon was down isn't lent any more.
+        *t.lent.lock().unwrap() = saved.lent.filter(|l| l.cwd.is_dir());
         Ok(t)
     }
 
@@ -723,8 +736,55 @@ impl Task {
             had_turn: self.state.lock().unwrap().had_turn,
             auto: self.auto.load(Ordering::Relaxed),
             host: self.host.clone(),
+            lent: self.lent.lock().unwrap().clone(),
             created_unix: self.created_unix,
         }
+    }
+
+    /// The worktree for an agent starting in this terminal from `dir`: the
+    /// one it has, or a new branch off whatever the repo has checked out.
+    pub fn lend_worktree(&self, dir: &Path) -> Result<PathBuf> {
+        let mut lent = self.lent.lock().unwrap();
+        if let Some(l) = lent.as_ref().filter(|l| l.cwd.is_dir()) {
+            let root = git(dir, &["rev-parse", "--show-toplevel"]).ok().map(PathBuf::from);
+            if root.as_ref() == l.repo.as_ref() || dir.starts_with(&l.cwd) {
+                return Ok(l.cwd.clone());
+            }
+            bail!(
+                "{} already has a worktree for {}; accept or remove it first",
+                self.id,
+                l.repo.as_deref().unwrap_or(Path::new("?")).display()
+            );
+        }
+        let (root, path, branch, base, base_branch) = create_worktree(dir, &self.id, None)?;
+        *lent = Some(Place {
+            cwd: path.clone(),
+            repo: Some(root),
+            branch: Some(branch),
+            base: Some(base),
+            base_branch,
+        });
+        Ok(path)
+    }
+
+    /// Remove the lent worktree. Its branch goes only if it's merged, so
+    /// work that never made it back is still there to find.
+    pub fn return_worktree(&self) -> Result<()> {
+        let Some(l) = self.lent.lock().unwrap().clone() else {
+            bail!("{} has no worktree", self.id);
+        };
+        if self.live_cwd().is_some_and(|c| c.starts_with(&l.cwd)) {
+            bail!("{} is still in its worktree; quit the agent or cd out first", self.id);
+        }
+        if let (Some(repo), Some(branch)) = (&l.repo, &l.branch) {
+            if l.cwd.is_dir() {
+                remove_branch(repo, &l.cwd, branch)?;
+            } else if let Err(e) = git(repo, &["branch", "-d", branch]) {
+                tracing::info!("kept {branch}: {e:#}");
+            }
+        }
+        *self.lent.lock().unwrap() = None;
+        Ok(())
     }
 
     fn start(
@@ -775,6 +835,26 @@ impl Task {
         };
         let mut cmd = CommandBuilder::new(&program);
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("pitwall"));
+        // An interactive terminal (not an editor card's `-c …`) loads your
+        // startup files through pitwall's, which keep the shims first.
+        let plain_terminal = req.agent == "shell" && req.host.is_none() && req.args.is_empty();
+        let shell = Path::new(&program)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if plain_terminal {
+            match shell.as_str() {
+                "bash" => {
+                    cmd.arg("--rcfile");
+                    cmd.arg(paths::shell_init().join("bashrc"));
+                }
+                "fish" => {
+                    cmd.arg("--init-command");
+                    cmd.arg("set -gx PATH $PITWALL_SHIMS (string match -v -- $PITWALL_SHIMS $PATH)");
+                }
+                _ => {}
+            }
+        }
         if agent_cfg.hooks.as_deref() == Some("claude") {
             cmd.arg("--settings");
             cmd.arg(claude_settings(&exe));
@@ -824,7 +904,23 @@ impl Task {
         // own folder first so agents can run `pitwall`.
         if let Some(dir) = exe.parent() {
             let path = pitwall_core::shellenv::path();
-            cmd.env("PATH", format!("{}:{path}", dir.display()));
+            // In a plain terminal, `claude` and friends go through pitwall
+            // first, which gives them a worktree (see `pitwall wrap`).
+            let shims = if req.agent == "shell" && req.host.is_none() {
+                format!("{}:", paths::shims().display())
+            } else {
+                String::new()
+            };
+            cmd.env("PATH", format!("{shims}{}:{path}", dir.display()));
+        }
+        if req.agent == "shell" && req.host.is_none() {
+            cmd.env("PITWALL_SHIMS", paths::shims());
+        }
+        if plain_terminal && shell == "zsh" {
+            if let Some(z) = std::env::var_os("ZDOTDIR") {
+                cmd.env("PITWALL_USER_ZDOTDIR", z);
+            }
+            cmd.env("ZDOTDIR", paths::shell_init().join("zsh"));
         }
         for (k, v) in &agent_cfg.env {
             cmd.env(k, v);
@@ -918,6 +1014,7 @@ impl Task {
             killer: Mutex::new(killer),
             snaps,
             auto: AtomicBool::new(false),
+            lent: Mutex::new(None),
         });
 
         // Weak, so the task can go; its sender going ends this thread.
@@ -1109,14 +1206,29 @@ impl Task {
         } else {
             (self.live_cwd(), self.foreground())
         };
+        // A terminal's lent worktree stands in for the one an agent is made with.
+        let lent = self.lent.lock().unwrap().clone();
+        let own = || Place {
+            cwd: self.cwd.clone(),
+            repo: self.repo.clone(),
+            branch: self.branch.clone(),
+            base: self.base.clone(),
+            base_branch: self.base_branch.clone(),
+        };
+        let place = lent.clone().unwrap_or_else(own);
+        let worktree = match (&lent, &self.branch) {
+            (Some(l), _) => Some(l.cwd.display().to_string()),
+            (None, Some(_)) => Some(self.cwd.display().to_string()),
+            (None, None) => None,
+        };
         TaskInfo {
             id: self.id.clone(),
             name: self.name.clone(),
             agent: self.agent.clone(),
             cwd: self.cwd.display().to_string(),
-            repo: self.repo.as_ref().map(|p| p.display().to_string()),
-            branch: self.branch.clone(),
-            base: self.base.clone(),
+            repo: place.repo.as_ref().map(|p| p.display().to_string()),
+            branch: place.branch.clone(),
+            base: place.base.clone(),
             status,
             attention,
             created_unix: self.created_unix,
@@ -1131,8 +1243,9 @@ impl Task {
             brief: self.brief.clone(),
             turn_done,
             auto: self.auto.load(Ordering::Relaxed),
-            base_branch: self.base_branch.clone(),
+            base_branch: place.base_branch,
             host: self.host.clone(),
+            worktree,
         }
     }
 
@@ -1542,6 +1655,61 @@ mod tests {
 #[cfg(test)]
 mod turn_tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_lends_its_agent_a_worktree_and_takes_it_back() {
+        let tmp = std::env::temp_dir().join(format!("pitwall-lend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        // The worktree goes under PITWALL_HOME, not your ~/.pitwall.
+        std::env::set_var("PITWALL_HOME", tmp.join("home"));
+        let g = |dir: &Path, args: &[&str]| git(dir, args).unwrap();
+        g(&repo, &["init", "-q", "-b", "main"]);
+        g(&repo, &["config", "user.email", "t@t"]);
+        g(&repo, &["config", "user.name", "t"]);
+        std::fs::write(repo.join("sub/a.txt"), "a\n").unwrap();
+        g(&repo, &["add", "."]);
+        g(&repo, &["commit", "-qm", "init"]);
+
+        let req = NewTask {
+            name: "term".into(),
+            agent: "shell".into(),
+            cwd: Some(repo.display().to_string()),
+            args: vec!["-c".into(), "sleep 30".into()],
+            ..Default::default()
+        };
+        let t = Task::spawn("term-9".into(), &req, &Config::default()).unwrap();
+        assert!(t.info().worktree.is_none());
+
+        let wt = t.lend_worktree(&repo.join("sub")).unwrap();
+        assert!(wt.join("sub/a.txt").is_file());
+        let info = t.info();
+        assert_eq!(info.branch.as_deref(), Some("pitwall/term-9"));
+        assert_eq!(info.base_branch.as_deref(), Some("main"));
+        assert_eq!(info.worktree.as_deref(), Some(wt.to_str().unwrap()));
+        assert_eq!(info.repo.map(PathBuf::from), repo.canonicalize().ok());
+        // A second agent in the same terminal picks up the same worktree.
+        assert_eq!(t.lend_worktree(&repo).unwrap(), wt);
+        // It's kept for a daemon restart.
+        assert_eq!(t.saved().lent.map(|l| l.cwd), Some(wt.clone()));
+
+        // Unmerged work: the worktree goes, the branch stays.
+        std::fs::write(wt.join("b.txt"), "b\n").unwrap();
+        g(&wt, &["add", "."]);
+        g(&wt, &["commit", "-qm", "agent"]);
+        t.return_worktree().unwrap();
+        assert!(!wt.exists());
+        assert!(t.info().worktree.is_none() && t.info().branch.is_none());
+        g(&repo, &["rev-parse", "--verify", "refs/heads/pitwall/term-9"]);
+        // The next one gets a fresh worktree beside the kept branch.
+        let again = t.lend_worktree(&repo).unwrap();
+        assert_ne!(again, wt);
+        assert_eq!(t.info().branch.as_deref(), Some("pitwall/term-9-2"));
+
+        t.kill();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     fn state() -> TaskState {
         TaskState {

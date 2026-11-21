@@ -380,7 +380,15 @@ pub enum Confirm {
         worktree: PathBuf,
         branch: String,
         target: String,
+        /// Where it can go, for the picker; `target` starts as the branch it
+        /// forked from.
+        branches: Vec<String>,
         message: String,
+        text: String,
+    },
+    /// Remove the worktree a terminal lent to an agent started in it.
+    ReturnWorktree {
+        id: String,
         text: String,
     },
     Revert {
@@ -449,6 +457,7 @@ impl Confirm {
             | Confirm::RemoveRemote { text, .. }
             | Confirm::DeleteApiKey { text, .. }
             | Confirm::ResetApiKeys { text }
+            | Confirm::ReturnWorktree { text, .. }
             | Confirm::RestartDaemon { text } => text,
         }
     }
@@ -1695,7 +1704,7 @@ impl App {
             item: id.to_string(),
             child: Child::Changes,
         });
-        self.notify(trf!("{name} finished its brief", name = name), false);
+        self.notify(trf!("{name} is done: review its changes, then merge them", name = name), false);
         self.accept_prompt();
     }
 
@@ -2247,6 +2256,27 @@ impl App {
                 if t.turn_done && !prev_done && t.branch.is_some() && brief_finished(&t) {
                     self.queue_review(&t.id);
                 }
+                // Done for good, on a branch of its own: the agent in a terminal
+                // quit back to the shell, or a started agent's process ended.
+                if let Some(o) = self.tasks.get(&t.id) {
+                    let exited = matches!(t.status, TaskStatus::Exited { .. });
+                    // Not a terminal being closed, nor everything ending
+                    // because the daemon is restarting.
+                    let quit = if t.agent == "shell" {
+                        is_agent(o) && !is_agent(&t) && !exited
+                    } else {
+                        !matches!(o.status, TaskStatus::Exited { .. })
+                            && exited
+                            && self.reconnecting.is_none()
+                    };
+                    // A new agent in the same terminal gets offered again when it quits.
+                    if t.agent == "shell" && !is_agent(o) && is_agent(&t) {
+                        self.reviewed.remove(&t.id);
+                    }
+                    if quit && has_work(&t) {
+                        self.queue_review(&t.id);
+                    }
+                }
                 // A plain shell that exited closes its tab, like any terminal app.
                 // An SSH session stays, so the reason it ended is still on screen.
                 if t.agent == "shell"
@@ -2463,6 +2493,18 @@ impl App {
                     // Don't replace a question that's already open; Remove
                     // is in the agent's menu for later.
                     Ok(m) if self.confirm.is_some() => self.notify(m, false),
+                    // A terminal stays; only the worktree it lent goes.
+                    Ok(m) if self.tasks.get(&id).is_some_and(|t| t.agent == "shell") => {
+                        self.notify(m, false);
+                        self.confirm = Some(Confirm::ReturnWorktree {
+                            text: trf!(
+                                "{id}'s work is merged. Remove its worktree and branch?\n\n\
+                                 The terminal stays open; the next agent you start in it gets a fresh worktree.",
+                                id = id
+                            ),
+                            id,
+                        });
+                    }
                     Ok(m) => {
                         self.notify(m, false);
                         self.confirm = Some(Confirm::Remove {
@@ -3381,12 +3423,22 @@ impl App {
             );
         };
         let root = PathBuf::from(root);
+        let worktree = PathBuf::from(t.worktree.clone().unwrap_or_else(|| t.cwd.clone()));
         let here = git::current_branch(&root);
+        // Other agents' branches aren't somewhere you'd merge into.
+        let branches: Vec<String> = git::branches(&root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|b| b.name)
+            .filter(|b| *b != branch && !b.starts_with("pitwall/"))
+            .collect();
         // Older daemons don't say; then it's whatever the main checkout is on.
         let target = t
             .base_branch
             .clone()
             .or_else(|| here.clone())
+            .filter(|b| branches.contains(b))
+            .or_else(|| branches.first().cloned())
             .unwrap_or_else(|| "HEAD".into());
         let message = t
             .brief
@@ -3400,7 +3452,7 @@ impl App {
         let mut text = trf!("Accept {id}?", id = t.id);
         // From the worktree itself: the Changes list may still be another
         // task's when this opens on its own after a brief.
-        let pending = git::status(Path::new(&t.cwd)).map_or(0, |c| c.len());
+        let pending = git::status(&worktree).map_or(0, |c| c.len());
         if pending > 0 {
             text.push_str("\n\n");
             text.push_str(&trf!(
@@ -3409,27 +3461,13 @@ impl App {
                 branch = branch
             ));
         }
-        text.push('\n');
-        text.push_str(&trf!(
-            "• Merge {branch} into {target} in {dir}",
-            branch = branch,
-            target = target,
-            dir = root.display()
-        ));
-        if here.as_deref() != Some(target.as_str()) {
-            text.push_str("\n\n");
-            text.push_str(&trf!(
-                "Your checkout is on {here}, not {target}. Check out {target} first.",
-                here = here.as_deref().unwrap_or(tr("a detached HEAD")),
-                target = target
-            ));
-        }
         self.confirm = Some(Confirm::Accept {
             id: t.id.clone(),
             root,
-            worktree: PathBuf::from(&t.cwd),
+            worktree,
             branch,
             target,
+            branches,
             message,
             text,
         });
@@ -3554,6 +3592,15 @@ impl App {
                     },
                     move |result| Reply::Accepted { id: id2, result },
                 );
+            }
+            Confirm::ReturnWorktree { id, .. } => {
+                let id2 = id.clone();
+                self.call(Request::ReturnWorktree { id }, move |r| {
+                    Some(match r {
+                        Ok(_) => Reply::Notice(trf!("removed {id}'s worktree", id = id2), false),
+                        Err(e) => Reply::Notice(e, true),
+                    })
+                });
             }
             Confirm::Revert { task, snapshot, .. } => {
                 let Some(client) = self.client.clone() else {
@@ -3899,7 +3946,24 @@ impl App {
 }
 
 /// Where a task is right now: a shell follows its `cd`s, an agent stays put.
+/// It has a worktree with something in it: commits since it started, or
+/// changes not committed yet.
+fn has_work(t: &TaskInfo) -> bool {
+    let (Some(w), Some(base), Some(_)) = (&t.worktree, &t.base, &t.branch) else {
+        return false;
+    };
+    let w = Path::new(w);
+    w.is_dir() && (git::ahead_count(w, base) > 0 || git::status(w).is_ok_and(|c| !c.is_empty()))
+}
+
 pub fn task_dir(t: &TaskInfo) -> PathBuf {
+    // A terminal that lent its agent a worktree shows that worktree's work,
+    // still there to review after the agent quits and the shell is back home.
+    if t.agent == "shell" {
+        if let Some(w) = t.worktree.as_deref().filter(|w| is_dir_cached(w)) {
+            return PathBuf::from(w);
+        }
+    }
     t.live_cwd
         .as_deref()
         .filter(|_| t.agent == "shell")

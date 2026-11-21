@@ -544,8 +544,22 @@ fn ensure_clean(repo_root: &Path, target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Where `branch` is checked out: the main checkout, another worktree, or
+/// nowhere (None).
+fn checked_out_at(repo: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    let want = format!("branch refs/heads/{branch}");
+    let list = run(repo, &["worktree", "list", "--porcelain"])?;
+    Ok(list.split("\n\n").find_map(|block| {
+        let mut lines = block.lines();
+        let path = lines.next()?.strip_prefix("worktree ")?;
+        lines.any(|l| l == want).then(|| PathBuf::from(path))
+    }))
+}
+
 /// Bring an agent's work home: commit what it left uncommitted in its
-/// worktree, then merge its branch into `target` in the main checkout.
+/// worktree, then merge its branch into `target`. That happens wherever
+/// `target` is checked out; a branch checked out nowhere is merged in a
+/// scratch worktree, so your own checkout stays on whatever it's on.
 pub fn accept(
     root: &Path,
     worktree: &Path,
@@ -553,22 +567,26 @@ pub fn accept(
     target: &str,
     message: &str,
 ) -> Result<String> {
-    if current_branch(root).as_deref() != Some(target) {
-        bail!(
-            "{} isn't on {target}; check it out, then accept again",
-            root.display()
-        );
+    if target == branch {
+        bail!("can't merge {branch} into itself");
+    }
+    let home = checked_out_at(root, target)?;
+    if home.is_none() {
+        run(root, &["rev-parse", "-q", "--verify", &format!("refs/heads/{target}")])
+            .map_err(|_| anyhow::anyhow!("there's no branch {target}"))?;
     }
     // Everything that can refuse the merge is checked before committing, so
     // a refusal doesn't leave a commit behind in the agent's branch.
-    ensure_clean(root, target)?;
-    let in_the_way = untracked_in_the_way(root, worktree, target, branch)?;
-    if !in_the_way.is_empty() {
-        bail!(
-            "{} has untracked files the merge would overwrite: {}; move them, then accept again",
-            root.display(),
-            in_the_way.join(", ")
-        );
+    if let Some(dir) = &home {
+        ensure_clean(dir, target)?;
+        let in_the_way = untracked_in_the_way(dir, worktree, target, branch)?;
+        if !in_the_way.is_empty() {
+            bail!(
+                "{} has untracked files the merge would overwrite: {}; move them, then accept again",
+                dir.display(),
+                in_the_way.join(", ")
+            );
+        }
     }
     let mut out = String::new();
     if worktree.is_dir() && !status(worktree)?.is_empty() {
@@ -581,8 +599,39 @@ pub fn accept(
             commit(worktree, message.trim())?
         ));
     }
-    out.push_str(&merge(root, branch)?);
+    match home {
+        Some(dir) => out.push_str(&merge(&dir, branch)?),
+        None => out.push_str(&merge_elsewhere(root, branch, target)?),
+    }
     Ok(out)
+}
+
+/// Merge `branch` into `target` in a worktree made for it and removed after.
+/// A conflict is backed out, since nobody is there to resolve it.
+fn merge_elsewhere(root: &Path, branch: &str, target: &str) -> Result<String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let tmp = std::env::temp_dir().join(format!("pitwall-merge-{}-{nanos}", std::process::id()));
+    let p = tmp.to_string_lossy().to_string();
+    run(root, &["worktree", "add", "-q", &p, target])?;
+    let merged = merge(&tmp, branch);
+    let conflicted = if merged.is_err() {
+        let files = run(&tmp, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+        let _ = run(&tmp, &["merge", "--abort"]);
+        files.lines().collect::<Vec<_>>().join(", ")
+    } else {
+        String::new()
+    };
+    let _ = run(root, &["worktree", "remove", "--force", &p]);
+    match merged {
+        Ok(_) => Ok(format!("merged {branch} into {target}")),
+        Err(_) if !conflicted.is_empty() => bail!(
+            "{branch} conflicts with {target} in {conflicted}; nothing was merged. \
+             Check out {target} and merge {branch} there to resolve it"
+        ),
+        Err(e) => Err(e),
+    }
 }
 
 /// Files, added and removed lines between `base` and the working tree,
@@ -766,6 +815,40 @@ mod tests {
     }
 
     #[test]
+    fn accept_merges_into_a_branch_nobody_has_checked_out() {
+        let d = repo();
+        let base = run(&d, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        run(&d, &["branch", "release"]).unwrap();
+        let wt = d.with_extension("wt2");
+        let _ = std::fs::remove_dir_all(&wt);
+        let w = wt.to_str().unwrap();
+        run(&d, &["worktree", "add", "-q", "-b", "pitwall/y", w, &base]).unwrap();
+        std::fs::write(wt.join("c.txt"), "agent\n").unwrap();
+
+        let out = accept(&d, &wt, "pitwall/y", "release", "Add c").unwrap();
+        assert!(out.contains("merged pitwall/y into release"), "{out}");
+        // The main checkout stayed on main, without the agent's file.
+        assert_eq!(current_branch(&d).as_deref(), Some("main"));
+        assert!(!d.join("c.txt").exists());
+        assert_eq!(run(&d, &["show", "release:c.txt"]).unwrap(), "agent\n");
+        // And the scratch worktree is gone again.
+        let list = run(&d, &["worktree", "list", "--porcelain"]).unwrap();
+        assert!(!list.contains("pitwall-merge-"), "{list}");
+
+        // A conflict merges nothing and says where.
+        std::fs::write(wt.join("a.txt"), "agent side\n").unwrap();
+        run(&wt, &["commit", "-qam", "agent"]).unwrap();
+        run(&d, &["checkout", "-q", "release"]).unwrap();
+        std::fs::write(d.join("a.txt"), "release side\n").unwrap();
+        run(&d, &["commit", "-qam", "release"]).unwrap();
+        run(&d, &["checkout", "-q", "main"]).unwrap();
+        let tip = run(&d, &["rev-parse", "release"]).unwrap();
+        let err = accept(&d, &wt, "pitwall/y", "release", "x").unwrap_err().to_string();
+        assert!(err.contains("a.txt") && err.contains("nothing was merged"), "{err}");
+        assert_eq!(run(&d, &["rev-parse", "release"]).unwrap(), tip);
+    }
+
+    #[test]
     fn accept_commits_the_agents_leftovers_and_merges_them_home() {
         let d = repo();
         let base = run(&d, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
@@ -791,8 +874,9 @@ mod tests {
         std::fs::write(wt.join("a.txt"), "changed again\n").unwrap();
         assert_eq!(shortstat(&wt, &base).unwrap(), (2, 3, 15));
 
-        // Not on the target branch: refuse rather than merge somewhere else.
+        // No such branch, or the agent's own.
         assert!(accept(&d, &wt, "pitwall/x", "release", "msg").is_err());
+        assert!(accept(&d, &wt, "pitwall/x", "pitwall/x", "msg").is_err());
         // Uncommitted work needs a message.
         assert!(accept(&d, &wt, "pitwall/x", "main", "  ").is_err());
         // An untracked file where the agent adds one refuses before anything
