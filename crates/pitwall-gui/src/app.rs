@@ -481,6 +481,10 @@ pub struct App {
     pub cur: usize,
     /// The cards on screen, laid out in a grid (keel's tiling).
     pub cards: Vec<Target>,
+    /// Files opened by clicking a path in a terminal, and that terminal:
+    /// closing the file, or quitting the terminal editor showing it, goes
+    /// back there instead of to the project's files.
+    pub file_from_term: HashMap<PathBuf, String>,
     /// Which card has the keyboard.
     pub active: usize,
     /// Only the active card is shown, filling the stage.
@@ -692,6 +696,7 @@ impl App {
             tabs: vec![],
             cur: 0,
             cards: vec![],
+            file_from_term: HashMap::new(),
             zoom: false,
             card_rects: vec![],
             open_in_new_card: false,
@@ -2204,6 +2209,11 @@ impl App {
                 }
             }
             Push::TaskUpdated(t) => {
+                if crate::editors::is_editor_task(&t.id)
+                    && matches!(t.status, TaskStatus::Exited { .. })
+                {
+                    self.back_from_editor(&t.id);
+                }
                 let was = self.tasks.get(&t.id).map(|o| o.attention).unwrap_or(false);
                 let moved = self.ctx_task.as_deref() == Some(t.id.as_str())
                     && self.tasks.get(&t.id).map(task_dir) != Some(task_dir(&t));
@@ -3136,6 +3146,34 @@ impl App {
             return;
         };
         self.open_path(item, path, line);
+    }
+
+    /// The terminal editor `editor` quit: a card showing a file that was
+    /// opened from a terminal goes back to that terminal.
+    fn back_from_editor(&mut self, editor: &str) {
+        for i in 0..self.cards.len() {
+            let c = &self.cards[i];
+            let Child::File(path) = &c.child else { continue };
+            if crate::editors::task_id(&c.item) != editor {
+                continue;
+            }
+            if let Some(term) = self.file_term(path) {
+                self.file_from_term.remove(path);
+                self.cards[i] = Target {
+                    item: term,
+                    child: Child::Terminal,
+                };
+                self.focus_pane = true;
+            }
+        }
+    }
+
+    /// The terminal `path` was opened from, if it's still there.
+    pub fn file_term(&self, path: &Path) -> Option<String> {
+        self.file_from_term
+            .get(path)
+            .filter(|id| self.tasks.contains_key(*id))
+            .cloned()
     }
 
     /// Open `path` under `item` in whichever editor the settings pick.

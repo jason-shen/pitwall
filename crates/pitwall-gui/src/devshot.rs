@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, welcome, tour:<n>, lang:<code>, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, termfile:<path>, closefile, welcome, tour:<n>, lang:<code>, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -125,6 +125,12 @@ impl DevShot {
                 Some(("chord", k)) => self.key = egui::Key::from_name(k).map(|k| (k, true)),
                 Some(("cmd", k)) => self.key = egui::Key::from_name(k).map(|k| (k, false)),
                 Some(("file", f)) => app.open_file(f, Some(1)),
+                // As if the path was clicked in the focused terminal.
+                Some(("termfile", f)) => {
+                    if let Some(id) = app.target().map(|t| t.item.clone()) {
+                        crate::views::apply(app, crate::views::Action::OpenFileFromTerm(id, f.into(), None));
+                    }
+                }
                 Some(("rename", name)) => {
                     if let Some(id) = app.target().map(|t| t.item.clone()) {
                         app.renaming = Some((id, name.to_string()));
@@ -238,6 +244,13 @@ impl DevShot {
                 }
                 _ => match step.as_str() {
                     "welcome" => app.onboard = Some(crate::views::Onboard::Language),
+                    "closefile" => {
+                        if let Some(crate::app::Target { item, child: Child::File(p) }) =
+                            app.target().cloned()
+                        {
+                            crate::views::apply(app, crate::views::Action::CloseFile(item, p));
+                        }
+                    }
                     "changes" => app.toggle_child(Child::Changes),
                     "files" => app.toggle_child(Child::Files),
                     "saveremote" => app.save_remote_form(false),

@@ -43,9 +43,11 @@ pub fn style(ctx: &egui::Context) {
     theme::apply_style(ctx);
 }
 
-enum Action {
+pub(crate) enum Action {
     OpenTerm(String),
     OpenFile(String, Option<usize>),
+    /// A path clicked in terminal `.0`.
+    OpenFileFromTerm(String, String, Option<usize>),
     OpenDiff(Option<String>),
     ShowMain(MainSrc),
     Show(Target),
@@ -3806,9 +3808,11 @@ fn term_body(
             termview::TermAction::Resize { cols, rows } => {
                 acts.push(Action::Resize(id.to_string(), rows, cols))
             }
-            termview::TermAction::OpenFile(path, line) => {
-                acts.push(Action::OpenFile(path.display().to_string(), line))
-            }
+            termview::TermAction::OpenFile(path, line) => acts.push(Action::OpenFileFromTerm(
+                id.to_string(),
+                path.display().to_string(),
+                line,
+            )),
         }
     }
 }
@@ -5635,7 +5639,7 @@ fn rel_from_repo(app: &App, f: &str) -> String {
         .unwrap_or_else(|_| f.to_string())
 }
 
-fn apply(app: &mut App, a: Action) {
+pub(crate) fn apply(app: &mut App, a: Action) {
     match a {
         Action::OpenTerm(id) => app.open_item(&id),
         Action::OpenFile(f, line) => {
@@ -5645,7 +5649,25 @@ fn apply(app: &mut App, a: Action) {
             } else {
                 rel_from_repo(app, &f)
             };
+            let path = app.ctx_dir().join(&rel);
+            // Opened some other way, closing it goes where it usually does.
+            // Reopening it in the card already showing it keeps the way back.
+            if app.target().map(|t| &t.child) != Some(&Child::File(path.clone())) {
+                app.file_from_term.remove(&path);
+            }
             app.open_file(&rel, line);
+        }
+        Action::OpenFileFromTerm(term, f, line) => {
+            let rel = if app.ctx_dir().join(&f).exists() {
+                f
+            } else {
+                rel_from_repo(app, &f)
+            };
+            let path = app.ctx_dir().join(&rel);
+            app.open_file(&rel, line);
+            if app.target().map(|t| &t.child) == Some(&Child::File(path.clone())) {
+                app.file_from_term.insert(path, term);
+            }
         }
         Action::OpenDiff(p) => app.open_diff(p),
         Action::ShowMain(src) => app.show_main(src),
@@ -5731,15 +5753,29 @@ fn apply(app: &mut App, a: Action) {
             it.opened.retain(|p| *p != path);
             it.files.retain(|e| e.path != path);
             it.file = 0;
-            let back = if item_project(&item).is_some() {
-                Child::Files
-            } else {
-                Child::Terminal
+            let back = match app.file_term(&path) {
+                // Opened from a terminal: back to it.
+                Some(term) => Target {
+                    item: term,
+                    child: Child::Terminal,
+                },
+                None if item_project(&item).is_some() => Target {
+                    item: item.clone(),
+                    child: Child::Files,
+                },
+                None => Target {
+                    item: item.clone(),
+                    child: Child::Terminal,
+                },
             };
+            app.file_from_term.remove(&path);
             for t in app.cards.iter_mut() {
                 if t.item == item && t.child == Child::File(path.clone()) {
-                    t.child = back.clone();
+                    *t = back.clone();
                 }
+            }
+            if back.child == Child::Terminal {
+                app.focus_pane = true;
             }
         }
         Action::FocusPane(p) => app.focus_card(p),
