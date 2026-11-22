@@ -550,3 +550,6 @@
 "Commit the agent's work and merge it into a branch you pick (m)" = "エージェントの作業をコミットし、選んだブランチにマージ (m)"
 "Remove its worktree…" = "ワークツリーを削除…"
 "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "{id} のワークツリーを削除しますか？マージ済みのブランチは一緒に削除され、未マージのものは残ります。"
+"Session" = "セッション"
+"New session" = "新しいセッション"
+"Resumes in the session's own folder, no new worktree" = "セッション元のフォルダで再開します（新しいワークツリーは作りません）"

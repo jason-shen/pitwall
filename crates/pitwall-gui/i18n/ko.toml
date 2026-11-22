@@ -550,3 +550,6 @@
 "Commit the agent's work and merge it into a branch you pick (m)" = "에이전트의 작업을 커밋하고 선택한 브랜치에 병합 (m)"
 "Remove its worktree…" = "워크트리 삭제…"
 "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "{id}의 워크트리를 삭제할까요? 병합된 브랜치는 함께 삭제되고, 병합되지 않은 브랜치는 남습니다."
+"Session" = "세션"
+"New session" = "새 세션"
+"Resumes in the session's own folder, no new worktree" = "세션이 있던 폴더에서 이어서 실행합니다 (새 워크트리 없음)"

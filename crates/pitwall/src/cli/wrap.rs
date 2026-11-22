@@ -27,13 +27,37 @@ pub async fn run(program: &str, args: &[String]) -> Result<()> {
     };
     let mut cmd = Command::new(&real);
     cmd.arg0(program).args(args);
-    if let Some(dir) = worktree_dir(args).await {
+    let dir = match session_dir(program, args) {
+        Some(d) => Some(d),
+        None => worktree_dir(args).await,
+    };
+    if let Some(dir) = dir {
         cmd.current_dir(&dir).env("PWD", &dir);
     }
     // exec only returns on failure.
     let e = cmd.exec();
     eprintln!("{program}: {e}");
     std::process::exit(126);
+}
+
+/// `claude --resume <id>` has to run in the folder the session started in,
+/// or Claude says it's from a different directory. That folder wins over
+/// lending a worktree: the session's work was already going there.
+fn session_dir(program: &str, args: &[String]) -> Option<PathBuf> {
+    if program != "claude" {
+        return None;
+    }
+    let s = pitwall_core::claude::find(pitwall_core::claude::resume_id(args)?)?;
+    if !s.cwd.is_dir() {
+        return None;
+    }
+    if std::env::current_dir().ok().as_deref() != Some(s.cwd.as_path()) {
+        eprintln!(
+            "\x1b[2mpitwall: resuming in the session's folder, {}\x1b[0m",
+            tilde(&s.cwd)
+        );
+    }
+    Some(s.cwd)
 }
 
 /// The folder to start in, or None to stay where we are.

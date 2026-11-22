@@ -683,16 +683,24 @@ impl Task {
         // does for an agent that was still on its trust prompt: those start
         // over with their task instead.
         let resume = saved.had_turn && !agent_cfg.resume_args.is_empty();
+        // Started with `--resume <id>`, it already names its session, and
+        // Claude keeps that id as the session goes on. `--continue` on top
+        // could pick up some other session in the same folder.
+        let named = pitwall_core::claude::resume_id(&saved.args).is_some();
         let req = NewTask {
             name: saved.name,
             agent: saved.agent,
             brief: saved.brief,
-            prompt: if resume { None } else { saved.prompt },
+            prompt: if resume || (named && saved.had_turn) {
+                None
+            } else {
+                saved.prompt
+            },
             args: saved.args,
             host: saved.host,
             ..Default::default()
         };
-        let extra = if resume {
+        let extra = if resume && !named {
             agent_cfg.resume_args.clone()
         } else {
             vec![]

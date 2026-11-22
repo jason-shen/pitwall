@@ -39,6 +39,18 @@ pub fn root(dir: &Path) -> Option<PathBuf> {
         .map(|s| PathBuf::from(s.trim()))
 }
 
+/// Every worktree of the repo `dir` is in, the main checkout first.
+pub fn worktrees(dir: &Path) -> Vec<PathBuf> {
+    run(dir, &["worktree", "list", "--porcelain"])
+        .map(|s| {
+            s.lines()
+                .filter_map(|l| l.strip_prefix("worktree "))
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn current_branch(dir: &Path) -> Option<String> {
     run(dir, &["symbolic-ref", "--short", "-q", "HEAD"])
         .ok()

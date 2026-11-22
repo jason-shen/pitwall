@@ -97,6 +97,11 @@ pub struct NewForm {
     pub template: usize,
     /// The brief this agent is handed, linked to it once it starts.
     pub brief: Option<PathBuf>,
+    /// Claude sessions from this project and its worktrees, each with where
+    /// it ran, to pick one up instead of starting fresh.
+    pub sessions: Vec<(pitwall_core::claude::Session, String)>,
+    /// Which of `sessions` to resume.
+    pub resume: Option<usize>,
 }
 
 /// A review comment on one line of an agent's diff, waiting to be sent.
@@ -2566,7 +2571,7 @@ impl App {
 
     /// Where a new agent starts: the repo the focused terminal is in when
     /// that's one nested inside the project, else the project's folder.
-    fn agent_dir(&self) -> PathBuf {
+    pub fn agent_dir(&self) -> PathBuf {
         self.ctx_task
             .as_ref()
             .and_then(|id| self.tasks.get(id))
@@ -2589,7 +2594,67 @@ impl App {
             focus_set: false,
             template: 0,
             brief: None,
+            sessions: self.resumable_sessions(),
+            resume: None,
         });
+    }
+
+    /// Claude sessions to offer in the New agent form. Claude only resumes
+    /// one from the folder it ran in, so the project's worktrees are
+    /// searched too: an agent's session lives in its own.
+    fn resumable_sessions(&self) -> Vec<(pitwall_core::claude::Session, String)> {
+        let base = self.agent_dir();
+        let mut folders = git::worktrees(&base);
+        if !folders.contains(&base) {
+            folders.push(base.clone());
+        }
+        // git lists nothing once the checkout has lost its .git, but each of
+        // pitwall's worktrees still names the repo it came from in its own.
+        let repo_git = base.join(".git");
+        if let Ok(rd) = std::fs::read_dir(pitwall_core::paths::worktrees()) {
+            for d in rd.flatten() {
+                let p = d.path();
+                let ours = std::fs::read_to_string(p.join(".git")).is_ok_and(|s| {
+                    s.trim()
+                        .strip_prefix("gitdir:")
+                        .is_some_and(|g| Path::new(g.trim()).starts_with(&repo_git))
+                });
+                if ours && !folders.contains(&p) {
+                    folders.push(p);
+                }
+            }
+        }
+        // Label each with the deepest worktree it's in, not the checkout
+        // that happens to hold Claude's own .claude/worktrees.
+        let mut deepest = folders.clone();
+        deepest.sort_by_key(|f| std::cmp::Reverse(f.as_os_str().len()));
+        pitwall_core::claude::under(&folders, 30)
+            .into_iter()
+            .map(|s| {
+                let place = deepest
+                    .iter()
+                    .find(|f| s.cwd.starts_with(f))
+                    .map(|f| {
+                        let name = f.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                        match s.cwd.strip_prefix(f) {
+                            Ok(sub) if !sub.as_os_str().is_empty() => {
+                                format!("{name}/{}", sub.display())
+                            }
+                            _ => name.to_string(),
+                        }
+                    })
+                    .unwrap_or_default();
+                (s, place)
+            })
+            .collect()
+    }
+
+    /// Whether an agent is Claude Code, which `--resume <id>` is for.
+    pub fn is_claude(&self, agent: &str) -> bool {
+        self.cfg.agents.get(agent).is_some_and(|a| {
+            a.hooks.as_deref() == Some("claude")
+                || Path::new(&a.command).file_name().is_some_and(|n| n == "claude")
+        })
     }
 
     pub fn open_new_project(&mut self) {
@@ -2605,6 +2670,8 @@ impl App {
             focus_set: false,
             template: 0,
             brief: None,
+            sessions: vec![],
+            resume: None,
         });
     }
 
@@ -2621,6 +2688,8 @@ impl App {
             focus_set: false,
             template: 0,
             brief: None,
+            sessions: vec![],
+            resume: None,
         });
     }
 
@@ -3007,7 +3076,26 @@ impl App {
             }
             NewKind::Agent => {
                 let task = Some(f.task.trim().to_string()).filter(|t| !t.is_empty());
-                self.create_task_with(f.agent, slugify(&f.name), task, f.worktree, dir, f.brief);
+                // A resumed session goes back to its own folder, worktree and
+                // all; anywhere else Claude won't find it.
+                let session = f
+                    .resume
+                    .and_then(|i| f.sessions.get(i))
+                    .filter(|_| self.is_claude(&f.agent))
+                    .map(|(s, _)| (s.cwd.clone(), vec!["--resume".to_string(), s.id.clone()]));
+                let (dir, worktree, args) = match session {
+                    Some((cwd, args)) => (cwd, false, args),
+                    None => (dir, f.worktree, vec![]),
+                };
+                self.create_task_with(
+                    f.agent,
+                    slugify(&f.name),
+                    task,
+                    worktree,
+                    dir,
+                    f.brief,
+                    args,
+                );
             }
             NewKind::Project => {
                 // Agents need a repo for worktrees, and Accept for merging
@@ -3073,7 +3161,7 @@ impl App {
         worktree: bool,
         dir: PathBuf,
     ) {
-        self.create_task_with(agent, name, prompt, worktree, dir, None)
+        self.create_task_with(agent, name, prompt, worktree, dir, None, vec![])
     }
 
     pub fn create_task_with(
@@ -3084,6 +3172,7 @@ impl App {
         worktree: bool,
         dir: PathBuf,
         brief: Option<PathBuf>,
+        args: Vec<String>,
     ) {
         let repo = git::root(&dir).map(|p| p.display().to_string());
         let (rows, cols) = self.pane_grid();
@@ -3100,7 +3189,7 @@ impl App {
             cwd: Some(dir.display().to_string()),
             repo,
             base: None,
-            args: vec![],
+            args,
             prompt,
             rows,
             cols,

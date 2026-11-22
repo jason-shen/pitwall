@@ -550,3 +550,6 @@
 "Commit the agent's work and merge it into a branch you pick (m)" = "提交智能体的工作，并合并到你选择的分支 (m)"
 "Remove its worktree…" = "移除它的工作树…"
 "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "移除 {id} 的工作树？已合并的分支会一并删除；未合并的会保留。"
+"Session" = "会话"
+"New session" = "新会话"
+"Resumes in the session's own folder, no new worktree" = "在该会话原来的文件夹中恢复，不新建工作树"

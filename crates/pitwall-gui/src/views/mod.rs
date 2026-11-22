@@ -191,6 +191,13 @@ fn ago(unix: i64) -> String {
     }
 }
 
+fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
 fn section_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).small().strong().color(MUTED));
 }
@@ -4234,6 +4241,8 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
         .cloned()
         .collect();
     let problem = app.form_problem();
+    let claude = app.new_form.as_ref().is_some_and(|f| app.is_claude(&f.agent));
+    let fresh_dir = app.agent_dir().display().to_string();
     let in_repo = app
         .new_form
         .as_ref()
@@ -4331,10 +4340,50 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                                 }
                             });
                         ui.end_row();
+                        let resuming = claude && f.resume.is_some();
+                        if claude && !f.sessions.is_empty() {
+                            ui.label(tr("Session"));
+                            let before = f.resume;
+                            let shown = match f.resume.and_then(|i| f.sessions.get(i)) {
+                                Some((s, _)) => clip(&s.title, 48),
+                                None => tr("New session").to_string(),
+                            };
+                            egui::ComboBox::from_id_salt("new-agent-session")
+                                .selected_text(shown)
+                                .width(380.0)
+                                .height(320.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut f.resume, None, tr("New session"));
+                                    for (i, (s, place)) in f.sessions.iter().enumerate() {
+                                        let label = format!(
+                                            "{}  ·  {place}  ·  {}",
+                                            clip(&s.title, 60),
+                                            ago(s.modified_unix)
+                                        );
+                                        ui.selectable_value(&mut f.resume, Some(i), label);
+                                    }
+                                });
+                            if f.resume != before {
+                                match f.resume.and_then(|i| f.sessions.get(i)) {
+                                    Some((s, _)) => {
+                                        f.dir = tilde(&s.cwd);
+                                        if !f.name_edited {
+                                            f.name = crate::app::suggest_name(&s.title);
+                                        }
+                                    }
+                                    None => f.dir = fresh_dir.clone(),
+                                }
+                            }
+                            ui.end_row();
+                        }
                         ui.label(tr("Folder"));
                         ui.horizontal(|ui| {
-                            ui.add(TextEdit::singleline(&mut f.dir).desired_width(290.0));
-                            if ui.button(tr("Choose…")).clicked() {
+                            // Claude only finds the session in its own folder.
+                            ui.add_enabled(
+                                !resuming,
+                                TextEdit::singleline(&mut f.dir).desired_width(290.0),
+                            );
+                            if ui.add_enabled(!resuming, egui::Button::new(tr("Choose…"))).clicked() {
                                 if let Some(p) = pick_folder(&f.dir) {
                                     f.dir = tilde(&p);
                                 }
@@ -4342,6 +4391,15 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                         });
                         ui.end_row();
                         ui.label("");
+                        if resuming {
+                            ui.label(
+                                RichText::new(tr("Resumes in the session's own folder, no new worktree"))
+                                    .small()
+                                    .color(MUTED),
+                            );
+                            ui.end_row();
+                            return;
+                        }
                         let id = crate::app::slugify(&f.name);
                         let label = if in_repo {
                             trf!(

@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod brief;
+pub mod claude;
 pub mod client;
 pub mod config;
 pub mod editor;

@@ -550,3 +550,6 @@
 "Commit the agent's work and merge it into a branch you pick (m)" = "Confirma el trabajo del agente y fusiónalo en la rama que elijas (m)"
 "Remove its worktree…" = "Eliminar su worktree…"
 "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "¿Eliminar el worktree de {id}? Su rama se elimina también si está fusionada; si no, se conserva."
+"Session" = "Sesión"
+"New session" = "Nueva sesión"
+"Resumes in the session's own folder, no new worktree" = "Se reanuda en la carpeta de la sesión, sin un worktree nuevo"
