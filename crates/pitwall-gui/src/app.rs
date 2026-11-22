@@ -3656,6 +3656,16 @@ impl App {
         }
     }
 
+    pub fn dismiss_resume(&mut self, id: &str) {
+        // Gone now, not when the daemon's update comes back.
+        if let Some(t) = self.tasks.get_mut(id) {
+            t.resume = None;
+        }
+        if let Some(c) = &self.client {
+            c.send(Request::DismissResume { id: id.to_string() });
+        }
+    }
+
     pub fn set_auto(&mut self, id: &str, on: bool) {
         let Some(c) = &self.client else { return };
         c.send(Request::SetAuto { id: id.to_string(), on });

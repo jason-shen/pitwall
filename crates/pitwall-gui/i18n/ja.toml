@@ -553,3 +553,8 @@
 "Session" = "セッション"
 "New session" = "新しいセッション"
 "Resumes in the session's own folder, no new worktree" = "セッション元のフォルダで再開します（新しいワークツリーは作りません）"
+"Dismiss" = "閉じる"
+"Resume" = "再開"
+"Types: {line}" = "入力する内容：{line}"
+"{agent} was running here, but its session ended" = "{agent} がここで動いていましたが、セッションは終了しました"
+"{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "pitwall が前回停止したとき {agent} がここで動いていて、一緒に停止しました。再開すると実行します：{line}"

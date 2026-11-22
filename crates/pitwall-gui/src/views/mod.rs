@@ -100,6 +100,7 @@ pub(crate) enum Action {
     Checkout(String),
     Decide(u64, bool),
     SetAuto(String, bool),
+    DismissResume(String),
     NextAttention,
     Revert(String, SnapshotInfo),
     Checkpoint(String),
@@ -3714,6 +3715,7 @@ fn term_body(
         );
         return;
     }
+    let offer = app.tasks.get(id).and_then(|t| t.resume.clone());
     let App {
         terms, settings, ..
     } = app;
@@ -3806,6 +3808,9 @@ fn term_body(
     if let Some(i) = run_snippet {
         acts.push(Action::RunSnippet(i));
     }
+    if let Some(offer) = offer {
+        resume_bar(ui, id, side, body, &offer, acts);
+    }
     for a in actions {
         match a {
             termview::TermAction::Input(b) => acts.push(Action::Input(id.to_string(), b)),
@@ -3822,6 +3827,65 @@ fn term_body(
             )),
         }
     }
+}
+
+/// Across the bottom of a terminal whose agent went with the last daemon:
+/// type the line that starts it again, or forget it.
+fn resume_bar(
+    ui: &mut Ui,
+    id: &str,
+    side: usize,
+    body: Rect,
+    offer: &pitwall_core::proto::ResumeOffer,
+    acts: &mut Vec<Action>,
+) {
+    let bar = Rect::from_min_max(pos2(body.left(), body.bottom() - 44.0), body.max);
+    ui.painter().rect_filled(bar, 0.0, PANEL_2);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar.shrink2(vec2(14.0, 8.0)))
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    // Buttons first, so in a narrow card the text truncates instead of
+    // running under them.
+    if child.button(tr("Dismiss")).clicked() {
+        acts.push(Action::DismissResume(id.to_string()));
+    }
+    let resume = egui::Button::new(
+        RichText::new(tr("Resume"))
+            .color(theme::c::ON_ACCENT)
+            .strong(),
+    )
+    .fill(ACCENT);
+    if child
+        .add(resume)
+        .on_hover_text(trf!("Types: {line}", line = offer.line))
+        .clicked()
+    {
+        acts.push(Action::Input(
+            id.to_string(),
+            format!("{}\r", offer.line).into_bytes(),
+        ));
+        acts.push(Action::DismissResume(id.to_string()));
+        acts.push(Action::FocusPane(side));
+    }
+    child.with_layout(Layout::left_to_right(Align::Center), |ui| {
+        ui.add(
+            egui::Label::new(
+                RichText::new(trf!(
+                    "{agent} was running here, but its session ended",
+                    agent = offer.agent
+                ))
+                .color(MUTED),
+            )
+            .truncate(),
+        )
+        .on_hover_text(trf!(
+            "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}",
+            agent = offer.agent,
+            line = offer.line
+        ));
+    });
 }
 
 // ── editor ──────────────────────────────────────────────────────────────
@@ -5954,6 +6018,7 @@ pub(crate) fn apply(app: &mut App, a: Action) {
         Action::Checkout(b) => app.git_op(move |d| git::checkout(d, &b)),
         Action::Decide(id, allow) => app.decide(id, allow),
         Action::SetAuto(id, on) => app.set_auto(&id, on),
+        Action::DismissResume(id) => app.dismiss_resume(&id),
         Action::NextAttention => app.next_attention(),
         Action::Revert(task, s) => {
             let text = trf!("Revert {task}'s files to #{seq} \"{label}\"?\nA safety snapshot is taken first, so you can undo this.", task = task, seq = s.seq, label = s.label);

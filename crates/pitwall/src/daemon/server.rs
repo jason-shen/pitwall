@@ -377,6 +377,10 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             d.set_auto(&id, on)?;
             Response::Ok
         }
+        Request::DismissResume { id } => {
+            d.dismiss_resume(&id)?;
+            Response::Ok
+        }
 
         Request::Hook(h) => Response::Hook(hook::handle(d, h).await),
         Request::Classify { command } => {

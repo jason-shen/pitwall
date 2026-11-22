@@ -31,6 +31,20 @@ fn projects() -> Option<PathBuf> {
         .map(|d| d.join("projects"))
 }
 
+/// The session a running Claude is on. Claude keeps
+/// `~/.claude/sessions/<pid>.json` for each live process and updates it on
+/// /resume and /clear, which `--continue` (newest in the folder) can't tell
+/// apart when two sessions share a worktree.
+pub fn live_session(pid: u32) -> Option<String> {
+    let dir = projects()?.parent()?.join("sessions");
+    let v: Value =
+        serde_json::from_slice(&std::fs::read(dir.join(format!("{pid}.json"))).ok()?).ok()?;
+    if v["pid"].as_u64() != Some(pid as u64) {
+        return None;
+    }
+    v["sessionId"].as_str().map(str::to_string)
+}
+
 /// The session id in `--resume <id>`, `-r <id>` or `--resume=<id>`.
 pub fn resume_id(args: &[String]) -> Option<&str> {
     let mut it = args.iter();

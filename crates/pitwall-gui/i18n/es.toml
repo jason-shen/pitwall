@@ -553,3 +553,8 @@
 "Session" = "Sesión"
 "New session" = "Nueva sesión"
 "Resumes in the session's own folder, no new worktree" = "Se reanuda en la carpeta de la sesión, sin un worktree nuevo"
+"Dismiss" = "Descartar"
+"Resume" = "Reanudar"
+"Types: {line}" = "Escribe: {line}"
+"{agent} was running here, but its session ended" = "{agent} se estaba ejecutando aquí, pero su sesión terminó"
+"{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "{agent} se estaba ejecutando aquí cuando pitwall se detuvo por última vez, y se detuvo con él. Reanudar ejecuta: {line}"

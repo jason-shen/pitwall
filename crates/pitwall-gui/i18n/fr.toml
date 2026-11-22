@@ -553,3 +553,8 @@
 "Session" = "Session"
 "New session" = "Nouvelle session"
 "Resumes in the session's own folder, no new worktree" = "Reprend dans le dossier de la session, sans nouveau worktree"
+"Dismiss" = "Ignorer"
+"Resume" = "Reprendre"
+"Types: {line}" = "Tape : {line}"
+"{agent} was running here, but its session ended" = "{agent} tournait ici, mais sa session s'est terminée"
+"{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "{agent} tournait ici quand pitwall s'est arrêté la dernière fois, et s'est arrêté avec lui. Reprendre lance : {line}"

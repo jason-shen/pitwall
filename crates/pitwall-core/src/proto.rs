@@ -116,6 +116,18 @@ pub struct TaskInfo {
     /// lent to an agent started in it.
     #[serde(default)]
     pub worktree: Option<String>,
+    /// An agent was running in this terminal when the daemon last stopped,
+    /// and stopped with it.
+    #[serde(default)]
+    pub resume: Option<ResumeOffer>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ResumeOffer {
+    /// The program, as typed: "claude", "codex".
+    pub agent: String,
+    /// Typed into the terminal to start it again where it was.
+    pub line: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -366,6 +378,10 @@ pub enum Request {
     SetAuto {
         id: String,
         on: bool,
+    },
+    /// Drop a terminal's offer to resume the agent it had.
+    DismissResume {
+        id: String,
     },
 
     Hook(HookRequest),

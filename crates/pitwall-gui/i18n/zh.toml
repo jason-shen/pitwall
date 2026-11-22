@@ -553,3 +553,8 @@
 "Session" = "会话"
 "New session" = "新会话"
 "Resumes in the session's own folder, no new worktree" = "在该会话原来的文件夹中恢复，不新建工作树"
+"Dismiss" = "忽略"
+"Resume" = "恢复"
+"Types: {line}" = "将输入：{line}"
+"{agent} was running here, but its session ended" = "{agent} 曾在这里运行，但它的会话已结束"
+"{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "pitwall 上次停止时 {agent} 正在这里运行，并随之停止。恢复会运行：{line}"

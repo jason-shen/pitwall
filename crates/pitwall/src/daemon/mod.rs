@@ -360,6 +360,14 @@ impl Daemon {
 
     /// Turning it on also lets through whatever the task is waiting on, so
     /// the "auto mode" answer to an approval approves that one as well.
+    pub fn dismiss_resume(&self, id: &str) -> Result<()> {
+        let t = self.task(id)?;
+        if t.offer.lock().unwrap().take().is_some() {
+            self.saved_changed(&t);
+        }
+        Ok(())
+    }
+
     pub fn set_auto(&self, id: &str, on: bool) -> Result<()> {
         let t = self.task(id)?;
         t.auto.store(on, Ordering::Relaxed);
@@ -625,6 +633,9 @@ async fn ticker(d: Arc<Daemon>) {
                 }
             }
 
+            if t.note_agent(&d.cfg) {
+                d.save();
+            }
             let info = t.info();
             let prev = reported.get(&t.id);
             if prev

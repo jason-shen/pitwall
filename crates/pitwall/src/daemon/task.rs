@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use pitwall_core::config::{AgentConfig, Config};
-use pitwall_core::proto::{NewTask, TaskInfo, TaskStatus};
+use pitwall_core::proto::{NewTask, ResumeOffer, TaskInfo, TaskStatus};
 use pitwall_core::{now_unix, paths};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,12 @@ pub struct Task {
     /// A terminal's worktree, made when an agent was started in it, so the
     /// agent works on a branch of its own as one pitwall started would.
     pub lent: Mutex<Option<Place>>,
+    /// The agent running in this terminal, kept in tasks.json, and when the
+    /// shell got the terminal back from it.
+    ran: Mutex<(Option<Ran>, Option<Instant>)>,
+    /// The agent that was running here when the last daemon stopped, until
+    /// it's resumed or dismissed.
+    pub offer: Mutex<Option<Ran>>,
 }
 
 pub fn slug(s: &str) -> String {
@@ -590,6 +596,72 @@ pub struct Saved {
     #[serde(default)]
     pub lent: Option<Place>,
     pub created_unix: i64,
+    /// The agent a terminal had in it, so it can be offered back.
+    #[serde(default)]
+    pub ran: Option<Ran>,
+}
+
+/// An agent seen running in a terminal: what it was, where, and the
+/// arguments that pick its session back up.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ran {
+    pub program: String,
+    pub cwd: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl Ran {
+    /// What's typed into the terminal to resume it. The cd is so the shell
+    /// is left there afterwards too.
+    fn line(&self) -> String {
+        let mut line = format!(
+            "cd {} && {}",
+            sh_quote(&self.cwd.to_string_lossy()),
+            self.program
+        );
+        for a in &self.args {
+            line.push(' ');
+            line.push_str(&sh_quote(a));
+        }
+        line
+    }
+}
+
+fn sh_quote(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:@+,".contains(c));
+    if plain {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// The agent in a terminal's foreground and how to resume it, if it's one
+/// pitwall knows how to resume.
+fn running_agent(cfg: &Config, pid: u32) -> Option<Ran> {
+    let program = proc_program(pid)?;
+    if !pitwall_core::agents::AGENT_PROGRAMS.contains(&program.as_str()) {
+        return None;
+    }
+    let args = match pitwall_core::claude::live_session(pid).filter(|_| program == "claude") {
+        Some(id) => vec!["--resume".into(), id],
+        None => cfg
+            .agents
+            .iter()
+            .find(|(k, a)| {
+                *k == &program
+                    || Path::new(&a.command).file_name().is_some_and(|n| n == program.as_str())
+            })
+            .map(|(_, a)| a.resume_args.clone())
+            .filter(|a| !a.is_empty())?,
+    };
+    Some(Ran {
+        program,
+        cwd: proc_cwd(pid)?,
+        args,
+    })
 }
 
 impl Saved {
@@ -627,6 +699,7 @@ impl Saved {
                 .map(|l| &l.cwd)
                 .or(self.place.branch.as_ref().map(|_| &self.place.cwd))
                 .map(|p| p.display().to_string()),
+            resume: None,
         }
     }
 }
@@ -723,6 +796,9 @@ impl Task {
         t.auto.store(saved.auto, Ordering::Relaxed);
         // A worktree removed by hand while the daemon was down isn't lent any more.
         *t.lent.lock().unwrap() = saved.lent.filter(|l| l.cwd.is_dir());
+        // Its terminal is a new shell now; the agent that was in it went
+        // with the last daemon.
+        *t.offer.lock().unwrap() = saved.ran.filter(|r| r.cwd.is_dir());
         Ok(t)
     }
 
@@ -746,6 +822,14 @@ impl Task {
             host: self.host.clone(),
             lent: self.lent.lock().unwrap().clone(),
             created_unix: self.created_unix,
+            // Not yet taken up, it's still on offer after another restart.
+            ran: self
+                .ran
+                .lock()
+                .unwrap()
+                .0
+                .clone()
+                .or_else(|| self.offer.lock().unwrap().clone()),
         }
     }
 
@@ -1023,6 +1107,8 @@ impl Task {
             snaps,
             auto: AtomicBool::new(false),
             lent: Mutex::new(None),
+            ran: Mutex::new((None, None)),
+            offer: Mutex::new(None),
         });
 
         // Weak, so the task can go; its sender going ends this thread.
@@ -1254,6 +1340,10 @@ impl Task {
             base_branch: place.base_branch,
             host: self.host.clone(),
             worktree,
+            resume: self.offer.lock().unwrap().as_ref().map(|r| ResumeOffer {
+                agent: r.program.clone(),
+                line: r.line(),
+            }),
         }
     }
 
@@ -1264,6 +1354,40 @@ impl Task {
             .process_group_leader()
             .filter(|p| *p > 0)
             .map(|p| p as u32)
+    }
+
+    /// Keep track of the agent running in this terminal, for offering it
+    /// back if the daemon stops with it. True when what tasks.json holds
+    /// changed.
+    pub fn note_agent(&self, cfg: &Config) -> bool {
+        if self.agent != "shell" || self.host.is_some() {
+            return false;
+        }
+        let now = self.fg_pid().and_then(|pid| running_agent(cfg, pid));
+        let mut ran = self.ran.lock().unwrap();
+        match now {
+            Some(r) => {
+                ran.1 = None;
+                // Started again by hand: nothing left to offer.
+                let took_offer = self.offer.lock().unwrap().take().is_some();
+                let changed = ran.0.as_ref() != Some(&r);
+                ran.0 = Some(r);
+                changed || took_offer
+            }
+            None if ran.0.is_some() => {
+                // At shutdown the agent can go a moment before the daemon
+                // does. Only once the shell has had the terminal back for a
+                // while was it quit.
+                let since = *ran.1.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_secs(10) {
+                    *ran = (None, None);
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
 
     /// What's running in the foreground, so a `claude` typed into a plain
@@ -1714,6 +1838,49 @@ mod turn_tests {
         let again = t.lend_worktree(&repo).unwrap();
         assert_ne!(again, wt);
         assert_eq!(t.info().branch.as_deref(), Some("pitwall/term-9-2"));
+
+        t.kill();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_restored_terminal_offers_its_agent_back() {
+        let tmp = std::env::temp_dir().join(format!("pitwall-offer-{}", std::process::id()));
+        let wt = tmp.join("it's a worktree");
+        std::fs::create_dir_all(&wt).unwrap();
+        let req = NewTask {
+            name: "term".into(),
+            agent: "shell".into(),
+            cwd: Some(tmp.display().to_string()),
+            args: vec!["-c".into(), "sleep 30".into()],
+            no_worktree: true,
+            ..Default::default()
+        };
+        let cfg = Config::default();
+        let t = Task::spawn("term-7".into(), &req, &cfg).unwrap();
+        assert!(t.info().resume.is_none());
+        let mut saved = t.saved();
+        t.kill();
+        saved.ran = Some(Ran {
+            program: "claude".into(),
+            cwd: wt.clone(),
+            args: vec!["--resume".into(), "66a6f1e0-f38c".into()],
+        });
+
+        let t = Task::resume(saved, &cfg).unwrap();
+        let offer = t.info().resume.unwrap();
+        assert_eq!(offer.agent, "claude");
+        assert_eq!(
+            offer.line,
+            format!(
+                "cd '{}' && claude --resume 66a6f1e0-f38c",
+                wt.display().to_string().replace('\'', "'\\''")
+            )
+        );
+        // Still offered if the daemon restarts again before it's taken up.
+        assert_eq!(t.saved().ran.map(|r| r.cwd), Some(wt.clone()));
+        t.offer.lock().unwrap().take();
+        assert!(t.info().resume.is_none() && t.saved().ran.is_none());
 
         t.kill();
         let _ = std::fs::remove_dir_all(&tmp);

@@ -553,3 +553,8 @@
 "Session" = "세션"
 "New session" = "새 세션"
 "Resumes in the session's own folder, no new worktree" = "세션이 있던 폴더에서 이어서 실행합니다 (새 워크트리 없음)"
+"Dismiss" = "닫기"
+"Resume" = "재개"
+"Types: {line}" = "입력할 내용: {line}"
+"{agent} was running here, but its session ended" = "{agent}이(가) 여기서 실행 중이었지만 세션이 끝났습니다"
+"{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "pitwall이 마지막으로 멈출 때 {agent}이(가) 여기서 실행 중이었고 함께 멈췄습니다. 재개하면 실행: {line}"

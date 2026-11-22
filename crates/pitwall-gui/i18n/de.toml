@@ -553,3 +553,8 @@
 "Session" = "Sitzung"
 "New session" = "Neue Sitzung"
 "Resumes in the session's own folder, no new worktree" = "Wird im eigenen Ordner der Sitzung fortgesetzt, ohne neuen Worktree"
+"Dismiss" = "Verwerfen"
+"Resume" = "Fortsetzen"
+"Types: {line}" = "Tippt: {line}"
+"{agent} was running here, but its session ended" = "{agent} lief hier, aber die Sitzung ist beendet"
+"{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "{agent} lief hier, als pitwall zuletzt beendet wurde, und wurde mit beendet. Fortsetzen führt aus: {line}"
