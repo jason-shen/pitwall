@@ -150,10 +150,10 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             d.saved_changed(&t);
             Response::Text(path.display().to_string())
         }
-        Request::ReturnWorktree { id } => {
+        Request::ReturnWorktree { id, quit } => {
             let t = d.task(&id)?;
             let t2 = t.clone();
-            tokio::task::spawn_blocking(move || t2.return_worktree()).await??;
+            tokio::task::spawn_blocking(move || t2.return_worktree(quit)).await??;
             d.saved_changed(&t);
             Response::Ok
         }

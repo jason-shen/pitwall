@@ -6032,15 +6032,7 @@ pub(crate) fn apply(app: &mut App, a: Action) {
             app.confirm = Some(Confirm::Remove { id, prune, text });
         }
         Action::Accept => app.accept_prompt(),
-        Action::ReturnWorktree(id) => {
-            app.confirm = Some(Confirm::ReturnWorktree {
-                text: trf!(
-                    "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept.",
-                    id = id
-                ),
-                id,
-            });
-        }
+        Action::ReturnWorktree(id) => app.ask_return_worktree(id, false),
         Action::Stage(p) => {
             app.git_op(move |d| git::stage_file(d, &p).map(|_| trf!("staged {file}", file = p)))
         }

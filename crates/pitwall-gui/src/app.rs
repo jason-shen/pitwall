@@ -417,6 +417,8 @@ pub enum Confirm {
     /// Remove the worktree a terminal lent to an agent started in it.
     ReturnWorktree {
         id: String,
+        /// The agent's still running in it, and the question said it quits.
+        quit: bool,
         text: String,
     },
     Revert {
@@ -2587,14 +2589,7 @@ impl App {
     fn offer_removal(&mut self, id: String) {
         // A terminal stays; only the worktree it lent goes.
         if self.tasks.get(&id).is_some_and(|t| t.agent == "shell") {
-            self.confirm = Some(Confirm::ReturnWorktree {
-                text: trf!(
-                    "{id}'s work is merged. Remove its worktree and branch?\n\n\
-                     The terminal stays open; the next agent you start in it gets a fresh worktree.",
-                    id = id
-                ),
-                id,
-            });
+            self.ask_return_worktree(id, true);
         } else {
             self.confirm = Some(Confirm::Remove {
                 text: trf!(
@@ -2606,6 +2601,43 @@ impl App {
                 prune: true,
             });
         }
+    }
+
+    /// Ask to remove the worktree a terminal lent. An agent still running
+    /// in it would carry on in a folder that's gone, so it's quit first.
+    pub fn ask_return_worktree(&mut self, id: String, merged: bool) {
+        let agent = self
+            .tasks
+            .get(&id)
+            .filter(|t| is_agent(t))
+            .map(|t| t.fg.clone().unwrap_or_else(|| tr("the agent").into()));
+        let text = match (&agent, merged) {
+            (Some(agent), true) => trf!(
+                "{id}'s work is merged. Quit {agent} and remove its worktree and branch?\n\n\
+                 The terminal stays open; the next agent you start in it gets a fresh worktree.",
+                id = id,
+                agent = agent
+            ),
+            (Some(agent), false) => trf!(
+                "Quit {agent} and remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept.",
+                id = id,
+                agent = agent
+            ),
+            (None, true) => trf!(
+                "{id}'s work is merged. Remove its worktree and branch?\n\n\
+                 The terminal stays open; the next agent you start in it gets a fresh worktree.",
+                id = id
+            ),
+            (None, false) => trf!(
+                "Remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept.",
+                id = id
+            ),
+        };
+        self.confirm = Some(Confirm::ReturnWorktree {
+            id,
+            quit: agent.is_some(),
+            text,
+        });
     }
 
     // ── actions ─────────────────────────────────────────────────────────
@@ -3963,9 +3995,14 @@ impl App {
                     move |result| Reply::Accepted { id: id2, result },
                 );
             }
-            Confirm::ReturnWorktree { id, .. } => {
+            Confirm::ReturnWorktree { id, quit, .. } => {
+                // Quitting it would otherwise put the branch up for review
+                // just as it's removed.
+                if quit {
+                    self.reviewed.insert(id.clone());
+                }
                 let id2 = id.clone();
-                self.call(Request::ReturnWorktree { id }, move |r| {
+                self.call(Request::ReturnWorktree { id, quit }, move |r| {
                     Some(match r {
                         Ok(_) => Reply::Notice(trf!("removed {id}'s worktree", id = id2), false),
                         Err(e) => Reply::Notice(e, true),

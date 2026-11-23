@@ -565,3 +565,6 @@
 "{n} commit(s) on {branch} that {target} doesn't have" = "{branch} 上有 {n} 个 {target} 没有的提交"
 "{branch} is merged into {target}" = "{branch} 已合并到 {target}"
 "{branch} is already merged into {target}" = "{branch} 已经合并到 {target}"
+"the agent" = "智能体"
+"{id}'s work is merged. Quit {agent} and remove its worktree and branch?\n\nThe terminal stays open; the next agent you start in it gets a fresh worktree." = "{id} 的工作已合并。要退出 {agent} 并移除它的工作树和分支吗？\n\n终端会保持打开；之后在里面启动的智能体会得到一个新的工作树。"
+"Quit {agent} and remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "退出 {agent} 并移除 {id} 的工作树？已合并的分支会一并删除；未合并的会保留。"

@@ -305,6 +305,9 @@ pub enum Request {
     /// Remove a terminal's worktree, and its branch once merged.
     ReturnWorktree {
         id: String,
+        /// Quit the agent still running in it first, instead of refusing.
+        #[serde(default)]
+        quit: bool,
     },
 
     Attach {

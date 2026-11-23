@@ -565,3 +565,6 @@
 "{n} commit(s) on {branch} that {target} doesn't have" = "{n} commit(s) sur {branch} que {target} n’a pas"
 "{branch} is merged into {target}" = "{branch} est fusionnée dans {target}"
 "{branch} is already merged into {target}" = "{branch} est déjà fusionnée dans {target}"
+"the agent" = "l’agent"
+"{id}'s work is merged. Quit {agent} and remove its worktree and branch?\n\nThe terminal stays open; the next agent you start in it gets a fresh worktree." = "Le travail de {id} est fusionné. Quitter {agent} et supprimer son worktree et sa branche ?\n\nLe terminal reste ouvert ; le prochain agent que vous y lancez aura un nouveau worktree."
+"Quit {agent} and remove {id}'s worktree? Its branch goes too if it's merged; one that isn't is kept." = "Quitter {agent} et supprimer le worktree de {id} ? Sa branche part aussi si elle est fusionnée ; sinon elle est gardée."

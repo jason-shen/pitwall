@@ -861,11 +861,19 @@ impl Task {
 
     /// Remove the lent worktree. Its branch goes only if it's merged, so
     /// work that never made it back is still there to find.
-    pub fn return_worktree(&self) -> Result<()> {
+    pub fn return_worktree(&self, quit: bool) -> Result<()> {
         let Some(l) = self.lent.lock().unwrap().clone() else {
             bail!("{} has no worktree", self.id);
         };
-        if self.live_cwd().is_some_and(|c| c.starts_with(&l.cwd)) {
+        // A process's cwd comes back with symlinks resolved (/private/var
+        // for /var on macOS).
+        let wt = l.cwd.canonicalize().unwrap_or_else(|_| l.cwd.clone());
+        let inside = || self.live_cwd().is_some_and(|c| c.starts_with(&wt));
+        // An agent left running would carry on in a folder that's gone.
+        if quit && inside() {
+            self.quit_foreground();
+        }
+        if inside() {
             bail!("{} is still in its worktree; quit the agent or cd out first", self.id);
         }
         if let (Some(repo), Some(branch)) = (&l.repo, &l.branch) {
@@ -1354,6 +1362,26 @@ impl Task {
         }
     }
 
+    /// Stop whatever runs in the foreground, unless that's the shell itself.
+    /// SIGTERM first, which Claude and Codex exit cleanly on, and SIGKILL if
+    /// it's still there a few seconds later.
+    fn quit_foreground(&self) {
+        let Some(group) = self.fg_pid().filter(|p| Some(*p) != self.pid) else {
+            return;
+        };
+        for (signal, wait) in [(libc::SIGTERM, 5), (libc::SIGKILL, 2)] {
+            unsafe { libc::killpg(group as libc::pid_t, signal) };
+            let until = Instant::now() + Duration::from_secs(wait);
+            while Instant::now() < until {
+                let gone = unsafe { libc::killpg(group as libc::pid_t, 0) } != 0;
+                if gone || self.fg_pid() != Some(group) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
     fn fg_pid(&self) -> Option<u32> {
         self.master
             .lock()
@@ -1837,7 +1865,7 @@ mod turn_tests {
         std::fs::write(wt.join("b.txt"), "b\n").unwrap();
         g(&wt, &["add", "."]);
         g(&wt, &["commit", "-qm", "agent"]);
-        t.return_worktree().unwrap();
+        t.return_worktree(false).unwrap();
         assert!(!wt.exists());
         assert!(t.info().worktree.is_none() && t.info().branch.is_none());
         g(&repo, &["rev-parse", "--verify", "refs/heads/pitwall/term-9"]);
@@ -1845,6 +1873,60 @@ mod turn_tests {
         let again = t.lend_worktree(&repo).unwrap();
         assert_ne!(again, wt);
         assert_eq!(t.info().branch.as_deref(), Some("pitwall/term-9-2"));
+
+        t.kill();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn returning_a_worktree_can_quit_what_runs_in_it() {
+        let tmp = std::env::temp_dir().join(format!("pitwall-quit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::env::set_var("PITWALL_HOME", tmp.join("home"));
+        let g = |dir: &Path, args: &[&str]| git(dir, args).unwrap();
+        g(&repo, &["init", "-q", "-b", "main"]);
+        g(&repo, &["config", "user.email", "t@t"]);
+        g(&repo, &["config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        g(&repo, &["add", "."]);
+        g(&repo, &["commit", "-qm", "init"]);
+
+        // Waits to be told where to go, then takes the terminal in a process
+        // group of its own there while the shell stays put, as `claude`
+        // started through the shim does.
+        let go = tmp.join("go");
+        let script = format!(
+            "while [ ! -f '{0}' ]; do sleep 0.1; done; (cd \"$(cat '{0}')\" && exec perl -MPOSIX -e '\
+             $SIG{{TTOU}} = \"IGNORE\"; setpgrp; open(T, \"+<\", \"/dev/tty\") or die; \
+             tcsetpgrp(fileno(T), $$); sleep 30'); sleep 30",
+            go.display()
+        );
+        let req = NewTask {
+            name: "term".into(),
+            agent: "shell".into(),
+            cwd: Some(repo.display().to_string()),
+            args: vec!["-c".into(), script],
+            ..Default::default()
+        };
+        let t = Task::spawn("term-8".into(), &req, &Config::default()).unwrap();
+        let wt = t.lend_worktree(&repo).unwrap();
+        std::fs::write(&go, wt.display().to_string()).unwrap();
+        let wt = wt.canonicalize().unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !t.live_cwd().is_some_and(|c| c.starts_with(&wt)) {
+            assert!(
+                Instant::now() < until,
+                "the job never started in the worktree"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert!(t.return_worktree(false).is_err());
+        assert!(wt.exists());
+        t.return_worktree(true).unwrap();
+        assert!(!wt.exists());
 
         t.kill();
         let _ = std::fs::remove_dir_all(&tmp);
