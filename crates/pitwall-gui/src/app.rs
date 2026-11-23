@@ -342,6 +342,9 @@ pub struct Head {
     target: String,
     /// Commits on the branch that `target` doesn't have.
     ahead: usize,
+    /// `target` has all of it, and it has commits of its own. A branch with
+    /// none is also 0 ahead, but there's nothing merged.
+    merged: bool,
 }
 
 /// A worktree's branch moved on and isn't merged yet; its terminal offers
@@ -556,6 +559,10 @@ pub struct App {
     heads_running: bool,
     last_heads: Instant,
     pub merge_offers: HashMap<String, MergeOffer>,
+    /// Whether each worktree's branch was merged at the last look.
+    merged: HashMap<String, bool>,
+    /// Accepts still running; their reply asks about the worktree itself.
+    accepting: HashSet<String>,
     /// When you last typed; a dialog doesn't open under your fingers.
     last_typed: Instant,
     /// Reviews asked for and not written yet, with their project.
@@ -751,6 +758,8 @@ impl App {
             heads_running: false,
             last_heads: Instant::now() - Duration::from_secs(60),
             merge_offers: HashMap::new(),
+            merged: HashMap::new(),
+            accepting: HashSet::new(),
             last_typed: Instant::now(),
             reviews_due: vec![],
             reviews_checked: Instant::now(),
@@ -2391,6 +2400,7 @@ impl App {
         self.tasks.remove(id);
         self.heads.remove(id);
         self.merge_offers.remove(id);
+        self.merged.remove(id);
         self.parent_of.retain(|k, v| k != id && v != id);
         self.ungroup(id);
         // A later task can reuse the id; it shouldn't inherit the name.
@@ -2551,6 +2561,11 @@ impl App {
                 Err(e) => self.notify(trf!("couldn't send the comments: {e}", e = e), true),
             },
             Reply::Accepted { id, result } => {
+                self.accepting.remove(&id);
+                // Merged now, so the watcher doesn't ask a second time.
+                if result.is_ok() {
+                    self.merged.insert(id.clone(), true);
+                }
                 self.refresh_git_now();
                 self.reload_main();
                 self.last_heads = Instant::now() - Duration::from_secs(60);
@@ -2558,33 +2573,38 @@ impl App {
                     // Don't replace a question that's already open; Remove
                     // is in the agent's menu for later.
                     Ok(m) if self.confirm.is_some() => self.notify(m, false),
-                    // A terminal stays; only the worktree it lent goes.
-                    Ok(m) if self.tasks.get(&id).is_some_and(|t| t.agent == "shell") => {
-                        self.notify(m, false);
-                        self.confirm = Some(Confirm::ReturnWorktree {
-                            text: trf!(
-                                "{id}'s work is merged. Remove its worktree and branch?\n\n\
-                                 The terminal stays open; the next agent you start in it gets a fresh worktree.",
-                                id = id
-                            ),
-                            id,
-                        });
-                    }
                     Ok(m) => {
                         self.notify(m, false);
-                        self.confirm = Some(Confirm::Remove {
-                            text: trf!(
-                                "{id} is merged. Remove it, its worktree and branch?\n\n\
-                                 Its snapshots go too.",
-                                id = id
-                            ),
-                            id,
-                            prune: true,
-                        });
+                        self.offer_removal(id);
                     }
                     Err(e) => self.notify(e, true),
                 }
             }
+        }
+    }
+
+    /// Its work is merged: ask whether its worktree and branch can go.
+    fn offer_removal(&mut self, id: String) {
+        // A terminal stays; only the worktree it lent goes.
+        if self.tasks.get(&id).is_some_and(|t| t.agent == "shell") {
+            self.confirm = Some(Confirm::ReturnWorktree {
+                text: trf!(
+                    "{id}'s work is merged. Remove its worktree and branch?\n\n\
+                     The terminal stays open; the next agent you start in it gets a fresh worktree.",
+                    id = id
+                ),
+                id,
+            });
+        } else {
+            self.confirm = Some(Confirm::Remove {
+                text: trf!(
+                    "{id} is merged. Remove it, its worktree and branch?\n\n\
+                     Its snapshots go too.",
+                    id = id
+                ),
+                id,
+                prune: true,
+            });
         }
     }
 
@@ -3595,6 +3615,7 @@ impl App {
                     PathBuf::from(t.repo.as_ref()?),
                     t.branch.clone()?,
                     t.base_branch.clone(),
+                    t.base.clone(),
                 ))
             })
             .collect();
@@ -3608,7 +3629,7 @@ impl App {
         std::thread::spawn(move || {
             let v = jobs
                 .into_iter()
-                .filter_map(|(id, wt, root, branch, base_branch)| {
+                .filter_map(|(id, wt, root, branch, base_branch, base)| {
                     // Switched to another branch in there: not what Accept merges.
                     if git::current_branch(&wt)? != branch {
                         return None;
@@ -3620,12 +3641,14 @@ impl App {
                         return None;
                     }
                     let ahead = git::ahead_count(&wt, &target);
+                    let merged = ahead == 0 && base.as_deref() != Some(commit.as_str());
                     Some(Head {
                         id,
                         commit,
                         branch,
                         target,
                         ahead,
+                        merged,
                     })
                 })
                 .collect();
@@ -3639,7 +3662,27 @@ impl App {
         let seen: HashSet<&str> = v.iter().map(|h| h.id.as_str()).collect();
         self.heads.retain(|id, _| seen.contains(id.as_str()));
         self.merge_offers.retain(|id, _| seen.contains(id.as_str()));
+        self.merged.retain(|id, _| seen.contains(id.as_str()));
         for h in v {
+            // Merged since the last look, and not by Accept, which asks
+            // this itself: a `git merge` in a terminal, say.
+            let was = self.merged.insert(h.id.clone(), h.merged);
+            if h.merged && was == Some(false) && !self.accepting.contains(&h.id) {
+                if self.confirm.is_some() {
+                    // Asked once whatever's open is answered.
+                    self.merged.insert(h.id.clone(), false);
+                } else {
+                    self.notify(
+                        trf!(
+                            "{branch} is merged into {target}",
+                            branch = h.branch,
+                            target = h.target
+                        ),
+                        false,
+                    );
+                    self.offer_removal(h.id.clone());
+                }
+            }
             // The first look at a worktree is where it is, not a new commit.
             let moved = self
                 .heads
@@ -3894,6 +3937,7 @@ impl App {
                 ..
             } => {
                 self.notify(trf!("accepting {id}…", id = id), false);
+                self.accepting.insert(id.clone());
                 let id2 = id.clone();
                 self.in_background(
                     move || {

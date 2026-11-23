@@ -563,3 +563,4 @@
 "Commit anything left, merge the branch, then offer to remove the worktree" = "Hace commit de lo que quede, fusiona la rama y luego ofrece eliminar el worktree"
 "Committed on {branch}. Merge it into {target}?" = "Commit hecho en {branch}. ¿Fusionarlo en {target}?"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{n} commit(s) en {branch} que {target} no tiene"
+"{branch} is merged into {target}" = "{branch} está fusionada en {target}"

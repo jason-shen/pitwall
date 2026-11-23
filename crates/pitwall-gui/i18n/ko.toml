@@ -563,3 +563,4 @@
 "Commit anything left, merge the branch, then offer to remove the worktree" = "남은 변경을 커밋하고 브랜치를 병합한 뒤 워크트리 삭제를 제안합니다"
 "Committed on {branch}. Merge it into {target}?" = "{branch}에 커밋했습니다. {target}에 병합할까요?"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{target}에 없는 {branch}의 커밋 {n}개"
+"{branch} is merged into {target}" = "{branch}이(가) {target}에 병합되었습니다"

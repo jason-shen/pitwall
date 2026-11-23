@@ -563,3 +563,4 @@
 "Commit anything left, merge the branch, then offer to remove the worktree" = "残りをコミットしてブランチをマージし、その後ワークツリーの削除を提案します"
 "Committed on {branch}. Merge it into {target}?" = "{branch} にコミットしました。{target} にマージしますか？"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{target} にない {branch} のコミットが {n} 件あります"
+"{branch} is merged into {target}" = "{branch} は {target} にマージされました"

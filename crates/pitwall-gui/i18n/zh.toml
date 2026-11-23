@@ -563,3 +563,4 @@
 "Commit anything left, merge the branch, then offer to remove the worktree" = "提交剩余的更改，合并分支，然后提议移除工作树"
 "Committed on {branch}. Merge it into {target}?" = "已在 {branch} 上提交。要合并到 {target} 吗？"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{branch} 上有 {n} 个 {target} 没有的提交"
+"{branch} is merged into {target}" = "{branch} 已合并到 {target}"
