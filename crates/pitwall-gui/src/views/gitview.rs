@@ -407,76 +407,81 @@ fn status_panel(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) 
             egui::Label::new(RichText::new(tilde(&app.ctx_dir())).small().color(MUTED)).truncate(),
         );
     });
-    ui.horizontal(|ui| {
-        // First, so a narrow pane clips the others instead.
-        let staged = app.changes.iter().filter(|c| c.staged()).count();
-        let label = if staged > 0 {
-            RichText::new(trf!("commit {staged} staged", staged = staged))
-                .color(ACCENT)
-                .strong()
-        } else {
-            RichText::new(tr("commit"))
-        };
-        if ui.small_button(label).on_hover_text("c").clicked() {
-            acts.push(Action::StartCommit);
-        }
-        if is_agent
-            && base_of(app).is_some()
-            && ui
-                .small_button(tr("vs base"))
-                .on_hover_text(tr("Everything this agent changed (b)"))
-                .clicked()
+    // A narrow pane scrolls the buttons sideways instead of cutting them off.
+    egui::ScrollArea::horizontal()
+        .id_salt("git-status-buttons")
+        .show(ui, |ui| ui.horizontal(|ui| status_buttons(ui, app, is_agent, acts)));
+}
+
+fn status_buttons(ui: &mut Ui, app: &App, is_agent: bool, acts: &mut Vec<Action>) {
+    // First, so it's in view without scrolling.
+    let staged = app.changes.iter().filter(|c| c.staged()).count();
+    let label = if staged > 0 {
+        RichText::new(trf!("commit {staged} staged", staged = staged))
+            .color(ACCENT)
+            .strong()
+    } else {
+        RichText::new(tr("commit"))
+    };
+    if ui.small_button(label).on_hover_text("c").clicked() {
+        acts.push(Action::StartCommit);
+    }
+    if is_agent
+        && base_of(app).is_some()
+        && ui
+            .small_button(tr("vs base"))
+            .on_hover_text(tr("Everything this agent changed (b)"))
+            .clicked()
+    {
+        acts.push(Action::ShowMain(MainSrc::Changes {
+            path: None,
+            mode: DiffMode::Base(base_of(app).unwrap()),
+        }));
+    }
+    if ui.small_button(tr("all changes")).clicked() {
+        acts.push(Action::ShowMain(MainSrc::Changes {
+            path: None,
+            mode: DiffMode::Unstaged,
+        }));
+    }
+    let has_branch = app
+        .tabs
+        .get(app.cur)
+        .and_then(|t| app.tasks.get(&t.id))
+        .and_then(|t| t.branch.as_ref())
+        .is_some();
+    let id = app
+        .tabs
+        .get(app.cur)
+        .map(|t| t.id.clone())
+        .unwrap_or_default();
+    if let Some(list) = app.remarks.get(&id).filter(|l| !l.is_empty()) {
+        let all = list
+            .iter()
+            .map(|r| format!("{}:{}  {}", r.file, r.line.unwrap_or(0), r.text.trim()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if ui
+            .small_button(trf!("💬 send {n} to agent", n = list.len()))
+            .on_hover_text(all)
+            .clicked()
         {
-            acts.push(Action::ShowMain(MainSrc::Changes {
-                path: None,
-                mode: DiffMode::Base(base_of(app).unwrap()),
-            }));
+            acts.push(Action::SendRemarks(id.clone()));
         }
-        if ui.small_button(tr("all changes")).clicked() {
-            acts.push(Action::ShowMain(MainSrc::Changes {
-                path: None,
-                mode: DiffMode::Unstaged,
-            }));
+        if ui.small_button(tr("clear")).clicked() {
+            acts.push(Action::ClearRemarks(id.clone()));
         }
-        let has_branch = app
-            .tabs
-            .get(app.cur)
-            .and_then(|t| app.tasks.get(&t.id))
-            .and_then(|t| t.branch.as_ref())
-            .is_some();
-        let id = app
-            .tabs
-            .get(app.cur)
-            .map(|t| t.id.clone())
-            .unwrap_or_default();
-        if let Some(list) = app.remarks.get(&id).filter(|l| !l.is_empty()) {
-            let all = list
-                .iter()
-                .map(|r| format!("{}:{}  {}", r.file, r.line.unwrap_or(0), r.text.trim()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if ui
-                .small_button(trf!("💬 send {n} to agent", n = list.len()))
-                .on_hover_text(all)
-                .clicked()
-            {
-                acts.push(Action::SendRemarks(id.clone()));
-            }
-            if ui.small_button(tr("clear")).clicked() {
-                acts.push(Action::ClearRemarks(id.clone()));
-            }
-        }
-        if has_branch
-            && ui
-                .small_button(tr("✓ accept…"))
-                .on_hover_text(tr(
-                    "Commit the agent's work and merge it into a branch you pick (m)",
-                ))
-                .clicked()
-        {
-            acts.push(Action::Accept);
-        }
-    });
+    }
+    if has_branch
+        && ui
+            .small_button(tr("✓ accept…"))
+            .on_hover_text(tr(
+                "Commit the agent's work and merge it into a branch you pick (m)",
+            ))
+            .clicked()
+    {
+        acts.push(Action::Accept);
+    }
 }
 
 fn main_panel(
