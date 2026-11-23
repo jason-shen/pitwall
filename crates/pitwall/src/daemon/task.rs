@@ -936,6 +936,13 @@ impl Task {
             .unwrap_or_default();
         if plain_terminal {
             match shell.as_str() {
+                // A login shell, as Terminal.app and iTerm2 start. Homebrew
+                // puts itself on PATH in .zprofile, which an interactive
+                // shell alone never reads, so without it brew's programs
+                // were only found when the daemon had your PATH to hand on.
+                "zsh" if cfg!(target_os = "macos") => {
+                    cmd.arg("-l");
+                }
                 "bash" => {
                     cmd.arg("--rcfile");
                     cmd.arg(paths::shell_init().join("bashrc"));

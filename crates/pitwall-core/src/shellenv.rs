@@ -65,20 +65,34 @@ fn is_executable(p: &Path) -> bool {
 
 fn ask() -> HashMap<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    // A .zshrc that's slow, or waits on something, would cost the whole
+    // environment and leave launchd's bare PATH. Without -i the shell skips
+    // .zshrc but still reads .zprofile, where Homebrew's installer puts
+    // `brew shellenv`. A fresh Mac can be slow here: it scans each newly
+    // installed program the first time it runs.
+    for (flags, limit) in [("-lic", 10), ("-lc", 5)] {
+        match ask_with(&shell, flags, Duration::from_secs(limit)) {
+            Ok(env) => return env,
+            // Ends up in the daemon's log.
+            Err(why) => {
+                eprintln!("pitwall: couldn't read the environment from `{shell} {flags}`: {why}")
+            }
+        }
+    }
+    HashMap::new()
+}
+
+fn ask_with(shell: &str, flags: &str, limit: Duration) -> Result<HashMap<String, String>, String> {
     // The mark separates the environment from whatever an interactive shell
     // prints first (greetings, prompts, escape codes).
-    let Ok(mut child) = Command::new(&shell)
-        .args(["-lic", &format!("printf '\\n{MARK}\\n'; /usr/bin/env")])
+    let mut child = Command::new(shell)
+        .args([flags, &format!("printf '\\n{MARK}\\n'; /usr/bin/env")])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    else {
-        return HashMap::new();
-    };
-    let Some(mut out) = child.stdout.take() else {
-        return HashMap::new();
-    };
+        .map_err(|e| e.to_string())?;
+    let mut out = child.stdout.take().ok_or("no stdout")?;
     // Read while waiting, or a big environment fills the pipe and the
     // shell never exits.
     let reader = std::thread::spawn(move || {
@@ -86,23 +100,23 @@ fn ask() -> HashMap<String, String> {
         let _ = out.read_to_string(&mut s);
         s
     });
-    // A shell config that waits on something mustn't hold everything up.
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() < Duration::from_secs(5) => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return HashMap::new();
+                return Err(format!("no answer within {}s", limit.as_secs()));
             }
         }
     }
-    let text = reader.join().unwrap_or_default();
-    parse(&text)
+    let env = parse(&reader.join().unwrap_or_default());
+    if env.is_empty() {
+        return Err("it printed no environment".into());
+    }
+    Ok(env)
 }
 
 fn parse(text: &str) -> HashMap<String, String> {
@@ -132,6 +146,14 @@ mod tests {
         assert_eq!(env.get("HOME").map(String::as_str), Some("/h"));
         assert!(!env.contains_key("PWD"));
         assert!(parse("no mark here\nPATH=/a\n").is_empty());
+    }
+
+    #[test]
+    fn reads_a_shells_environment_or_says_why_not() {
+        let env = ask_with("/bin/sh", "-c", Duration::from_secs(5)).unwrap();
+        assert!(env.contains_key("PATH"));
+        let err = ask_with("/no/such/shell", "-c", Duration::from_secs(1)).unwrap_err();
+        assert!(!err.is_empty());
     }
 
     #[test]

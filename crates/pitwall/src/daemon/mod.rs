@@ -730,8 +730,18 @@ typeset -ga precmd_functions
 precmd_functions+=(_pitwall_shims)
 "#;
 
+// --rcfile only works in a shell that isn't a login shell, so on macOS,
+// where terminals start login shells, this reads what one would.
 const BASHRC: &str = r#"# Written by pitwall for its terminals.
-[ -f ~/.bashrc ] && . ~/.bashrc
+case $OSTYPE in
+  darwin*)
+    [ -f /etc/profile ] && . /etc/profile
+    if [ -f ~/.bash_profile ]; then . ~/.bash_profile
+    elif [ -f ~/.bash_login ]; then . ~/.bash_login
+    elif [ -f ~/.profile ]; then . ~/.profile
+    fi ;;
+  *) [ -f ~/.bashrc ] && . ~/.bashrc ;;
+esac
 _pitwall_shims() {
   [ -n "$PITWALL_SHIMS" ] || return
   case ":$PATH:" in ":$PITWALL_SHIMS:"*) ;; *) PATH="$PITWALL_SHIMS:${PATH//$PITWALL_SHIMS:/}" ;; esac
