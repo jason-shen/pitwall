@@ -564,3 +564,4 @@
 "Committed on {branch}. Merge it into {target}?" = "{branch} にコミットしました。{target} にマージしますか？"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{target} にない {branch} のコミットが {n} 件あります"
 "{branch} is merged into {target}" = "{branch} は {target} にマージされました"
+"{branch} is already merged into {target}" = "{branch} はすでに {target} にマージされています"

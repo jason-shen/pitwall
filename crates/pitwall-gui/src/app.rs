@@ -3796,6 +3796,22 @@ impl App {
         // From the worktree itself: the Changes list may still be another
         // task's when this opens on its own after a brief.
         let pending = git::status(&worktree).map_or(0, |c| c.len());
+        // You merged it yourself already: what's left is the cleanup. A
+        // branch with no commits of its own counts as merged too, but there
+        // was nothing to merge.
+        let own = git::head(&worktree).is_some_and(|h| t.base.as_deref() != Some(h.as_str()));
+        if pending == 0 && own && git::is_merged(&root, &branch, &target) {
+            self.notify(
+                trf!(
+                    "{branch} is already merged into {target}",
+                    branch = branch,
+                    target = target
+                ),
+                false,
+            );
+            self.merged.insert(t.id.clone(), true);
+            return self.offer_removal(t.id);
+        }
         if pending > 0 {
             text.push_str("\n\n");
             text.push_str(&trf!(

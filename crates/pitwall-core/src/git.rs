@@ -593,6 +593,12 @@ pub fn accept(
         run(root, &["rev-parse", "-q", "--verify", &format!("refs/heads/{target}")])
             .map_err(|_| anyhow::anyhow!("there's no branch {target}"))?;
     }
+    // Merged some other way already. Nothing to do, and the checks below
+    // would only get in the way: a dirty main checkout doesn't matter now.
+    let left = worktree.is_dir() && !status(worktree)?.is_empty();
+    if !left && is_merged(root, branch, target) {
+        return Ok(format!("{branch} is already merged into {target}"));
+    }
     // Everything that can refuse the merge is checked before committing, so
     // a refusal doesn't leave a commit behind in the agent's branch.
     if let Some(dir) = &home {
@@ -607,7 +613,7 @@ pub fn accept(
         }
     }
     let mut out = String::new();
-    if worktree.is_dir() && !status(worktree)?.is_empty() {
+    if left {
         if message.trim().is_empty() {
             bail!("the agent left uncommitted work; it needs a commit message");
         }
@@ -800,6 +806,11 @@ pub fn checkout(dir: &Path, branch: &str) -> Result<String> {
     Ok(format!("checked out {branch}"))
 }
 
+/// `target` has every commit on `branch`.
+pub fn is_merged(dir: &Path, branch: &str, target: &str) -> bool {
+    run(dir, &["merge-base", "--is-ancestor", branch, target]).is_ok()
+}
+
 pub fn ahead_count(dir: &Path, base: &str) -> usize {
     run(dir, &["rev-list", "--count", &format!("{base}..HEAD")])
         .ok()
@@ -850,6 +861,12 @@ mod tests {
 
         accept(&d, &wt, "pitwall/z", "main", "unused").unwrap();
         assert_eq!(ahead_count(&wt, "main"), 0);
+        assert!(is_merged(&d, "pitwall/z", "main"));
+
+        // Accepting it again with main dirty: already merged, not refused.
+        std::fs::write(d.join("a.txt"), "edited on main\n").unwrap();
+        let out = accept(&d, &wt, "pitwall/z", "main", "unused").unwrap();
+        assert!(out.contains("already merged"), "{out}");
     }
 
     fn commit_all(dir: &Path, msg: &str) {

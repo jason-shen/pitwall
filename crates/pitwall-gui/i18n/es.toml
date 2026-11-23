@@ -564,3 +564,4 @@
 "Committed on {branch}. Merge it into {target}?" = "Commit hecho en {branch}. ¿Fusionarlo en {target}?"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{n} commit(s) en {branch} que {target} no tiene"
 "{branch} is merged into {target}" = "{branch} está fusionada en {target}"
+"{branch} is already merged into {target}" = "{branch} ya está fusionada en {target}"

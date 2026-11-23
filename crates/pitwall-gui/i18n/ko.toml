@@ -564,3 +564,4 @@
 "Committed on {branch}. Merge it into {target}?" = "{branch}에 커밋했습니다. {target}에 병합할까요?"
 "{n} commit(s) on {branch} that {target} doesn't have" = "{target}에 없는 {branch}의 커밋 {n}개"
 "{branch} is merged into {target}" = "{branch}이(가) {target}에 병합되었습니다"
+"{branch} is already merged into {target}" = "{branch}은(는) 이미 {target}에 병합되었습니다"
