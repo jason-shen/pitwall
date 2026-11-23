@@ -330,7 +330,27 @@ pub enum Reply {
     },
     RemarksSent(String, Result<usize, String>),
     Diffstats(Vec<(String, (usize, usize, usize))>),
+    Heads(Vec<Head>),
     Fleet(crate::remote::FleetReply),
+}
+
+/// Where a worktree's branch is, from the poll that notices you committed.
+pub struct Head {
+    id: String,
+    commit: String,
+    branch: String,
+    target: String,
+    /// Commits on the branch that `target` doesn't have.
+    ahead: usize,
+}
+
+/// A worktree's branch moved on and isn't merged yet; its terminal offers
+/// to merge it.
+#[derive(Clone)]
+pub struct MergeOffer {
+    pub branch: String,
+    pub target: String,
+    pub ahead: usize,
 }
 
 pub struct GitData {
@@ -531,6 +551,11 @@ pub struct App {
     review_ready: Vec<String>,
     /// Ones already put there, so a later turn doesn't pop it again.
     reviewed: HashSet<String>,
+    /// Each worktree's last commit, to notice a new one.
+    heads: HashMap<String, String>,
+    heads_running: bool,
+    last_heads: Instant,
+    pub merge_offers: HashMap<String, MergeOffer>,
     /// When you last typed; a dialog doesn't open under your fingers.
     last_typed: Instant,
     /// Reviews asked for and not written yet, with their project.
@@ -722,6 +747,10 @@ impl App {
             joined: vec![],
             review_ready: vec![],
             reviewed: HashSet::new(),
+            heads: HashMap::new(),
+            heads_running: false,
+            last_heads: Instant::now() - Duration::from_secs(60),
+            merge_offers: HashMap::new(),
             last_typed: Instant::now(),
             reviews_due: vec![],
             reviews_checked: Instant::now(),
@@ -2116,6 +2145,9 @@ impl App {
         if self.last_git.elapsed() > every {
             self.request_git();
         }
+        if self.last_heads.elapsed() > every.max(Duration::from_secs(3)) {
+            self.watch_commits();
+        }
         let theme = self.cfg.tui.theme.clone();
         let mut reloaded = vec![];
         for e in self.tabs.iter_mut().flat_map(|t| t.files.iter_mut()) {
@@ -2357,6 +2389,8 @@ impl App {
     /// Drop a task and every tab showing it.
     fn forget_task(&mut self, id: &str) {
         self.tasks.remove(id);
+        self.heads.remove(id);
+        self.merge_offers.remove(id);
         self.parent_of.retain(|k, v| k != id && v != id);
         self.ungroup(id);
         // A later task can reuse the id; it shouldn't inherit the name.
@@ -2500,7 +2534,10 @@ impl App {
                 }
                 self.refresh_git_now();
                 self.reload_main();
+                // Maybe a commit from the Changes card: offer the merge now.
+                self.last_heads = Instant::now() - Duration::from_secs(60);
             }
+            Reply::Heads(v) => self.on_heads(v),
             Reply::Fleet(r) => self.on_fleet(r),
             Reply::Diffstats(v) => {
                 self.stats_running = false;
@@ -2516,6 +2553,7 @@ impl App {
             Reply::Accepted { id, result } => {
                 self.refresh_git_now();
                 self.reload_main();
+                self.last_heads = Instant::now() - Duration::from_secs(60);
                 match result {
                     // Don't replace a question that's already open; Remove
                     // is in the agent's menu for later.
@@ -3539,6 +3577,116 @@ impl App {
         });
     }
 
+    /// Look at each worktree's branch for a commit made since the last look:
+    /// you committed in its terminal, the Changes card or anywhere else.
+    fn watch_commits(&mut self) {
+        if self.heads_running {
+            return;
+        }
+        self.last_heads = Instant::now();
+        let jobs: Vec<_> = self
+            .tasks
+            .values()
+            .filter(|t| t.host.is_none())
+            .filter_map(|t| {
+                Some((
+                    t.id.clone(),
+                    PathBuf::from(t.worktree.as_ref()?),
+                    PathBuf::from(t.repo.as_ref()?),
+                    t.branch.clone()?,
+                    t.base_branch.clone(),
+                ))
+            })
+            .collect();
+        if jobs.is_empty() {
+            self.heads.clear();
+            self.merge_offers.clear();
+            return;
+        }
+        self.heads_running = true;
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let v = jobs
+                .into_iter()
+                .filter_map(|(id, wt, root, branch, base_branch)| {
+                    // Switched to another branch in there: not what Accept merges.
+                    if git::current_branch(&wt)? != branch {
+                        return None;
+                    }
+                    let commit = git::head(&wt)?;
+                    // Older daemons don't say; Accept would pick the main checkout's.
+                    let target = base_branch.or_else(|| git::current_branch(&root))?;
+                    if target == branch {
+                        return None;
+                    }
+                    let ahead = git::ahead_count(&wt, &target);
+                    Some(Head {
+                        id,
+                        commit,
+                        branch,
+                        target,
+                        ahead,
+                    })
+                })
+                .collect();
+            let _ = tx.send(Ev::Reply(Reply::Heads(v)));
+            ctx.request_repaint();
+        });
+    }
+
+    fn on_heads(&mut self, v: Vec<Head>) {
+        self.heads_running = false;
+        let seen: HashSet<&str> = v.iter().map(|h| h.id.as_str()).collect();
+        self.heads.retain(|id, _| seen.contains(id.as_str()));
+        self.merge_offers.retain(|id, _| seen.contains(id.as_str()));
+        for h in v {
+            // The first look at a worktree is where it is, not a new commit.
+            let moved = self
+                .heads
+                .insert(h.id.clone(), h.commit.clone())
+                .is_some_and(|c| c != h.commit);
+            if h.ahead == 0 {
+                self.merge_offers.remove(&h.id);
+                continue;
+            }
+            if let Some(o) = self.merge_offers.get_mut(&h.id) {
+                o.ahead = h.ahead;
+            } else if moved {
+                // The bar is in its terminal; say so if that isn't on screen.
+                if !self
+                    .cards
+                    .iter()
+                    .any(|c| c.item == h.id && c.child == Child::Terminal)
+                {
+                    if let Some(name) = self.tasks.get(&h.id).map(|t| self.label(t)) {
+                        self.notify(
+                            trf!(
+                                "{name} committed on {branch}: merge it into {target}?",
+                                name = name,
+                                branch = h.branch,
+                                target = h.target
+                            ),
+                            false,
+                        );
+                    }
+                }
+                self.merge_offers.insert(
+                    h.id,
+                    MergeOffer {
+                        branch: h.branch,
+                        target: h.target,
+                        ahead: h.ahead,
+                    },
+                );
+            }
+        }
+    }
+
+    pub fn dismiss_merge(&mut self, id: &str) {
+        // Its commit stays in `heads`, so only the next one offers again.
+        self.merge_offers.remove(id);
+    }
+
     /// Every comment for this agent, typed into its prompt as one message.
     pub fn send_remarks(&mut self, id: &str) {
         let Some(list) = self.remarks.get(id).filter(|l| !l.is_empty()) else {
@@ -3558,12 +3706,14 @@ impl App {
     }
 
     pub fn accept_prompt(&mut self) {
-        let Some(t) = self
-            .ctx_task
-            .as_ref()
-            .and_then(|id| self.tasks.get(id))
-            .cloned()
-        else {
+        match self.ctx_task.clone() {
+            Some(id) => self.accept_prompt_for(&id),
+            None => self.notify(tr("select an agent with its own branch"), true),
+        }
+    }
+
+    pub fn accept_prompt_for(&mut self, id: &str) {
+        let Some(t) = self.tasks.get(id).cloned() else {
             return self.notify(tr("select an agent with its own branch"), true);
         };
         let (Some(branch), Some(root)) = (t.branch.clone(), t.repo.clone()) else {

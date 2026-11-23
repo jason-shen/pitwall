@@ -558,3 +558,8 @@
 "Types: {line}" = "入力する内容：{line}"
 "{agent} was running here, but its session ended" = "{agent} がここで動いていましたが、セッションは終了しました"
 "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "pitwall が前回停止したとき {agent} がここで動いていて、一緒に停止しました。再開すると実行します：{line}"
+"{name} committed on {branch}: merge it into {target}?" = "{name} が {branch} にコミットしました：{target} にマージしますか？"
+"Merge…" = "マージ…"
+"Commit anything left, merge the branch, then offer to remove the worktree" = "残りをコミットしてブランチをマージし、その後ワークツリーの削除を提案します"
+"Committed on {branch}. Merge it into {target}?" = "{branch} にコミットしました。{target} にマージしますか？"
+"{n} commit(s) on {branch} that {target} doesn't have" = "{target} にない {branch} のコミットが {n} 件あります"

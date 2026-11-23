@@ -558,3 +558,8 @@
 "Types: {line}" = "입력할 내용: {line}"
 "{agent} was running here, but its session ended" = "{agent}이(가) 여기서 실행 중이었지만 세션이 끝났습니다"
 "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "pitwall이 마지막으로 멈출 때 {agent}이(가) 여기서 실행 중이었고 함께 멈췄습니다. 재개하면 실행: {line}"
+"{name} committed on {branch}: merge it into {target}?" = "{name}이(가) {branch}에 커밋했습니다: {target}에 병합할까요?"
+"Merge…" = "병합…"
+"Commit anything left, merge the branch, then offer to remove the worktree" = "남은 변경을 커밋하고 브랜치를 병합한 뒤 워크트리 삭제를 제안합니다"
+"Committed on {branch}. Merge it into {target}?" = "{branch}에 커밋했습니다. {target}에 병합할까요?"
+"{n} commit(s) on {branch} that {target} doesn't have" = "{target}에 없는 {branch}의 커밋 {n}개"

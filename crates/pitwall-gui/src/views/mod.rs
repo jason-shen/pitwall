@@ -101,6 +101,9 @@ pub(crate) enum Action {
     Decide(u64, bool),
     SetAuto(String, bool),
     DismissResume(String),
+    /// Open Accept for this task's branch, from the bar offering it.
+    Merge(String),
+    DismissMerge(String),
     NextAttention,
     Revert(String, SnapshotInfo),
     Checkpoint(String),
@@ -3716,6 +3719,12 @@ fn term_body(
         return;
     }
     let offer = app.tasks.get(id).and_then(|t| t.resume.clone());
+    // Not while the agent is still working: it may have more to commit.
+    let merge = app
+        .tasks
+        .get(id)
+        .filter(|t| !(is_agent(t) && matches!(t.status, TaskStatus::Running)))
+        .and(app.merge_offers.get(id).cloned());
     let App {
         terms, settings, ..
     } = app;
@@ -3810,6 +3819,8 @@ fn term_body(
     }
     if let Some(offer) = offer {
         resume_bar(ui, id, side, body, &offer, acts);
+    } else if let Some(m) = merge {
+        merge_bar(ui, id, body, &m, acts);
     }
     for a in actions {
         match a {
@@ -3884,6 +3895,61 @@ fn resume_bar(
             "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}",
             agent = offer.agent,
             line = offer.line
+        ));
+    });
+}
+
+/// Across the bottom of a terminal whose worktree branch has a commit
+/// that isn't merged yet: open Accept for it, or leave it be.
+fn merge_bar(
+    ui: &mut Ui,
+    id: &str,
+    body: Rect,
+    m: &crate::app::MergeOffer,
+    acts: &mut Vec<Action>,
+) {
+    let bar = Rect::from_min_max(pos2(body.left(), body.bottom() - 44.0), body.max);
+    ui.painter().rect_filled(bar, 0.0, PANEL_2);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar.shrink2(vec2(14.0, 8.0)))
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    if child.button(tr("Dismiss")).clicked() {
+        acts.push(Action::DismissMerge(id.to_string()));
+    }
+    let merge = egui::Button::new(
+        RichText::new(tr("Merge…"))
+            .color(theme::c::ON_ACCENT)
+            .strong(),
+    )
+    .fill(ACCENT);
+    if child
+        .add(merge)
+        .on_hover_text(tr(
+            "Commit anything left, merge the branch, then offer to remove the worktree",
+        ))
+        .clicked()
+    {
+        acts.push(Action::Merge(id.to_string()));
+    }
+    child.with_layout(Layout::left_to_right(Align::Center), |ui| {
+        ui.add(
+            egui::Label::new(
+                RichText::new(trf!(
+                    "Committed on {branch}. Merge it into {target}?",
+                    branch = m.branch,
+                    target = m.target
+                ))
+                .color(MUTED),
+            )
+            .truncate(),
+        )
+        .on_hover_text(trf!(
+            "{n} commit(s) on {branch} that {target} doesn't have",
+            n = m.ahead,
+            branch = m.branch,
+            target = m.target
         ));
     });
 }
@@ -6019,6 +6085,8 @@ pub(crate) fn apply(app: &mut App, a: Action) {
         Action::Decide(id, allow) => app.decide(id, allow),
         Action::SetAuto(id, on) => app.set_auto(&id, on),
         Action::DismissResume(id) => app.dismiss_resume(&id),
+        Action::Merge(id) => app.accept_prompt_for(&id),
+        Action::DismissMerge(id) => app.dismiss_merge(&id),
         Action::NextAttention => app.next_attention(),
         Action::Revert(task, s) => {
             let text = trf!("Revert {task}'s files to #{seq} \"{label}\"?\nA safety snapshot is taken first, so you can undo this.", task = task, seq = s.seq, label = s.label);

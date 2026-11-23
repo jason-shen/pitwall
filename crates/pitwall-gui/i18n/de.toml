@@ -558,3 +558,8 @@
 "Types: {line}" = "Tippt: {line}"
 "{agent} was running here, but its session ended" = "{agent} lief hier, aber die Sitzung ist beendet"
 "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "{agent} lief hier, als pitwall zuletzt beendet wurde, und wurde mit beendet. Fortsetzen führt aus: {line}"
+"{name} committed on {branch}: merge it into {target}?" = "{name} hat auf {branch} committet: in {target} zusammenführen?"
+"Merge…" = "Zusammenführen…"
+"Commit anything left, merge the branch, then offer to remove the worktree" = "Committet, was noch übrig ist, führt den Branch zusammen und bietet dann an, den Worktree zu entfernen"
+"Committed on {branch}. Merge it into {target}?" = "Auf {branch} committet. In {target} zusammenführen?"
+"{n} commit(s) on {branch} that {target} doesn't have" = "{n} Commit(s) auf {branch}, die {target} noch nicht hat"

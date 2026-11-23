@@ -558,3 +558,8 @@
 "Types: {line}" = "Escribe: {line}"
 "{agent} was running here, but its session ended" = "{agent} se estaba ejecutando aquí, pero su sesión terminó"
 "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "{agent} se estaba ejecutando aquí cuando pitwall se detuvo por última vez, y se detuvo con él. Reanudar ejecuta: {line}"
+"{name} committed on {branch}: merge it into {target}?" = "{name} hizo commit en {branch}: ¿fusionarlo en {target}?"
+"Merge…" = "Fusionar…"
+"Commit anything left, merge the branch, then offer to remove the worktree" = "Hace commit de lo que quede, fusiona la rama y luego ofrece eliminar el worktree"
+"Committed on {branch}. Merge it into {target}?" = "Commit hecho en {branch}. ¿Fusionarlo en {target}?"
+"{n} commit(s) on {branch} that {target} doesn't have" = "{n} commit(s) en {branch} que {target} no tiene"

@@ -558,3 +558,8 @@
 "Types: {line}" = "Tape : {line}"
 "{agent} was running here, but its session ended" = "{agent} tournait ici, mais sa session s'est terminée"
 "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "{agent} tournait ici quand pitwall s'est arrêté la dernière fois, et s'est arrêté avec lui. Reprendre lance : {line}"
+"{name} committed on {branch}: merge it into {target}?" = "{name} a fait un commit sur {branch} : le fusionner dans {target} ?"
+"Merge…" = "Fusionner…"
+"Commit anything left, merge the branch, then offer to remove the worktree" = "Fait un commit de ce qui reste, fusionne la branche, puis propose de supprimer le worktree"
+"Committed on {branch}. Merge it into {target}?" = "Commit fait sur {branch}. Le fusionner dans {target} ?"
+"{n} commit(s) on {branch} that {target} doesn't have" = "{n} commit(s) sur {branch} que {target} n’a pas"

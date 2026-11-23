@@ -558,3 +558,8 @@
 "Types: {line}" = "将输入：{line}"
 "{agent} was running here, but its session ended" = "{agent} 曾在这里运行，但它的会话已结束"
 "{agent} was running here when pitwall last stopped, and stopped with it. Resume runs: {line}" = "pitwall 上次停止时 {agent} 正在这里运行，并随之停止。恢复会运行：{line}"
+"{name} committed on {branch}: merge it into {target}?" = "{name} 在 {branch} 上提交了：要合并到 {target} 吗？"
+"Merge…" = "合并…"
+"Commit anything left, merge the branch, then offer to remove the worktree" = "提交剩余的更改，合并分支，然后提议移除工作树"
+"Committed on {branch}. Merge it into {target}?" = "已在 {branch} 上提交。要合并到 {target} 吗？"
+"{n} commit(s) on {branch} that {target} doesn't have" = "{branch} 上有 {n} 个 {target} 没有的提交"

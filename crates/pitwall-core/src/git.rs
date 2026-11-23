@@ -51,6 +51,12 @@ pub fn worktrees(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+pub fn head(dir: &Path) -> Option<String> {
+    run(dir, &["rev-parse", "-q", "--verify", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
 pub fn current_branch(dir: &Path) -> Option<String> {
     run(dir, &["symbolic-ref", "--short", "-q", "HEAD"])
         .ok()
@@ -824,6 +830,31 @@ mod tests {
         run(&d, &["add", "."]).unwrap();
         run(&d, &["commit", "-qm", "init"]).unwrap();
         d
+    }
+
+    #[test]
+    fn a_commit_in_a_worktree_is_ahead_until_merged() {
+        let d = repo();
+        let base = head(&d).unwrap();
+        let wt = d.with_extension("wt3");
+        let _ = std::fs::remove_dir_all(&wt);
+        let w = wt.to_str().unwrap();
+        run(&d, &["worktree", "add", "-q", "-b", "pitwall/z", w, &base]).unwrap();
+        assert_eq!(head(&wt).as_deref(), Some(base.as_str()));
+        assert_eq!(ahead_count(&wt, "main"), 0);
+
+        std::fs::write(wt.join("z.txt"), "z\n").unwrap();
+        commit_all(&wt, "Add z");
+        assert_ne!(head(&wt).as_deref(), Some(base.as_str()));
+        assert_eq!(ahead_count(&wt, "main"), 1);
+
+        accept(&d, &wt, "pitwall/z", "main", "unused").unwrap();
+        assert_eq!(ahead_count(&wt, "main"), 0);
+    }
+
+    fn commit_all(dir: &Path, msg: &str) {
+        run(dir, &["add", "-A"]).unwrap();
+        run(dir, &["commit", "-qm", msg]).unwrap();
     }
 
     #[test]
