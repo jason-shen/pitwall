@@ -83,7 +83,20 @@ async fn worktree_dir(args: &[String]) -> Option<PathBuf> {
         })
         .await
     };
-    let why = match tokio::time::timeout(Duration::from_secs(20), ask).await {
+    // A new worktree waits for you to name its branch in the Pitwall
+    // window, which the daemon gives up on after ten minutes.
+    let ask = tokio::time::timeout(Duration::from_secs(660), ask);
+    tokio::pin!(ask);
+    let answer = match tokio::time::timeout(Duration::from_millis(400), &mut ask).await {
+        Ok(a) => a,
+        Err(_) => {
+            // With no window open this is only git being slow, so it
+            // doesn't claim you're being asked.
+            eprintln!("\x1b[2mpitwall: making its worktree…\x1b[0m");
+            ask.await
+        }
+    };
+    let why = match answer {
         Ok(Ok(Response::Text(p))) => return Some(enter(PathBuf::from(p), &here, &root)),
         Ok(Ok(Response::Error(e))) => e,
         Ok(Ok(_)) => "unexpected answer".into(),

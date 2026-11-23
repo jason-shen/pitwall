@@ -209,6 +209,9 @@ pub struct NewTask {
     /// session to this host. Only with the shell agent.
     #[serde(default)]
     pub host: Option<String>,
+    /// The worktree's branch. None picks one from the name.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -301,6 +304,14 @@ pub enum Request {
     LendWorktree {
         id: String,
         dir: String,
+    },
+    /// This connection is a window that can ask you what to call a
+    /// terminal's worktree branch: `AskWorktreeName` comes to it.
+    NameWorktrees,
+    /// The answer to `AskWorktreeName`. None runs the agent in the checkout.
+    WorktreeName {
+        id: String,
+        name: Option<String>,
     },
     /// Remove a terminal's worktree, and its branch once merged.
     ReturnWorktree {
@@ -473,6 +484,17 @@ pub enum Push {
         from: Option<String>,
         to: String,
         text: String,
+    },
+    /// An agent is starting in terminal `id` and its worktree needs a
+    /// branch. Only sent to connections that asked with `NameWorktrees`.
+    AskWorktreeName {
+        id: String,
+        repo: String,
+        suggest: String,
+    },
+    /// Answered, from this window or another, or given up on.
+    WorktreeNamed {
+        id: String,
     },
 }
 

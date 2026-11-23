@@ -31,6 +31,7 @@ pub async fn serve(d: Arc<Daemon>, sock: &Path) -> Result<()> {
 }
 
 struct Conn {
+    id: u64,
     tx: mpsc::UnboundedSender<ServerFrame>,
     attached: Mutex<HashMap<String, JoinHandle<()>>>,
     subscription: Mutex<Option<JoinHandle<()>>>,
@@ -63,7 +64,9 @@ async fn handle_conn(d: Arc<Daemon>, stream: UnixStream) -> Result<()> {
             }
         }
     });
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let conn = Arc::new(Conn {
+        id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         tx,
         attached: Mutex::new(HashMap::new()),
         subscription: Mutex::new(None),
@@ -145,10 +148,28 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
                 bail!("{id} isn't a terminal");
             }
             let dir = paths::expand(&dir);
+            let mut name = None;
+            if t.lent_for(&dir).is_none() {
+                let root = pitwall_core::git::root(&dir).unwrap_or_else(|| dir.clone());
+                match d.ask_branch(&id, &root).await? {
+                    Some(None) => bail!("skipped"),
+                    Some(n) => name = n,
+                    None => {}
+                }
+            }
             let t2 = t.clone();
-            let path = tokio::task::spawn_blocking(move || t2.lend_worktree(&dir)).await??;
+            let path = tokio::task::spawn_blocking(move || t2.lend_worktree(&dir, name.as_deref()))
+                .await??;
             d.saved_changed(&t);
             Response::Text(path.display().to_string())
+        }
+        Request::NameWorktrees => {
+            d.add_namer(conn.id, conn.tx.clone());
+            Response::Ok
+        }
+        Request::WorktreeName { id, name } => {
+            d.name_branch(&id, name)?;
+            Response::Ok
         }
         Request::ReturnWorktree { id, quit } => {
             let t = d.task(&id)?;

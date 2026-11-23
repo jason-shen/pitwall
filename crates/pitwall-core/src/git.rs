@@ -52,9 +52,16 @@ pub fn worktrees(dir: &Path) -> Vec<PathBuf> {
 }
 
 pub fn head(dir: &Path) -> Option<String> {
-    run(dir, &["rev-parse", "-q", "--verify", "HEAD"])
-        .ok()
-        .map(|s| s.trim().to_string())
+    commit_of(dir, "HEAD")
+}
+
+pub fn commit_of(dir: &Path, rev: &str) -> Option<String> {
+    run(
+        dir,
+        &["rev-parse", "-q", "--verify", &format!("{rev}^{{commit}}")],
+    )
+    .ok()
+    .map(|s| s.trim().to_string())
 }
 
 pub fn current_branch(dir: &Path) -> Option<String> {
@@ -548,15 +555,48 @@ fn untracked_in_the_way(
     Ok(hit)
 }
 
-fn ensure_clean(repo_root: &Path, target: &str) -> Result<()> {
-    let dirty = run(
-        repo_root,
-        &["status", "--porcelain", "--untracked-files=no"],
-    )?;
-    if !dirty.trim().is_empty() {
+/// Whether `dir` can take the merge of `branch` as it is. Git refuses
+/// anything staged, and edits to files the merge changes; edits anywhere
+/// else stay as they are, through the merge and through an abort.
+/// `worktree` is where uncommitted work that's committed first lies.
+fn ensure_mergeable(dir: &Path, target: &str, branch: &str, worktree: Option<&Path>) -> Result<()> {
+    if !run(dir, &["diff", "--cached", "--name-only"])?
+        .trim()
+        .is_empty()
+    {
         bail!(
-            "{} has uncommitted changes on {target}; commit or stash them first",
-            repo_root.display()
+            "{} has staged changes on {target}; commit or unstage them first",
+            dir.display()
+        );
+    }
+    let edited: std::collections::HashSet<String> = run(dir, &["diff", "--name-only"])?
+        .lines()
+        .map(String::from)
+        .collect();
+    if edited.is_empty() {
+        return Ok(());
+    }
+    let mut incoming: Vec<String> = run(
+        dir,
+        &["diff", "--name-only", &format!("{target}...{branch}")],
+    )?
+    .lines()
+    .map(String::from)
+    .collect();
+    if let Some(w) = worktree.filter(|w| w.is_dir()) {
+        incoming.extend(status(w)?.into_iter().map(|c| c.path));
+    }
+    let mut hit: Vec<String> = incoming
+        .into_iter()
+        .filter(|p| edited.contains(p))
+        .collect();
+    hit.sort();
+    hit.dedup();
+    if !hit.is_empty() {
+        bail!(
+            "{} has uncommitted changes on {target} to files the merge changes: {}; commit or stash them first",
+            dir.display(),
+            hit.join(", ")
         );
     }
     Ok(())
@@ -602,7 +642,7 @@ pub fn accept(
     // Everything that can refuse the merge is checked before committing, so
     // a refusal doesn't leave a commit behind in the agent's branch.
     if let Some(dir) = &home {
-        ensure_clean(dir, target)?;
+        ensure_mergeable(dir, target, branch, Some(worktree))?;
         let in_the_way = untracked_in_the_way(dir, worktree, target, branch)?;
         if !in_the_way.is_empty() {
             bail!(
@@ -688,7 +728,7 @@ pub fn shortstat(dir: &Path, base: &str) -> Result<(usize, usize, usize)> {
 /// Merge `branch` into whatever is checked out in `repo_root`.
 pub fn merge(repo_root: &Path, branch: &str) -> Result<String> {
     let target = current_branch(repo_root).unwrap_or_else(|| "HEAD".into());
-    ensure_clean(repo_root, &target)?;
+    ensure_mergeable(repo_root, "HEAD", branch, None)?;
     match run(
         repo_root,
         &[
@@ -749,6 +789,42 @@ pub fn branches(dir: &Path) -> Result<Vec<Branch>> {
             })
         })
         .collect())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BranchProblem {
+    Empty,
+    Invalid,
+    Taken,
+}
+
+impl std::fmt::Display for BranchProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            BranchProblem::Empty => "give the branch a name",
+            BranchProblem::Invalid => "that isn't a valid branch name",
+            BranchProblem::Taken => "there's already a branch by that name",
+        })
+    }
+}
+
+/// Why `name` can't be a new branch in the repo at `dir`, if it can't.
+pub fn new_branch_problem(dir: &Path, name: &str) -> Option<BranchProblem> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Some(BranchProblem::Empty);
+    }
+    // check-ref-format alone lets `-x` and `HEAD` through.
+    if name.starts_with('-')
+        || name == "HEAD"
+        || run(dir, &["check-ref-format", "--branch", name]).is_err()
+    {
+        return Some(BranchProblem::Invalid);
+    }
+    if commit_of(dir, &format!("refs/heads/{name}")).is_some() {
+        return Some(BranchProblem::Taken);
+    }
+    None
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -844,6 +920,17 @@ mod tests {
     }
 
     #[test]
+    fn says_why_a_name_cant_be_a_new_branch() {
+        let d = repo();
+        assert_eq!(new_branch_problem(&d, "fix/login-loop"), None);
+        let here = current_branch(&d).unwrap();
+        assert_eq!(new_branch_problem(&d, &here), Some(BranchProblem::Taken));
+        for bad in ["", "  ", "-x", "HEAD", "a..b", "two words", "end."] {
+            assert!(new_branch_problem(&d, bad).is_some(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn a_commit_in_a_worktree_is_ahead_until_merged() {
         let d = repo();
         let base = head(&d).unwrap();
@@ -859,12 +946,16 @@ mod tests {
         assert_ne!(head(&wt).as_deref(), Some(base.as_str()));
         assert_eq!(ahead_count(&wt, "main"), 1);
 
+        // An edit on main the merge doesn't touch is no reason to refuse,
+        // and it's still there after.
+        std::fs::write(d.join("a.txt"), "mine\n").unwrap();
         accept(&d, &wt, "pitwall/z", "main", "unused").unwrap();
+        assert_eq!(std::fs::read_to_string(d.join("a.txt")).unwrap(), "mine\n");
+        assert!(d.join("z.txt").is_file());
         assert_eq!(ahead_count(&wt, "main"), 0);
         assert!(is_merged(&d, "pitwall/z", "main"));
 
-        // Accepting it again with main dirty: already merged, not refused.
-        std::fs::write(d.join("a.txt"), "edited on main\n").unwrap();
+        // Accepting it again: already merged, nothing to do.
         let out = accept(&d, &wt, "pitwall/z", "main", "unused").unwrap();
         assert!(out.contains("already merged"), "{out}");
     }
@@ -959,6 +1050,15 @@ mod tests {
             "a refused accept committed"
         );
         run(&d, &["checkout", "-q", "--", "a.txt"]).unwrap();
+        // So does anything staged, which git won't merge over.
+        std::fs::write(d.join("c.txt"), "staged\n").unwrap();
+        run(&d, &["add", "c.txt"]).unwrap();
+        let err = accept(&d, &wt, "pitwall/x", "main", "Add b")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("staged"), "{err}");
+        run(&d, &["rm", "-q", "--cached", "c.txt"]).unwrap();
+        std::fs::remove_file(d.join("c.txt")).unwrap();
 
         let out = accept(&d, &wt, "pitwall/x", "main", "Add b").unwrap();
         assert!(

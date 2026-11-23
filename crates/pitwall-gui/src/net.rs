@@ -92,6 +92,13 @@ pub fn start(rt: &tokio::runtime::Runtime, ctx: egui::Context, tx: Sender<Ev>, s
                     // (e.g. restarted from the sidebar).
                     spawned = false;
                     let _ = client.call(Request::Subscribe).await;
+                    // A daemon from an older version drops the connection
+                    // over a request it doesn't know.
+                    if let Ok(Response::Pong { version }) = client.call(Request::Ping).await {
+                        if version == pitwall_core::VERSION {
+                            let _ = client.call(Request::NameWorktrees).await;
+                        }
+                    }
                     let tasks = match client.call(Request::ListTasks).await {
                         Ok(Response::Tasks(t)) => t,
                         _ => vec![],

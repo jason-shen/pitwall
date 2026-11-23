@@ -734,7 +734,10 @@ impl App {
                     }
                 }
             }
-            Push::Ops(_) | Push::Message { .. } => {}
+            Push::Ops(_)
+            | Push::Message { .. }
+            | Push::AskWorktreeName { .. }
+            | Push::WorktreeNamed { .. } => {}
         }
     }
 
@@ -1042,6 +1045,7 @@ impl App {
             prompt,
             rows: size.0.max(10),
             cols: size.1.max(40),
+            branch: None,
             brief: None,
             host: None,
         };

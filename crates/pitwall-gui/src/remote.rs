@@ -225,6 +225,7 @@ impl App {
             cols,
             brief: None,
             host: Some(h.name.clone()),
+            ..Default::default()
         };
         self.call(Request::NewTask(req), move |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t, true)),

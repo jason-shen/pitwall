@@ -378,6 +378,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
             agent,
             repo,
             base,
+            branch,
             here,
             prompt,
             attach,
@@ -397,6 +398,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
                 prompt,
                 rows,
                 cols,
+                branch,
                 brief: None,
                 host: None,
             };

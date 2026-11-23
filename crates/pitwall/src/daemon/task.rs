@@ -209,10 +209,12 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Create `pitwall/<id>` branch + worktree under ~/.pitwall/worktrees.
+/// Create a branch + worktree under ~/.pitwall/worktrees: `branch` if it's
+/// given, else one named after `id`.
 pub fn create_worktree(
     repo: &Path,
     id: &str,
+    branch: Option<&str>,
     base: Option<&str>,
 ) -> Result<(PathBuf, PathBuf, String, String, Option<String>)> {
     let root = PathBuf::from(
@@ -222,7 +224,15 @@ pub fn create_worktree(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "repo".into());
-    // Pick a branch/worktree name that doesn't exist yet (old runs may have left one behind).
+    let chosen = branch.map(str::trim).filter(|b| !b.is_empty());
+    if let Some(b) = chosen {
+        if let Some(why) = pitwall_core::git::new_branch_problem(&root, b) {
+            bail!("{b}: {why}");
+        }
+    }
+    // Pick names that don't exist yet (old runs may have left one behind).
+    // A name you chose is used as it is; only its folder gets a number.
+    let stem = slug(chosen.unwrap_or(id));
     let mut n = 1;
     let (branch, path) = loop {
         let suffix = if n == 1 {
@@ -230,18 +240,22 @@ pub fn create_worktree(
         } else {
             format!("-{n}")
         };
-        let branch = format!("pitwall/{id}{suffix}");
-        let path = paths::worktrees().join(format!("{}-{id}{suffix}", slug(&repo_name)));
-        let exists = git(
-            &root,
-            &[
-                "rev-parse",
-                "-q",
-                "--verify",
-                &format!("refs/heads/{branch}"),
-            ],
-        )
-        .is_ok();
+        let branch = match chosen {
+            Some(b) => b.to_string(),
+            None => format!("{id}{suffix}"),
+        };
+        let path = paths::worktrees().join(format!("{}-{stem}{suffix}", slug(&repo_name)));
+        let exists = chosen.is_none()
+            && git(
+                &root,
+                &[
+                    "rev-parse",
+                    "-q",
+                    "--verify",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )
+            .is_ok();
         if !exists && !path.exists() {
             break (branch, path);
         }
@@ -268,6 +282,20 @@ pub fn create_worktree(
     )
     .with_context(|| format!("create worktree (does branch {branch} already exist?)"))?;
     Ok((root, path, branch, base_sha, base_branch))
+}
+
+fn lent_for(lent: Option<&Place>, id: &str, dir: &Path) -> Option<Result<PathBuf>> {
+    let l = lent.filter(|l| l.cwd.is_dir())?;
+    let root = git(dir, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(PathBuf::from);
+    if root.as_ref() == l.repo.as_ref() || dir.starts_with(&l.cwd) {
+        return Some(Ok(l.cwd.clone()));
+    }
+    Some(Err(anyhow!(
+        "{id} already has a worktree for {}; accept or remove it first",
+        l.repo.as_deref().unwrap_or(Path::new("?")).display()
+    )))
 }
 
 /// Remove a task's worktree, and its branch if that's merged. `-d` refuses
@@ -709,8 +737,12 @@ impl Task {
         let agent_cfg = agent_config(cfg, &req.agent)?;
         let place = match (&req.repo, req.no_worktree) {
             (Some(r), false) => {
-                let (root, wt, br, base, base_branch) =
-                    create_worktree(&paths::expand(r), &id, req.base.as_deref())?;
+                let (root, wt, br, base, base_branch) = create_worktree(
+                    &paths::expand(r),
+                    &id,
+                    req.branch.as_deref(),
+                    req.base.as_deref(),
+                )?;
                 Place {
                     cwd: wt,
                     repo: Some(root),
@@ -833,22 +865,20 @@ impl Task {
         }
     }
 
+    /// The worktree this terminal already has for the repo `dir` is in.
+    /// None when it has none yet; an error when it has one for another repo.
+    pub fn lent_for(&self, dir: &Path) -> Option<Result<PathBuf>> {
+        lent_for(self.lent.lock().unwrap().as_ref(), &self.id, dir)
+    }
+
     /// The worktree for an agent starting in this terminal from `dir`: the
     /// one it has, or a new branch off whatever the repo has checked out.
-    pub fn lend_worktree(&self, dir: &Path) -> Result<PathBuf> {
+    pub fn lend_worktree(&self, dir: &Path, branch: Option<&str>) -> Result<PathBuf> {
         let mut lent = self.lent.lock().unwrap();
-        if let Some(l) = lent.as_ref().filter(|l| l.cwd.is_dir()) {
-            let root = git(dir, &["rev-parse", "--show-toplevel"]).ok().map(PathBuf::from);
-            if root.as_ref() == l.repo.as_ref() || dir.starts_with(&l.cwd) {
-                return Ok(l.cwd.clone());
-            }
-            bail!(
-                "{} already has a worktree for {}; accept or remove it first",
-                self.id,
-                l.repo.as_deref().unwrap_or(Path::new("?")).display()
-            );
+        if let Some(had) = lent_for(lent.as_ref(), &self.id, dir) {
+            return had;
         }
-        let (root, path, branch, base, base_branch) = create_worktree(dir, &self.id, None)?;
+        let (root, path, branch, base, base_branch) = create_worktree(dir, &self.id, branch, None)?;
         *lent = Some(Place {
             cwd: path.clone(),
             repo: Some(root),
@@ -1849,15 +1879,15 @@ mod turn_tests {
         let t = Task::spawn("term-9".into(), &req, &Config::default()).unwrap();
         assert!(t.info().worktree.is_none());
 
-        let wt = t.lend_worktree(&repo.join("sub")).unwrap();
+        let wt = t.lend_worktree(&repo.join("sub"), None).unwrap();
         assert!(wt.join("sub/a.txt").is_file());
         let info = t.info();
-        assert_eq!(info.branch.as_deref(), Some("pitwall/term-9"));
+        assert_eq!(info.branch.as_deref(), Some("term-9"));
         assert_eq!(info.base_branch.as_deref(), Some("main"));
         assert_eq!(info.worktree.as_deref(), Some(wt.to_str().unwrap()));
         assert_eq!(info.repo.map(PathBuf::from), repo.canonicalize().ok());
         // A second agent in the same terminal picks up the same worktree.
-        assert_eq!(t.lend_worktree(&repo).unwrap(), wt);
+        assert_eq!(t.lend_worktree(&repo, None).unwrap(), wt);
         // It's kept for a daemon restart.
         assert_eq!(t.saved().lent.map(|l| l.cwd), Some(wt.clone()));
 
@@ -1868,11 +1898,23 @@ mod turn_tests {
         t.return_worktree(false).unwrap();
         assert!(!wt.exists());
         assert!(t.info().worktree.is_none() && t.info().branch.is_none());
-        g(&repo, &["rev-parse", "--verify", "refs/heads/pitwall/term-9"]);
+        g(&repo, &["rev-parse", "--verify", "refs/heads/term-9"]);
         // The next one gets a fresh worktree beside the kept branch.
-        let again = t.lend_worktree(&repo).unwrap();
+        let again = t.lend_worktree(&repo, None).unwrap();
         assert_ne!(again, wt);
-        assert_eq!(t.info().branch.as_deref(), Some("pitwall/term-9-2"));
+        assert_eq!(t.info().branch.as_deref(), Some("term-9-2"));
+
+        // A name you give is used as it is, and one that's taken is refused.
+        t.return_worktree(false).unwrap();
+        assert!(t.lend_worktree(&repo, Some("term-9")).is_err());
+        assert!(t.info().worktree.is_none());
+        let named = t.lend_worktree(&repo, Some("fix/login")).unwrap();
+        assert!(
+            named.to_string_lossy().ends_with("-fix-login"),
+            "{}",
+            named.display()
+        );
+        assert_eq!(t.info().branch.as_deref(), Some("fix/login"));
 
         t.kill();
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1911,7 +1953,7 @@ mod turn_tests {
             ..Default::default()
         };
         let t = Task::spawn("term-8".into(), &req, &Config::default()).unwrap();
-        let wt = t.lend_worktree(&repo).unwrap();
+        let wt = t.lend_worktree(&repo, None).unwrap();
         std::fs::write(&go, wt.display().to_string()).unwrap();
         let wt = wt.canonicalize().unwrap();
         let until = Instant::now() + Duration::from_secs(5);

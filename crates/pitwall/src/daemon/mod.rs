@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Result};
 use pitwall_core::config::Config;
 use pitwall_core::proto::{
-    Approval, ApprovalSource, NewTask, Push, SnapshotInfo, TaskInfo, TaskStatus, Tier,
+    Approval, ApprovalSource, NewTask, Push, ServerFrame, SnapshotInfo, TaskInfo, TaskStatus, Tier,
 };
 use pitwall_core::{now_unix, paths};
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
@@ -51,6 +51,10 @@ pub struct Daemon {
     /// Saved tasks that couldn't start again (folder gone, agent missing).
     /// Kept in tasks.json so one bad start doesn't forget them.
     unrestored: Mutex<Vec<task::Saved>>,
+    /// Windows that asked to name terminals' worktree branches, by connection.
+    namers: Mutex<BTreeMap<u64, mpsc::UnboundedSender<ServerFrame>>>,
+    /// Terminals waiting for a branch name, by id.
+    naming: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
 }
 
 impl Daemon {
@@ -69,11 +73,68 @@ impl Daemon {
             starting: Default::default(),
             restoring: std::sync::atomic::AtomicBool::new(true),
             unrestored: Mutex::new(vec![]),
+            namers: Default::default(),
+            naming: Default::default(),
         }
     }
 
     pub fn emit(&self, p: Push) {
         let _ = self.events.send(p);
+    }
+
+    pub fn add_namer(&self, conn: u64, tx: mpsc::UnboundedSender<ServerFrame>) {
+        self.namers.lock().unwrap().insert(conn, tx);
+    }
+
+    /// To the windows that name worktrees only: an older `pitwall attach`
+    /// would drop its connection over a push it doesn't know. Says whether
+    /// any window got it.
+    fn tell_namers(&self, p: Push) -> bool {
+        let mut namers = self.namers.lock().unwrap();
+        // A window that's gone fails the send.
+        namers.retain(|_, tx| tx.send(ServerFrame::Push(p.clone())).is_ok());
+        !namers.is_empty()
+    }
+
+    /// Ask the open windows what to call the branch for terminal `id`'s
+    /// worktree. None when there's no window to ask, or nobody answered;
+    /// Some(None) when you'd rather the agent ran in the checkout.
+    pub async fn ask_branch(&self, id: &str, repo: &Path) -> Result<Option<Option<String>>> {
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut naming = self.naming.lock().unwrap();
+            if naming.contains_key(id) {
+                bail!("still waiting for a branch name for {id}");
+            }
+            naming.insert(id.to_string(), tx);
+        }
+        let ask = Push::AskWorktreeName {
+            id: id.to_string(),
+            repo: repo.display().to_string(),
+            suggest: id.to_string(),
+        };
+        let answer = if self.tell_namers(ask) {
+            tokio::time::timeout(Duration::from_secs(600), rx)
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+        } else {
+            None
+        };
+        self.naming.lock().unwrap().remove(id);
+        self.tell_namers(Push::WorktreeNamed { id: id.to_string() });
+        Ok(answer)
+    }
+
+    pub fn name_branch(&self, id: &str, name: Option<String>) -> Result<()> {
+        let tx = self
+            .naming
+            .lock()
+            .unwrap()
+            .remove(id)
+            .ok_or_else(|| anyhow!("{id} isn't waiting for a branch name"))?;
+        let _ = tx.send(name);
+        Ok(())
     }
 
     pub fn emit_task(&self, t: &Task) {
@@ -788,4 +849,50 @@ pub async fn run() -> Result<()> {
     tracing::info!("shutting down");
     d.shutdown();
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_window_names_the_branch_or_nobody_is_asked() {
+        let tmp = std::env::temp_dir().join(format!("pitwall-ask-{}", std::process::id()));
+        std::env::set_var("PITWALL_HOME", tmp.join("home"));
+        let (snap_tx, _snap_rx) = mpsc::unbounded_channel();
+        let d = Arc::new(Daemon::new(Config::default(), snap_tx));
+        let repo = Path::new("/r");
+
+        // No window: the daemon names it itself.
+        assert_eq!(d.ask_branch("term-1", repo).await.unwrap(), None);
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        d.add_namer(1, tx);
+        let d2 = d.clone();
+        let asked = tokio::spawn(async move { d2.ask_branch("term-1", Path::new("/r")).await });
+        match rx.recv().await {
+            Some(ServerFrame::Push(Push::AskWorktreeName { id, suggest, .. })) => {
+                assert_eq!((id.as_str(), suggest.as_str()), ("term-1", "term-1"))
+            }
+            other => panic!("{other:?}"),
+        }
+        // One question per terminal at a time.
+        assert!(d.ask_branch("term-1", repo).await.is_err());
+        d.name_branch("term-1", Some("fix/login".into())).unwrap();
+        assert_eq!(
+            asked.await.unwrap().unwrap(),
+            Some(Some("fix/login".into()))
+        );
+        // The other windows are told to close it.
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerFrame::Push(Push::WorktreeNamed { .. }))
+        ));
+        assert!(d.name_branch("term-1", None).is_err());
+
+        // A window that's gone doesn't count.
+        drop(rx);
+        assert_eq!(d.ask_branch("term-2", repo).await.unwrap(), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

@@ -35,7 +35,7 @@ enum Cmd {
 
     /// Start an agent task. Inside a git repo it gets its own worktree + branch.
     New {
-        /// Task name (becomes the id and the branch `pitwall/<name>`).
+        /// Task name (becomes the id, and the branch unless --branch says).
         name: String,
         /// Agent from [agents] in the config.
         #[arg(short, long, default_value = "claude")]
@@ -46,6 +46,9 @@ enum Cmd {
         /// Base ref for the new branch.
         #[arg(short, long)]
         base: Option<String>,
+        /// Name for the new branch.
+        #[arg(long)]
+        branch: Option<String>,
         /// Run in place instead of creating a worktree.
         #[arg(long)]
         here: bool,

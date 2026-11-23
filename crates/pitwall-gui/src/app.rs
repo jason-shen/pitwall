@@ -102,6 +102,20 @@ pub struct NewForm {
     pub sessions: Vec<(pitwall_core::claude::Session, String)>,
     /// Which of `sessions` to resume.
     pub resume: Option<usize>,
+    /// The worktree's branch. It follows the name until you type one.
+    pub branch: String,
+    pub branch_edited: bool,
+    /// The last branch name checked, in which folder, and what was wrong.
+    pub branch_check: std::cell::RefCell<Option<(String, String, Option<git::BranchProblem>)>>,
+}
+
+/// An agent is starting in a terminal, and its worktree needs a branch.
+pub struct AskBranch {
+    pub id: String,
+    pub repo: PathBuf,
+    pub name: String,
+    pub problem: Option<git::BranchProblem>,
+    pub focus_set: bool,
 }
 
 /// A review comment on one line of an agent's diff, waiting to be sent.
@@ -146,6 +160,14 @@ pub fn project_item(root: &str) -> String {
 
 pub fn item_project(id: &str) -> Option<&str> {
     id.strip_prefix("project:")
+}
+
+pub fn branch_problem_text(p: git::BranchProblem) -> &'static str {
+    match p {
+        git::BranchProblem::Empty => tr("Give the branch a name"),
+        git::BranchProblem::Invalid => tr("That isn't a valid branch name"),
+        git::BranchProblem::Taken => tr("There's already a branch by that name"),
+    }
 }
 
 pub fn slugify(s: &str) -> String {
@@ -565,6 +587,7 @@ pub struct App {
     merged: HashMap<String, bool>,
     /// Accepts still running; their reply asks about the worktree itself.
     accepting: HashSet<String>,
+    pub ask_branch: Option<AskBranch>,
     /// When you last typed; a dialog doesn't open under your fingers.
     last_typed: Instant,
     /// Reviews asked for and not written yet, with their project.
@@ -762,6 +785,7 @@ impl App {
             merge_offers: HashMap::new(),
             merged: HashMap::new(),
             accepting: HashSet::new(),
+            ask_branch: None,
             last_typed: Instant::now(),
             reviews_due: vec![],
             reviews_checked: Instant::now(),
@@ -1743,6 +1767,7 @@ impl App {
         if self.review_ready.is_empty()
             || self.confirm.is_some()
             || self.new_form.is_some()
+            || self.ask_branch.is_some()
             || self.bar.is_some()
             || !self.ctx.input(|i| i.focused)
         {
@@ -2394,7 +2419,47 @@ impl App {
                     false,
                 );
             }
+            Push::AskWorktreeName { id, repo, suggest } => {
+                let repo = PathBuf::from(repo);
+                // An old run may have left a branch by that name.
+                let name = (1..)
+                    .map(|n| {
+                        if n == 1 {
+                            suggest.clone()
+                        } else {
+                            format!("{suggest}-{n}")
+                        }
+                    })
+                    .take(50)
+                    .find(|b| git::new_branch_problem(&repo, b).is_none())
+                    .unwrap_or(suggest);
+                self.ask_branch = Some(AskBranch {
+                    id,
+                    problem: git::new_branch_problem(&repo, &name),
+                    repo,
+                    name,
+                    focus_set: false,
+                });
+            }
+            Push::WorktreeNamed { id } => {
+                if self.ask_branch.as_ref().is_some_and(|a| a.id == id) {
+                    self.ask_branch = None;
+                }
+            }
         }
+    }
+
+    /// Answer the terminal waiting on a branch name. None runs its agent in
+    /// the checkout; an empty name lets the daemon pick one.
+    pub fn answer_branch(&mut self, name: Option<String>) {
+        let Some(a) = self.ask_branch.take() else {
+            return;
+        };
+        let id = a.id.clone();
+        self.call(Request::WorktreeName { id: a.id, name }, move |r| {
+            r.err().map(|e| Reply::Notice(format!("{id}: {e}"), true))
+        });
+        self.focus_pane = true;
     }
 
     /// Drop a task and every tab showing it.
@@ -2686,6 +2751,9 @@ impl App {
             brief: None,
             sessions: self.resumable_sessions(),
             resume: None,
+            branch: String::new(),
+            branch_edited: false,
+            branch_check: Default::default(),
         });
     }
 
@@ -2762,6 +2830,9 @@ impl App {
             brief: None,
             sessions: vec![],
             resume: None,
+            branch: String::new(),
+            branch_edited: false,
+            branch_check: Default::default(),
         });
     }
 
@@ -2780,6 +2851,9 @@ impl App {
             brief: None,
             sessions: vec![],
             resume: None,
+            branch: String::new(),
+            branch_edited: false,
+            branch_check: Default::default(),
         });
     }
 
@@ -3106,7 +3180,8 @@ impl App {
                 } else if !pitwall_core::paths::expand(f.dir.trim()).is_dir() {
                     Some(tr("That folder doesn't exist").into())
                 } else {
-                    None
+                    self.form_branch_problem(f)
+                        .map(|p| branch_problem_text(p).into())
                 }
             }
             NewKind::Brief => {
@@ -3130,6 +3205,25 @@ impl App {
                 }
             }
         }
+    }
+
+    /// What's wrong with the branch you typed, if anything. This runs every
+    /// frame, so git is only asked again when the name or folder changes.
+    fn form_branch_problem(&self, f: &NewForm) -> Option<git::BranchProblem> {
+        if !f.worktree || !f.branch_edited || f.resume.is_some() {
+            return None;
+        }
+        let key = (f.dir.trim().to_string(), f.branch.trim().to_string());
+        let mut check = f.branch_check.borrow_mut();
+        if let Some((dir, branch, problem)) = check.as_ref() {
+            if (dir, branch) == (&key.0, &key.1) {
+                return *problem;
+            }
+        }
+        let dir = pitwall_core::paths::expand(&key.0);
+        let problem = git::root(&dir).and_then(|r| git::new_branch_problem(&r, &key.1));
+        *check = Some((key.0, key.1, problem));
+        problem
     }
 
     pub fn submit_form(&mut self) {
@@ -3177,6 +3271,9 @@ impl App {
                     Some((cwd, args)) => (cwd, false, args),
                     None => (dir, f.worktree, vec![]),
                 };
+                // Left alone, the daemon names it after the agent and finds
+                // one that's free.
+                let branch = Some(f.branch.trim().to_string()).filter(|_| f.branch_edited);
                 self.create_task_with(
                     f.agent,
                     slugify(&f.name),
@@ -3185,6 +3282,7 @@ impl App {
                     dir,
                     f.brief,
                     args,
+                    branch,
                 );
             }
             NewKind::Project => {
@@ -3251,7 +3349,7 @@ impl App {
         worktree: bool,
         dir: PathBuf,
     ) {
-        self.create_task_with(agent, name, prompt, worktree, dir, None, vec![])
+        self.create_task_with(agent, name, prompt, worktree, dir, None, vec![], None)
     }
 
     pub fn create_task_with(
@@ -3263,6 +3361,7 @@ impl App {
         dir: PathBuf,
         brief: Option<PathBuf>,
         args: Vec<String>,
+        branch: Option<String>,
     ) {
         let repo = git::root(&dir).map(|p| p.display().to_string());
         let (rows, cols) = self.pane_grid();
@@ -3285,6 +3384,7 @@ impl App {
             cols,
             brief: brief.map(|b| b.display().to_string()),
             host: None,
+            branch,
         };
         self.call(Request::NewTask(req), move |r| match r {
             Ok(Response::Task(t)) => Some(Reply::Created(t, shell)),
@@ -3506,6 +3606,7 @@ impl App {
             cols,
             brief: None,
             host: None,
+            ..Default::default()
         };
         let Some(client) = self.client.clone() else {
             return;
@@ -3800,12 +3901,18 @@ impl App {
         let root = PathBuf::from(root);
         let worktree = PathBuf::from(t.worktree.clone().unwrap_or_else(|| t.cwd.clone()));
         let here = git::current_branch(&root);
-        // Other agents' branches aren't somewhere you'd merge into.
+        // Other agents' branches aren't somewhere you'd merge into. Older
+        // versions put theirs under pitwall/.
+        let agents: HashSet<&str> = self
+            .tasks
+            .values()
+            .filter_map(|t| t.branch.as_deref())
+            .collect();
         let branches: Vec<String> = git::branches(&root)
             .unwrap_or_default()
             .into_iter()
             .map(|b| b.name)
-            .filter(|b| *b != branch && !b.starts_with("pitwall/"))
+            .filter(|b| *b != branch && !b.starts_with("pitwall/") && !agents.contains(b.as_str()))
             .collect();
         // Older daemons don't say; then it's whatever the main checkout is on.
         let target = t
@@ -3830,8 +3937,10 @@ impl App {
         let pending = git::status(&worktree).map_or(0, |c| c.len());
         // You merged it yourself already: what's left is the cleanup. A
         // branch with no commits of its own counts as merged too, but there
-        // was nothing to merge.
-        let own = git::head(&worktree).is_some_and(|h| t.base.as_deref() != Some(h.as_str()));
+        // was nothing to merge. Read from the branch, since the worktree may
+        // be gone already.
+        let own =
+            git::commit_of(&root, &branch).is_some_and(|h| t.base.as_deref() != Some(h.as_str()));
         if pending == 0 && own && git::is_merged(&root, &branch, &target) {
             self.notify(
                 trf!(

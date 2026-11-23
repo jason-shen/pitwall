@@ -965,7 +965,7 @@ fn draw_modal(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled(
                         if *worktree {
                             format!(
-                                "own branch pitwall/{} + worktree",
+                                "own branch {} + worktree",
                                 if name.is_empty() { "<name>" } else { name }
                             )
                         } else {

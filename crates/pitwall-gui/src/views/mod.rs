@@ -4530,17 +4530,31 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
                             ui.end_row();
                             return;
                         }
-                        let id = crate::app::slugify(&f.name);
                         let label = if in_repo {
-                            trf!(
-                                "Own branch and worktree ({branch})",
-                                branch = format!("pitwall/{}", if id.is_empty() { "<name>" } else { &id })
-                            )
+                            tr("Own branch and worktree")
                         } else {
-                            tr("Own branch and worktree (the folder isn't a git repo)").into()
+                            tr("Own branch and worktree (the folder isn't a git repo)")
                         };
                         ui.add_enabled(in_repo, egui::Checkbox::new(&mut f.worktree, label));
                         ui.end_row();
+                        if in_repo && f.worktree {
+                            if !f.branch_edited {
+                                f.branch = crate::app::slugify(&f.name);
+                            }
+                            ui.label(tr("Branch"));
+                            let r = ui.add(
+                                TextEdit::singleline(&mut f.branch)
+                                    .hint_text("fix/login-loop")
+                                    .desired_width(380.0),
+                            );
+                            if r.changed() {
+                                f.branch_edited = true;
+                            }
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                create = true;
+                            }
+                            ui.end_row();
+                        }
                     }
                     NewKind::Project => {
                         ui.label(tr("Folder"));
@@ -4630,6 +4644,87 @@ fn new_form(ctx: &egui::Context, app: &mut App) {
     }
 }
 
+/// Typing `claude` in a terminal inside a repo gives it a worktree; this
+/// asks what to call its branch while the terminal waits.
+fn ask_branch(ctx: &egui::Context, app: &mut App) {
+    let Some(a) = app.ask_branch.as_ref() else {
+        return;
+    };
+    let term = app
+        .tasks
+        .get(&a.id)
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| a.id.clone());
+    let repo = a
+        .repo
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let (enter, esc) = ctx.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
+    let mut answer: Option<Option<String>> = None;
+    let id = Id::unique("ask-branch");
+    let m = egui::Modal::new(id)
+        .area(egui::Modal::default_area(id).anchor(Align2::CENTER_TOP, vec2(0.0, 110.0)))
+        .show(ctx, |ui| {
+            let a = app.ask_branch.as_mut().unwrap();
+            ui.set_width(440.0);
+            ui.label(RichText::new(tr("Name the branch")).size(16.0).strong().color(TEXT));
+            ui.add_space(6.0);
+            ui.label(trf!(
+                "The agent starting in {term} works in its own worktree of {repo}, on a new branch.",
+                term = term,
+                repo = repo
+            ));
+            ui.add_space(8.0);
+            let r = ui.add(
+                TextEdit::singleline(&mut a.name)
+                    .hint_text("fix/login-loop")
+                    .desired_width(f32::INFINITY),
+            );
+            if !a.focus_set {
+                r.request_focus();
+                a.focus_set = true;
+            }
+            if r.changed() {
+                a.problem = git::new_branch_problem(&a.repo, &a.name);
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let ok = a.problem.is_none();
+                let create = ui
+                    .add_enabled(
+                        ok,
+                        egui::Button::new(
+                            RichText::new(tr("Create worktree")).color(theme::c::ON_ACCENT).strong(),
+                        )
+                        .fill(ACCENT),
+                    )
+                    .on_hover_text("↵")
+                    .clicked();
+                if ok && (create || (r.lost_focus() && enter)) {
+                    answer = Some(Some(a.name.trim().to_string()));
+                }
+                if ui
+                    .button(tr("Work in the checkout"))
+                    .on_hover_text(tr("The agent runs in your checkout, with no branch of its own"))
+                    .clicked()
+                {
+                    answer = Some(None);
+                }
+                if let Some(p) = a.problem {
+                    ui.label(RichText::new(crate::app::branch_problem_text(p)).small().color(AMBER));
+                }
+            });
+        });
+    // Closing it still gives the agent a worktree, named by the daemon.
+    if answer.is_none() && (esc || m.should_close()) {
+        answer = Some(Some(String::new()));
+    }
+    if let Some(name) = answer {
+        app.answer_branch(name);
+    }
+}
+
 /// Files dropped on the window paste their paths into a terminal, as other
 /// terminals do; Claude Code attaches an image given its path. It goes to the
 /// terminal card under the pointer, else the active terminal. A drag from
@@ -4669,6 +4764,7 @@ fn dropped_files(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
 fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
     new_form(ctx, app);
     remark_dialog(ctx, app);
+    ask_branch(ctx, app);
     if let Some(c) = &app.confirm {
         let text = c.text().to_string();
         let accept = matches!(c, Confirm::Accept { .. });
