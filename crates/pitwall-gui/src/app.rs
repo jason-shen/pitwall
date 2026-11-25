@@ -340,6 +340,16 @@ pub enum Reply {
         result: Result<ParsedDiff, String>,
     },
     Created(TaskInfo, bool),
+    TillerSessions {
+        host: String,
+        result: Result<Vec<pitwall_core::tiller::Session>, String>,
+    },
+    TillerSessionStarted {
+        host: String,
+        result: Result<String, String>,
+    },
+    /// A Tiller session's card: named already, so no rename box.
+    TillerCard(TaskInfo),
     /// The daemon couldn't start a task; the message says why.
     CreateFailed(String),
     Notice(String, bool),
@@ -551,6 +561,7 @@ pub struct App {
     pub hosts: Vec<pitwall_core::config::HostConfig>,
     pub hosts_read: Instant,
     pub ssh_batch: crate::remote::Batch,
+    pub tiller: crate::tiller::TillerUi,
     /// Ended sessions being reconnected, as (host, old session): the new
     /// one takes over the old one's card.
     pub ssh_reconnects: Vec<(String, String)>,
@@ -766,6 +777,7 @@ impl App {
             hosts: vec![],
             hosts_read: Instant::now() - Duration::from_secs(60),
             ssh_batch: Default::default(),
+            tiller: Default::default(),
             ssh_reconnects: vec![],
             renaming_remote: None,
             remote_form: None,
@@ -1435,6 +1447,9 @@ impl App {
     pub fn project_of(&self, t: &TaskInfo) -> String {
         if t.host.is_some() {
             return crate::remote::SSH_PROJECT.into();
+        }
+        if crate::tiller::is_tiller_dir(&t.cwd) {
+            return crate::tiller::TILLER_PROJECT.into();
         }
         // An agent's terminal goes with the agent, even when it sits in the
         // agent's worktree outside the repo.
@@ -2592,6 +2607,13 @@ impl App {
                         false,
                     );
                 }
+            }
+            Reply::TillerSessions { host, result } => self.tiller_sessions_loaded(host, result),
+            Reply::TillerSessionStarted { host, result } => self.tiller_session_started(host, result),
+            Reply::TillerCard(t) => {
+                let id = t.id.clone();
+                self.tasks.insert(id.clone(), t);
+                self.open_item(&id);
             }
             Reply::CreateFailed(e) => {
                 self.notify(e, true);

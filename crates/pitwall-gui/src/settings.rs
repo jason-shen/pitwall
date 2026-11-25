@@ -38,6 +38,7 @@ pub enum SidebarTab {
     Projects,
     Remotes,
     Keys,
+    Tiller,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -71,6 +72,11 @@ pub struct Settings {
     pub default_agent: String,
     /// New agents get their own branch and worktree.
     pub worktree: bool,
+    /// The daemon holds off idle sleep while an agent is working.
+    pub keep_awake: bool,
+    /// Shows the Tiller tab: tmux sessions on machines running tillerd.
+    pub tiller: bool,
+    pub tiller_hosts: Vec<pitwall_core::tiller::TillerHost>,
     /// Agent each project's reviewer runs.
     pub reviewer_agent: String,
     /// The old card-keys modifier, read once to seed the card keys in
@@ -178,6 +184,9 @@ impl Default for Settings {
             editor: "builtin".into(),
             default_agent: "claude".into(),
             worktree: true,
+            keep_awake: true,
+            tiller: false,
+            tiller_hosts: vec![],
             reviewer_agent: "claude".into(),
             tile_mod: Default::default(),
             tabs_bottom: false,

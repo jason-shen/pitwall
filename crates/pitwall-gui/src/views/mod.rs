@@ -15,6 +15,7 @@ mod fileicon;
 mod gitview;
 mod hosts;
 mod keys;
+mod tiller;
 mod tour;
 
 pub use tour::Onboard;
@@ -140,6 +141,13 @@ pub(crate) enum Action {
     StartRenameRemote(String),
     /// The add-remote form, filing it under this group.
     AddRemote(Option<String>),
+    TillerForm,
+    TillerAdd,
+    TillerAddLocal,
+    TillerRemove(String),
+    TillerRefresh(String),
+    TillerOpen(String, String),
+    TillerNewSession(String),
     EditRemote(String),
     /// Ask, then take it out of the app.
     RemoveRemote(String),
@@ -320,6 +328,9 @@ fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
 fn project_title(app: &App, root: &str) -> String {
     if root == crate::remote::SSH_PROJECT {
         return tr("Remote").into();
+    }
+    if root == crate::tiller::TILLER_PROJECT {
+        return tr("Tiller").into();
     }
     app.settings
         .project_names
@@ -732,6 +743,10 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
             }
             ui.add_space(10.0);
             app.refresh_hosts(false);
+            // Tiller switched off in Settings while its tab was showing.
+            if app.settings.sidebar_tab == SidebarTab::Tiller && !app.settings.tiller {
+                app.settings.sidebar_tab = SidebarTab::Projects;
+            }
             let tab = app.settings.sidebar_tab;
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -747,6 +762,7 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                         }
                         SidebarTab::Remotes => hosts::add_button(ui, acts),
                         SidebarTab::Keys => keys::add_button(ui, app, acts),
+                        SidebarTab::Tiller => tiller::add_button(ui, acts),
                     }
                     ui.add_space(4.0);
                     sidebar_tabs(ui, app, acts);
@@ -764,6 +780,7 @@ fn sidebar(ui: &mut Ui, app: &mut App, acts: &mut Vec<Action>) {
                     SidebarTab::Projects => side_list(ui, app, acts),
                     SidebarTab::Remotes => hosts::section(ui, app, acts),
                     SidebarTab::Keys => keys::section(ui, app, acts),
+                    SidebarTab::Tiller => tiller::section(ui, app, acts),
                 });
             if tab == SidebarTab::Projects {
                 tour::mark(ui.ctx(), tour::Spot::Projects, list.inner_rect);
@@ -817,12 +834,19 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
     tour::mark(ui.ctx(), tour::Spot::Tabs, rect);
     let p = ui.painter();
     p.rect_filled(rect, 8.0, Color32::from_white_alpha(10));
-    let tabs = [
+    let mut tabs = vec![
         // nf-fa-folder, nf-md-server, nf-md-key
         ('\u{f07b}', tr("Projects"), SidebarTab::Projects),
         ('\u{f048b}', tr("Remotes"), SidebarTab::Remotes),
         ('\u{f0306}', tr("Keys"), SidebarTab::Keys),
     ];
+    if app.settings.tiller {
+        // nf-md-cellphone_link
+        tabs.push(('\u{f0121}', tr("Tiller"), SidebarTab::Tiller));
+    }
+    let tiller_live = app.tasks.values().any(|t| {
+        crate::tiller::is_tiller_dir(&t.cwd) && !matches!(t.status, TaskStatus::Exited { .. })
+    });
     let third = rect.width() / tabs.len() as f32;
     // All labelled or all icons: a narrow sidebar keeps just the icons, named
     // on hover.
@@ -863,7 +887,11 @@ fn sidebar_tabs(ui: &mut Ui, app: &App, acts: &mut Vec<Action>) {
         } else {
             resp.clone().on_hover_text(label);
         }
-        if !on && tab != SidebarTab::Keys {
+        if !on && tab == SidebarTab::Tiller {
+            if tiller_live {
+                p.circle_filled(pos2(x + w + 8.0, r.center().y), 3.0, GREEN);
+            }
+        } else if !on && tab != SidebarTab::Keys {
             let dot = if waiting(is_remote) {
                 Some(AMBER)
             } else if is_remote && live_sessions {
@@ -1309,8 +1337,11 @@ fn tab_strip(ui: &mut Ui, app: &App, strip: Rect, acts: &mut Vec<Action>) {
     };
     let mut right = strip.right();
     let mut toggles = vec![];
-    // SSH sessions have no local folder to show.
-    let ssh = app.project.as_deref() == Some(crate::remote::SSH_PROJECT);
+    // SSH and Tiller sessions have no local folder to show.
+    let ssh = matches!(
+        app.project.as_deref(),
+        Some(crate::remote::SSH_PROJECT | crate::tiller::TILLER_PROJECT)
+    );
     for (label, child, key) in if ssh { vec![] } else { vec![
         (tr("▤ Files").to_string(), Child::Files, "show_files"),
         (changes, Child::Changes, "show_changes"),
@@ -5506,6 +5537,14 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                         });
                 });
                 ui.checkbox(&mut s.worktree, tr("Give each agent its own branch and worktree"));
+                ui.checkbox(&mut s.keep_awake, tr("Keep the computer awake while agents work"))
+                    .on_hover_text(tr(
+                        "The screen still turns off, and it sleeps once they're done. Closing a laptop's lid still sleeps it.",
+                    ));
+                ui.checkbox(&mut s.tiller, tr("Tiller hosts (beta)"))
+                    .on_hover_text(tr(
+                        "Adds a Tiller tab to the sidebar: tmux sessions on machines running tillerd, opened as terminals.",
+                    ));
                 ui.horizontal(|ui| {
                     ui.label(tr("Reviewer"));
                     egui::ComboBox::from_id_salt("reviewer-agent")
@@ -6269,6 +6308,13 @@ pub(crate) fn apply(app: &mut App, a: Action) {
         Action::Connect(h) => app.connect(&h),
         Action::Reconnect(id) => app.reconnect(&id),
         Action::AddRemote(g) => app.open_remote_form(None, g.as_deref()),
+        Action::TillerForm => app.tiller.form = Some(String::new()),
+        Action::TillerAdd => app.tiller_add_from_form(),
+        Action::TillerAddLocal => app.tiller_add_local(),
+        Action::TillerRemove(h) => app.tiller_remove(&h),
+        Action::TillerRefresh(h) => app.tiller_refresh(&h),
+        Action::TillerOpen(h, s) => app.tiller_open(&h, &s),
+        Action::TillerNewSession(h) => app.tiller_new_session(&h),
         Action::EditRemote(h) => app.open_remote_form(Some(&h), None),
         Action::RemoveRemote(h) => {
             // The form would sit over the question.

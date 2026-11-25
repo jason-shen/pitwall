@@ -312,6 +312,8 @@ hosts = [
 - font (any installed monospace font or a font file), weight, bold weight, size and line height; pick a Nerd Font if your prompt uses icons;
 - one of 26 colour themes, cursor style, transparency and blur (a see-through window costs the system some GPU to blend what's behind it, so it has no shadow and turns opaque while another app is in front);
 - your editor, the default agent and whether new agents get a worktree;
+- keeping the computer awake while an agent is working (on by default; `keep_awake`): only idle sleep is held off, so the screen still turns off, and it sleeps a minute after the last agent stops or waits on you. Closing a laptop's lid still sleeps it;
+- a Tiller tab (beta, off by default; `tiller`): the tmux sessions of machines running tillerd, opened as terminal cards over SSH. Add a host by pasting the pairing JSON from tillerd's console, or add this machine;
 - tabs at the top or bottom;
 - every shortcut (below);
 - snippets: commands you run often, from the command bar or a terminal's right-click menu.

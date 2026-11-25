@@ -16,6 +16,7 @@ pub mod prompt;
 pub mod proto;
 pub mod rename;
 pub mod shellenv;
+pub mod tiller;
 pub mod tree;
 pub mod wire;
 

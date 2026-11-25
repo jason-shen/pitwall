@@ -19,6 +19,7 @@ mod settings;
 mod term;
 mod termview;
 mod theme;
+mod tiller;
 mod tiling;
 mod trash;
 mod views;

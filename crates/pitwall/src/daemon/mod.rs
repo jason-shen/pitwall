@@ -2,6 +2,7 @@
 //! Clients (CLI, GUI, hooks) talk to it over a Unix socket.
 
 pub mod audit;
+mod awake;
 pub mod fleet;
 pub mod hook;
 pub mod ops;
@@ -633,8 +634,10 @@ async fn ticker(d: Arc<Daemon>) {
     let mut reported: HashMap<String, Seen> = HashMap::new();
     let mut iv = tokio::time::interval(Duration::from_secs(1));
     let idle = Duration::from_secs(d.cfg.attention.idle_secs.max(1));
+    let mut awake = awake::Awake::default();
     loop {
         iv.tick().await;
+        let mut busy = false;
         let tasks: Vec<Arc<Task>> = d.tasks.lock().unwrap().values().cloned().collect();
         reported.retain(|k, _| tasks.iter().any(|t| &t.id == k));
         for t in tasks {
@@ -698,6 +701,7 @@ async fn ticker(d: Arc<Daemon>) {
                 d.save();
             }
             let info = t.info();
+            busy |= working(&t, &info, since_status);
             let prev = reported.get(&t.id);
             if prev
                 .map(|(s, p, c, f, o, ti)| {
@@ -732,7 +736,32 @@ async fn ticker(d: Arc<Daemon>) {
                 d.emit(Push::TaskUpdated(info));
             }
         }
+        awake.update(busy);
     }
+}
+
+/// An agent in the middle of something, which sleep would cut short. One
+/// waiting on you isn't, and neither is a terminal running anything else:
+/// a dev server's logs would keep the computer up all night.
+fn working(t: &Task, info: &TaskInfo, since_status: Duration) -> bool {
+    let agent = t.host.is_none()
+        && (t.agent != "shell"
+            || info
+                .fg
+                .as_deref()
+                .is_some_and(|p| pitwall_core::agents::AGENT_PROGRAMS.contains(&p)));
+    agent
+        && match info.status {
+            TaskStatus::Running => true,
+            // Quiet through a long tool call, but its turn hasn't ended. A
+            // Stop that never came mustn't keep it up for good.
+            TaskStatus::Idle => {
+                t.agent_cfg.hooks.is_some()
+                    && t.state.lock().unwrap().turn_open
+                    && since_status < Duration::from_secs(30 * 60)
+            }
+            TaskStatus::Waiting { .. } | TaskStatus::Exited { .. } => false,
+        }
 }
 
 /// Debounced file-change snapshots.

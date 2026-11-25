@@ -167,6 +167,31 @@ enum Cmd {
     #[command(hide = true)]
     Hook { kind: String },
 
+    /// One tmux pane on a Tiller host, shown in this terminal. The Tiller
+    /// tab's cards run it, as SSH session cards run `ssh`.
+    #[command(hide = true)]
+    TillerPane {
+        /// The host's name, for messages.
+        #[arg(long)]
+        name: String,
+        /// `user@host` or `host`.
+        #[arg(long, default_value = "")]
+        ssh: String,
+        /// tillerd on this machine, no SSH.
+        #[arg(long)]
+        local: bool,
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// Command that runs tillerd's stdio bridge on the host.
+        #[arg(long)]
+        helper: Option<String>,
+        #[arg(long)]
+        session: String,
+        /// Default: the session's active pane.
+        #[arg(long)]
+        pane: Option<u32>,
+    },
+
     /// What `claude` and the other agent CLIs run in a pitwall terminal: the
     /// real one, in the terminal's own worktree when you're in a repo.
     /// Its own --help would hide the agent's.
@@ -203,6 +228,28 @@ fn main() {
             }
             Cmd::Hook { kind } => cli::hook(&kind).await,
             Cmd::Wrap { program, args } => cli::wrap::run(&program, &args).await,
+            Cmd::TillerPane { name, ssh, local, port, helper, session, pane } => {
+                let (user, host) = match ssh.split_once('@') {
+                    Some((u, h)) => (u.to_string(), h.to_string()),
+                    None => (String::new(), ssh),
+                };
+                let h = pitwall_core::tiller::TillerHost {
+                    name,
+                    ssh_host: host,
+                    ssh_port: port,
+                    ssh_user: user,
+                    helper,
+                    local,
+                    ..Default::default()
+                };
+                let r = cli::tiller::pane(h, &session, pane).await;
+                if let Err(e) = &r {
+                    eprintln!("\r\npitwall: {e:#}");
+                }
+                // stdin is read on a blocking thread the runtime would wait
+                // for, so leave now rather than on the next keypress.
+                std::process::exit(if r.is_ok() { 0 } else { 1 });
+            }
             Cmd::Init { force } => cli::init(force),
             Cmd::Classify { command } => cli::classify(&command.join(" ")),
             Cmd::Stop => cli::stop().await,

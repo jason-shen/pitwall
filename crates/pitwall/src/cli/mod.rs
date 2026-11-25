@@ -1,6 +1,7 @@
 //! CLI client commands.
 
 mod attach;
+pub mod tiller;
 pub mod wrap;
 
 use std::io::Write;
@@ -711,6 +712,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
         | Cmd::Classify { .. }
         | Cmd::Hook { .. }
         | Cmd::Wrap { .. }
+        | Cmd::TillerPane { .. }
         | Cmd::Guide => {
             unreachable!()
         }

@@ -1,5 +1,5 @@
 //! Debug builds only: `PITWALL_SHOT=/tmp/shot` steps through the screens listed in
-//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, termfile:<path>, closefile, welcome, tour:<n>, lang:<code>, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
+//! `PITWALL_SHOT_STEPS` (empty, terminal, changes, files, file:<path>, bar[:query], settings, newagent, approval, toast, join:<pane>:<tab>, separate:<pane>, connect:<hosts>, fleet:<hosts>:<command>, addremote:<addr>[:<name>], saveremote, group:<name>, move:<remote>:<group>, remove:<remote>, projects, remotes, keystab, tillertab, tillerform, tillerlocal:<helper>, tilleropen:<session>, termfile:<path>, closefile, welcome, tour:<n>, lang:<code>, keypw:<pw>, addkey:<name>:<service>:<secret>, reveal:<pw>, startreview, auto, drop:<path>, split, select, size:WxH), saves a BMP of the
 //! window after each, then quits. Lets UI changes be checked without screen
 //! recording permission.
 
@@ -159,6 +159,18 @@ impl DevShot {
                     }
                 }
                 Some(("drop", path)) => self.dropped = Some(path.into()),
+                // A tillerd on this machine, run with the given helper.
+                Some(("tillerlocal", helper)) => {
+                    app.settings.tiller = true;
+                    app.settings.sidebar_tab = crate::settings::SidebarTab::Tiller;
+                    app.settings.tiller_hosts = vec![pitwall_core::tiller::TillerHost {
+                        name: "local".into(),
+                        local: true,
+                        helper: Some(helper.into()),
+                        ..Default::default()
+                    }];
+                }
+                Some(("tilleropen", session)) => app.tiller_open("local", session),
                 Some(("group", name)) => {
                     app.new_group();
                     if let Some((old, _)) = app.renaming_group.clone() {
@@ -257,6 +269,11 @@ impl DevShot {
                     "projects" => app.settings.sidebar_tab = crate::settings::SidebarTab::Projects,
                     "remotes" => app.settings.sidebar_tab = crate::settings::SidebarTab::Remotes,
                     "keystab" => app.settings.sidebar_tab = crate::settings::SidebarTab::Keys,
+                    "tillertab" => {
+                        app.settings.tiller = true;
+                        app.settings.sidebar_tab = crate::settings::SidebarTab::Tiller;
+                    }
+                    "tillerform" => app.tiller.form = Some(String::new()),
                     "terminal" => {
                         app.bar = None;
                         app.new_form = None;
