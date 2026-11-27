@@ -500,7 +500,7 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
             println!("killed {id}");
         }
         Cmd::Rm { id, prune } => {
-            client
+            let r = client
                 .call(Request::Remove {
                     id: id.clone(),
                     prune_worktree: prune,
@@ -514,6 +514,9 @@ pub async fn dispatch(cmd: Cmd) -> Result<()> {
                     ""
                 }
             );
+            if let Response::Text(kept) = r {
+                println!("{kept}");
+            }
         }
         Cmd::Inbox => {
             let Response::Tasks(tasks) = client.call(Request::ListTasks).await? else {

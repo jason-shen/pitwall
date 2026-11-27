@@ -1192,6 +1192,13 @@ impl App {
         let (Some(branch), Some(root)) = (t.branch.clone(), t.repo.clone()) else {
             return self.notify("this task runs in place (no branch to merge)", true);
         };
+        // The agent may have moved to a branch of its own making; that's
+        // where its commits are.
+        let branch = t
+            .worktree
+            .as_deref()
+            .and_then(|w| git::current_branch(Path::new(w)))
+            .unwrap_or(branch);
         let root = PathBuf::from(root);
         let target = git::current_branch(&root).unwrap_or_else(|| "HEAD".into());
         let dirty = self.changes.len();
@@ -1352,7 +1359,7 @@ impl App {
                                     prune: has_wt,
                                 },
                                 text: if has_wt {
-                                    format!("Remove {id} and delete its worktree? (branch and snapshots are kept)")
+                                    format!("Remove {id} and delete its worktree? (uncommitted work is committed to its branch, kept until merged; snapshots are deleted)")
                                 } else {
                                     format!("Remove {id}?")
                                 },

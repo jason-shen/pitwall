@@ -281,6 +281,11 @@ pub fn create_worktree(
         &["worktree", "add", "-q", "-b", &branch, &p, &base_sha],
     )
     .with_context(|| format!("create worktree (does branch {branch} already exist?)"))?;
+    if let Some(b) = &base_branch {
+        if let Err(e) = pitwall_core::git::mark_branch(&root, &branch, b) {
+            tracing::warn!("couldn't mark {branch}: {e:#}");
+        }
+    }
     Ok((root, path, branch, base_sha, base_branch))
 }
 
@@ -298,14 +303,15 @@ fn lent_for(lent: Option<&Place>, id: &str, dir: &Path) -> Option<Result<PathBuf
     )))
 }
 
-/// Remove a task's worktree, and its branch if that's merged. `-d` refuses
-/// an unmerged branch, so work that never made it back isn't lost.
-pub fn remove_branch(repo: &Path, path: &Path, branch: &str) -> Result<()> {
-    remove_worktree(repo, path)?;
-    if let Err(e) = git(repo, &["branch", "-d", branch]) {
-        tracing::info!("kept {branch}: {e:#}");
+/// Remove a task's worktree, and its branch if that's merged. Uncommitted
+/// work is committed first and unmerged branches stay, so the app can list
+/// them; what was kept comes back.
+pub fn remove_branch(repo: &Path, path: &Path, branch: &str, target: Option<&str>) -> Result<String> {
+    let kept = pitwall_core::git::retire_worktree(repo, path, branch, target)?;
+    if !kept.is_empty() {
+        tracing::info!("{kept}");
     }
-    Ok(())
+    Ok(kept)
 }
 
 pub fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
@@ -890,8 +896,9 @@ impl Task {
     }
 
     /// Remove the lent worktree. Its branch goes only if it's merged, so
-    /// work that never made it back is still there to find.
-    pub fn return_worktree(&self, quit: bool) -> Result<()> {
+    /// work that never made it back is still there to find. Says which
+    /// branches were kept.
+    pub fn return_worktree(&self, quit: bool) -> Result<String> {
         let Some(l) = self.lent.lock().unwrap().clone() else {
             bail!("{} has no worktree", self.id);
         };
@@ -906,15 +913,12 @@ impl Task {
         if inside() {
             bail!("{} is still in its worktree; quit the agent or cd out first", self.id);
         }
+        let mut kept = String::new();
         if let (Some(repo), Some(branch)) = (&l.repo, &l.branch) {
-            if l.cwd.is_dir() {
-                remove_branch(repo, &l.cwd, branch)?;
-            } else if let Err(e) = git(repo, &["branch", "-d", branch]) {
-                tracing::info!("kept {branch}: {e:#}");
-            }
+            kept = remove_branch(repo, &l.cwd, branch, l.base_branch.as_deref())?;
         }
         *self.lent.lock().unwrap() = None;
-        Ok(())
+        Ok(kept)
     }
 
     fn start(
@@ -1895,7 +1899,8 @@ mod turn_tests {
         std::fs::write(wt.join("b.txt"), "b\n").unwrap();
         g(&wt, &["add", "."]);
         g(&wt, &["commit", "-qm", "agent"]);
-        t.return_worktree(false).unwrap();
+        let kept = t.return_worktree(false).unwrap();
+        assert_eq!(kept, "kept term-9: 1 commit(s) not in main");
         assert!(!wt.exists());
         assert!(t.info().worktree.is_none() && t.info().branch.is_none());
         g(&repo, &["rev-parse", "--verify", "refs/heads/term-9"]);
@@ -1904,8 +1909,13 @@ mod turn_tests {
         assert_ne!(again, wt);
         assert_eq!(t.info().branch.as_deref(), Some("term-9-2"));
 
+        // What it never committed is committed to its branch, not thrown away.
+        std::fs::write(again.join("c.txt"), "c\n").unwrap();
+        let kept = t.return_worktree(false).unwrap();
+        assert!(kept.contains("kept term-9-2"), "{kept}");
+        assert_eq!(g(&repo, &["show", "term-9-2:c.txt"]), "c");
+
         // A name you give is used as it is, and one that's taken is refused.
-        t.return_worktree(false).unwrap();
         assert!(t.lend_worktree(&repo, Some("term-9")).is_err());
         assert!(t.info().worktree.is_none());
         let named = t.lend_worktree(&repo, Some("fix/login")).unwrap();

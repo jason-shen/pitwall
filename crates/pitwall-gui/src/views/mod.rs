@@ -91,6 +91,11 @@ pub(crate) enum Action {
     Accept,
     /// Ask to remove the worktree a terminal lent its agent.
     ReturnWorktree(String),
+    /// A branch left over from a task that's gone, by project root and name.
+    MergeLeftover(String, String),
+    DeleteLeftover(String, String),
+    /// Remove its worktree folder and keep the branch.
+    RetireLeftover(String, String),
     Stage(String),
     Unstage(String),
     StageAll,
@@ -1241,6 +1246,95 @@ fn project_rows(ui: &mut Ui, app: &App, root: &str, acts: &mut Vec<Action>) {
                 .clicked()
             {
                 acts.push(Action::TrashFile(path.clone()));
+                ui.close();
+            }
+        });
+    }
+    // Work on branches whose agent is gone, so it doesn't sit there forgotten.
+    for l in app.leftovers_in(root).map(|(_, v)| v).unwrap_or_default() {
+        let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+        let p = ui.painter();
+        if r.hovered() {
+            p.rect_filled(rect, 5.0, PANEL_2);
+        }
+        let y = rect.center().y;
+        p.text(
+            pos2(rect.left() + 10.0, y),
+            Align2::CENTER_CENTER,
+            "⑂",
+            FontId::proportional(12.5),
+            AMBER,
+        );
+        let uncommitted = trf!("{n} uncommitted", n = l.dirty);
+        let status = match (l.ahead, l.dirty) {
+            (0, 0) => tr("worktree").to_string(),
+            (a, 0) => format!("↑{a}"),
+            (0, _) => uncommitted,
+            (a, _) => format!("↑{a} · {uncommitted}"),
+        };
+        let right = p
+            .text(
+                pos2(rect.right() - 6.0, y),
+                Align2::RIGHT_CENTER,
+                status,
+                FontId::monospace(11.0),
+                if l.ahead + l.dirty > 0 { AMBER } else { FAINT },
+            )
+            .left()
+            - 6.0;
+        p.with_clip_rect(Rect::from_min_max(rect.min, pos2(right, rect.max.y)))
+            .text(
+                pos2(rect.left() + 24.0, y),
+                Align2::LEFT_CENTER,
+                &l.branch,
+                FontId::proportional(13.0),
+                MUTED,
+            );
+        let tip = match &l.target {
+            Some(t) => trf!(
+                "Left by an agent that's gone: {n} commit(s) not in {target}. Click to merge it; right-click for more.",
+                n = l.ahead,
+                target = t
+            ),
+            None => trf!(
+                "Left by an agent that's gone: {n} commit(s) no other branch has. Click to merge it; right-click for more.",
+                n = l.ahead
+            ),
+        };
+        let r = r.on_hover_text(tip);
+        let (root, branch) = (root.to_string(), l.branch.clone());
+        if r.clicked() {
+            acts.push(Action::MergeLeftover(root.clone(), branch.clone()));
+        }
+        r.context_menu(|ui| {
+            let merge = match &l.target {
+                Some(t) => trf!("Merge into {target}…", target = t),
+                None => tr("Merge…").to_string(),
+            };
+            if ui.button(merge).clicked() {
+                acts.push(Action::MergeLeftover(root.clone(), branch.clone()));
+                ui.close();
+            }
+            if let Some(w) = &l.worktree {
+                if ui.button(tr("Open a terminal there")).clicked() {
+                    acts.push(Action::NewShellIn(w.display().to_string()));
+                    ui.close();
+                }
+                if ui.button(tr("Remove its worktree, keep the branch")).clicked() {
+                    acts.push(Action::RetireLeftover(root.clone(), branch.clone()));
+                    ui.close();
+                }
+            }
+            if ui.button(tr("Copy branch name")).clicked() {
+                acts.push(Action::Copy(branch.clone()));
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .button(RichText::new(tr("Delete branch…")).color(RED))
+                .clicked()
+            {
+                acts.push(Action::DeleteLeftover(root.clone(), branch.clone()));
                 ui.close();
             }
         });
@@ -4805,6 +4899,8 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
             || matches!(
                 c,
                 Confirm::Remove { prune: true, .. }
+                    | Confirm::MergeLeftover { .. }
+                    | Confirm::DeleteLeftover { .. }
                     | Confirm::Discard { .. }
                     | Confirm::DiscardHunk { .. }
                     | Confirm::RemoveProject { .. }
@@ -4818,7 +4914,11 @@ fn dialogs(ctx: &egui::Context, app: &mut App, acts: &mut Vec<Action>) {
         let m = egui::Modal::new(Id::unique("confirm")).show(ctx, |ui| {
             ui.set_width(440.0);
             ui.label(RichText::new(text).size(14.0));
-            if let Some(Confirm::Accept { branch, target, branches, .. }) = app.confirm.as_mut() {
+            if let Some(
+                Confirm::Accept { branch, target, branches, .. }
+                | Confirm::MergeLeftover { branch, target, branches, .. },
+            ) = app.confirm.as_mut()
+            {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(trf!("• Merge {branch} into", branch = branch));
@@ -6158,7 +6258,7 @@ pub(crate) fn apply(app: &mut App, a: Action) {
             let prune = app.tasks.get(&id).and_then(|t| t.branch.as_ref()).is_some();
             let text = if prune {
                 trf!(
-                    "Remove {id} and delete its worktree?\nIts branch and undo snapshots are kept.",
+                    "Remove {id} and delete its worktree?\nAnything uncommitted is committed to its branch, which stays until it's merged. Its undo snapshots are deleted.",
                     id = id
                 )
             } else {
@@ -6168,6 +6268,9 @@ pub(crate) fn apply(app: &mut App, a: Action) {
         }
         Action::Accept => app.accept_prompt(),
         Action::ReturnWorktree(id) => app.ask_return_worktree(id, false),
+        Action::MergeLeftover(root, branch) => app.ask_merge_leftover(&root, &branch),
+        Action::DeleteLeftover(root, branch) => app.ask_delete_leftover(&root, &branch),
+        Action::RetireLeftover(root, branch) => app.retire_leftover(&root, &branch),
         Action::Stage(p) => {
             app.git_op(move |d| git::stage_file(d, &p).map(|_| trf!("staged {file}", file = p)))
         }

@@ -462,7 +462,8 @@ impl Daemon {
             .collect()
     }
 
-    pub async fn remove_task(self: &Arc<Self>, id: &str, prune: bool) -> Result<()> {
+    /// Answers with the branches pruning kept because they hold work.
+    pub async fn remove_task(self: &Arc<Self>, id: &str, prune: bool) -> Result<String> {
         let kept_exactly = self.unrestored.lock().unwrap().iter().any(|s| s.id == id);
         let found = if kept_exactly {
             Err(anyhow!("not live"))
@@ -489,20 +490,22 @@ impl Daemon {
         };
         self.save();
         let mut problem = None;
+        let mut kept = String::new();
         if prune {
             // A terminal's lent worktree goes the way an agent's own does.
             let place = lent.unwrap_or(place);
             if let (Some(repo), Some(branch)) = (place.repo, place.branch) {
-                let cwd = place.cwd;
-                let r =
-                    tokio::task::spawn_blocking(move || task::remove_branch(&repo, &cwd, &branch))
-                        .await;
+                let (cwd, target) = (place.cwd, place.base_branch);
+                let r = tokio::task::spawn_blocking(move || {
+                    task::remove_branch(&repo, &cwd, &branch, target.as_deref())
+                })
+                .await;
                 // The task is gone either way; say what's left behind instead
                 // of stopping here with it half removed.
                 match r {
                     Ok(Err(e)) => problem = Some(format!("{e:#}")),
                     Err(e) => problem = Some(e.to_string()),
-                    Ok(Ok(())) => {}
+                    Ok(Ok(k)) => kept = k,
                 }
             }
             // Nothing can revert to these once the task is gone, and leaving
@@ -520,7 +523,7 @@ impl Daemon {
         self.emit(Push::TaskRemoved { id: id.clone() });
         match problem {
             Some(p) => bail!("removed {id}, but its worktree is still there: {p}"),
-            None => Ok(()),
+            None => Ok(kept),
         }
     }
 

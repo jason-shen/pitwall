@@ -126,7 +126,11 @@ It is told the message came from you and how to answer.
 marks step n done.
 A message from another agent arrives in your prompt as `[message from agent <id>; reply with: ...] <text>`. \
 Answer it with `pitwall tell <id> \"...\"` once you have something to say. Only message other agents \
-when the work calls for it: to hand something off, ask for something only they know, or report back.";
+when the work calls for it: to hand something off, ask for something only they know, or report back.
+If you were started in a git worktree under ~/.pitwall/worktrees, it is on a branch made for you and \
+pitwall merges that branch when your work is accepted. Commit there, and don't check out or create \
+other branches. When asked to work on a branch with a particular name, rename yours with \
+`git branch -m <name>` so the work stays where pitwall can see it.";
 
 #[cfg(test)]
 mod tests {

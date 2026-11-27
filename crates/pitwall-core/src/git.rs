@@ -628,6 +628,22 @@ pub fn accept(
     if target == branch {
         bail!("can't merge {branch} into itself");
     }
+    // Leftovers are committed to whatever is checked out there, so merging
+    // `branch` after the agent moved off it would merge nothing and say it
+    // worked.
+    if worktree.is_dir() {
+        match current_branch(worktree) {
+            Some(on) if on != branch => bail!(
+                "{} is on {on} now, not {branch}; accept {on} instead",
+                worktree.display()
+            ),
+            None => bail!(
+                "{} has a detached HEAD; check out a branch there first",
+                worktree.display()
+            ),
+            Some(_) => {}
+        }
+    }
     let home = checked_out_at(root, target)?;
     if home.is_none() {
         run(root, &["rev-parse", "-q", "--verify", &format!("refs/heads/{target}")])
@@ -696,6 +712,245 @@ fn merge_elsewhere(root: &Path, branch: &str, target: &str) -> Result<String> {
         ),
         Err(e) => Err(e),
     }
+}
+
+/// Record where a branch pitwall made goes back to, so the work on it can
+/// still be found after its task is gone. It lives in the repo's config, and
+/// `git branch -m` and `-d` carry it along or clear it.
+pub fn mark_branch(root: &Path, branch: &str, target: &str) -> Result<()> {
+    run(root, &["config", &format!("branch.{branch}.pitwallBase"), target]).map(|_| ())
+}
+
+fn marked_target(root: &Path, branch: &str) -> Option<String> {
+    run(root, &["config", "--get", &format!("branch.{branch}.pitwallBase")])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn branch_exists(root: &Path, branch: &str) -> bool {
+    commit_of(root, &format!("refs/heads/{branch}")).is_some()
+}
+
+/// Commits on `branch` that `target` lacks. With no target, the ones no
+/// other branch has.
+fn unmerged_count(root: &Path, branch: &str, target: Option<&str>) -> usize {
+    let own = format!("refs/heads/{branch}");
+    let out = match target {
+        Some(t) => run(root, &["rev-list", "--count", &format!("{t}..{branch}")]),
+        None => run(
+            root,
+            &[
+                "rev-list",
+                "--count",
+                &own,
+                "--not",
+                &format!("--exclude={own}"),
+                "--branches",
+            ],
+        ),
+    };
+    out.ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+}
+
+/// Give a detached HEAD's commits a branch when no branch has them, or
+/// removing the worktree would leave them only in the reflog.
+fn rescue_detached(root: &Path, worktree: &Path, branch: &str) -> Result<Option<String>> {
+    let Some(sha) = head(worktree) else {
+        return Ok(None);
+    };
+    if !run(root, &["branch", "--contains", &sha])?.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut n = 1;
+    let name = loop {
+        let name = if n == 1 {
+            format!("{branch}-detached")
+        } else {
+            format!("{branch}-detached-{n}")
+        };
+        if new_branch_problem(root, &name).is_none() {
+            break name;
+        }
+        n += 1;
+    };
+    run(root, &["branch", &name, &sha])?;
+    Ok(Some(name))
+}
+
+/// Remove an agent's worktree without losing anything in it. Changes it
+/// never committed are committed to the branch it's on, and a detached HEAD
+/// gets a branch; then the folder goes. `branch`, the one the worktree was
+/// made with, is deleted once `target` has all of it. Whatever still holds
+/// work is named in what comes back, empty when nothing does.
+pub fn retire_worktree(
+    root: &Path,
+    worktree: &Path,
+    branch: &str,
+    target: Option<&str>,
+) -> Result<String> {
+    let target = target
+        .map(str::to_string)
+        .or_else(|| marked_target(root, branch))
+        .filter(|t| t != branch && branch_exists(root, t));
+    let mut on = None;
+    if worktree.is_dir() {
+        if !status(worktree)?.is_empty() {
+            stage_all(worktree)?;
+            // The agent's hooks may well refuse half-done work, and this
+            // commit is only here so the folder can go.
+            run(
+                worktree,
+                &[
+                    "commit",
+                    "-q",
+                    "--no-verify",
+                    "-m",
+                    "Work left uncommitted when its worktree was removed",
+                ],
+            )?;
+        }
+        on = match current_branch(worktree) {
+            Some(b) => Some(b),
+            None => rescue_detached(root, worktree, branch)?,
+        };
+        if let (Some(b), Some(t)) = (&on, &target) {
+            if b != branch && marked_target(root, b).is_none() {
+                mark_branch(root, b, t)?;
+            }
+        }
+        run(
+            root,
+            &["worktree", "remove", "--force", &worktree.to_string_lossy()],
+        )?;
+    } else {
+        let _ = run(root, &["worktree", "prune"]);
+    }
+    let mut kept = Vec::new();
+    if branch_exists(root, branch) {
+        let gone = match &target {
+            Some(t) if is_merged(root, branch, t) => {
+                run(root, &["branch", "-D", branch]).is_ok()
+            }
+            Some(_) => false,
+            None => run(root, &["branch", "-d", branch]).is_ok(),
+        };
+        if !gone {
+            kept.push(branch.to_string());
+        }
+    }
+    if let Some(b) = on.filter(|b| b != branch) {
+        if unmerged_count(root, &b, target.as_deref()) > 0 {
+            kept.push(b);
+        }
+    }
+    Ok(kept
+        .iter()
+        .map(|b| {
+            let n = unmerged_count(root, b, target.as_deref());
+            match &target {
+                Some(t) => format!("kept {b}: {n} commit(s) not in {t}"),
+                None => format!("kept {b}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
+/// Work an agent left on a branch, found after its task is gone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Leftover {
+    pub branch: String,
+    /// Where it goes back to; None when that's unknown or deleted.
+    pub target: Option<String>,
+    /// Commits `target` lacks, or with no target that no other branch has.
+    pub ahead: usize,
+    /// A worktree of pitwall's it's still checked out in.
+    pub worktree: Option<PathBuf>,
+    /// Uncommitted changes in that worktree.
+    pub dirty: usize,
+}
+
+/// Branches pitwall made that still hold work, and its worktrees for this
+/// repo under `under`. Whether a live task owns one is for the caller to
+/// say; a branch checked out anywhere else is someone working on it.
+pub fn leftovers(root: &Path, under: &Path) -> Vec<Leftover> {
+    let marks: Vec<(String, String)> = run(
+        root,
+        &["config", "--get-regexp", r"^branch\..*\.pitwallbase$"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| {
+        let (key, target) = l.split_once(' ')?;
+        let branch = key.strip_prefix("branch.")?.strip_suffix(".pitwallbase")?;
+        Some((branch.to_string(), target.trim().to_string()))
+    })
+    .collect();
+    let under_real = under.canonicalize().unwrap_or_else(|_| under.to_path_buf());
+    let mut ours: Vec<(String, PathBuf)> = Vec::new();
+    let mut elsewhere: std::collections::HashSet<String> = Default::default();
+    // The first one listed is the main checkout, never an agent's.
+    for (i, block) in run(root, &["worktree", "list", "--porcelain"])
+        .unwrap_or_default()
+        .split("\n\n")
+        .enumerate()
+    {
+        let mut lines = block.lines();
+        let Some(path) = lines.next().and_then(|l| l.strip_prefix("worktree ")) else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        let Some(b) = lines.find_map(|l| l.strip_prefix("branch refs/heads/")) else {
+            continue;
+        };
+        if i > 0 && (path.starts_with(under) || path.starts_with(&under_real)) && path.is_dir() {
+            ours.push((b.to_string(), path));
+        } else {
+            elsewhere.insert(b.to_string());
+        }
+    }
+    let mut out: Vec<Leftover> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let found = marks
+        .into_iter()
+        .map(|(b, t)| (b, Some(t)))
+        .chain(ours.iter().map(|(b, _)| (b.clone(), None)));
+    for (branch, mark) in found {
+        if !seen.insert(branch.clone()) || elsewhere.contains(&branch) || !branch_exists(root, &branch) {
+            continue;
+        }
+        let target = mark
+            .or_else(|| marked_target(root, &branch))
+            .filter(|t| *t != branch && branch_exists(root, t));
+        let worktree = ours.iter().find(|(b, _)| *b == branch).map(|(_, p)| p.clone());
+        let ahead = unmerged_count(root, &branch, target.as_deref());
+        if ahead == 0 && worktree.is_none() {
+            continue;
+        }
+        let dirty = worktree
+            .as_deref()
+            .and_then(|w| status(w).ok())
+            .map_or(0, |c| c.len());
+        out.push(Leftover {
+            branch,
+            target,
+            ahead,
+            worktree,
+            dirty,
+        });
+    }
+    out.sort_by(|a, b| a.branch.cmp(&b.branch));
+    out
+}
+
+/// Throw a branch away, and the worktree it's checked out in.
+pub fn delete_branch(root: &Path, branch: &str, worktree: Option<&Path>) -> Result<String> {
+    if let Some(w) = worktree.filter(|w| w.is_dir()) {
+        run(root, &["worktree", "remove", "--force", &w.to_string_lossy()])?;
+    }
+    run(root, &["branch", "-D", branch])?;
+    Ok(format!("deleted {branch}"))
 }
 
 /// Files, added and removed lines between `base` and the working tree,
@@ -958,6 +1213,77 @@ mod tests {
         // Accepting it again: already merged, nothing to do.
         let out = accept(&d, &wt, "pitwall/z", "main", "unused").unwrap();
         assert!(out.contains("already merged"), "{out}");
+    }
+
+    fn agent_worktree(d: &Path, ext: &str, branch: &str) -> PathBuf {
+        let wt = d.with_extension(ext);
+        let _ = std::fs::remove_dir_all(&wt);
+        let w = wt.to_str().unwrap();
+        run(d, &["worktree", "add", "-q", "-b", branch, w, "main"]).unwrap();
+        mark_branch(d, branch, "main").unwrap();
+        wt
+    }
+
+    #[test]
+    fn retiring_a_worktree_keeps_what_was_never_committed() {
+        let d = repo();
+        let under = d.parent().unwrap().to_path_buf();
+        let wt = agent_worktree(&d, "wt5", "agent-a");
+        std::fs::write(wt.join("half.txt"), "half done\n").unwrap();
+        assert_eq!(leftovers(&d, &under).len(), 1);
+
+        let out = retire_worktree(&d, &wt, "agent-a", Some("main")).unwrap();
+        assert!(out.contains("kept agent-a: 1 commit(s) not in main"), "{out}");
+        assert!(!wt.exists());
+        assert_eq!(run(&d, &["show", "agent-a:half.txt"]).unwrap(), "half done\n");
+        let left = leftovers(&d, &under);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].branch, "agent-a");
+        assert_eq!(left[0].target.as_deref(), Some("main"));
+        assert_eq!((left[0].ahead, left[0].worktree.is_none()), (1, true));
+
+        // Merged, it isn't left over, and retiring a worktree for it deletes it.
+        run(&d, &["merge", "-q", "--no-ff", "--no-edit", "agent-a"]).unwrap();
+        assert!(leftovers(&d, &under).is_empty());
+        let wt = agent_worktree(&d, "wt6", "agent-b");
+        assert_eq!(retire_worktree(&d, &wt, "agent-b", None).unwrap(), "");
+        assert!(!branch_exists(&d, "agent-b"));
+    }
+
+    #[test]
+    fn an_agent_that_moved_to_another_branch_is_followed() {
+        let d = repo();
+        let under = d.parent().unwrap().to_path_buf();
+        let wt = agent_worktree(&d, "wt7", "agent-c");
+        run(&wt, &["checkout", "-q", "-b", "feature-x"]).unwrap();
+        std::fs::write(wt.join("x.txt"), "x\n").unwrap();
+        commit_all(&wt, "Add x");
+
+        // Merging agent-c now would merge nothing.
+        let err = accept(&d, &wt, "agent-c", "main", "m").unwrap_err().to_string();
+        assert!(err.contains("on feature-x now"), "{err}");
+
+        // The branch it made is listed while the folder's there, and kept
+        // and marked for main once it's gone.
+        assert!(leftovers(&d, &under).iter().any(|l| l.branch == "feature-x"));
+        let out = retire_worktree(&d, &wt, "agent-c", Some("main")).unwrap();
+        assert_eq!(out, "kept feature-x: 1 commit(s) not in main");
+        assert!(!branch_exists(&d, "agent-c"));
+        let left = leftovers(&d, &under);
+        assert_eq!(left.len(), 1);
+        assert_eq!(
+            (left[0].branch.as_str(), left[0].target.as_deref()),
+            ("feature-x", Some("main"))
+        );
+
+        // A detached HEAD's commits get a branch before the folder goes.
+        let wt = agent_worktree(&d, "wt8", "agent-d");
+        run(&wt, &["checkout", "-q", "--detach"]).unwrap();
+        std::fs::write(wt.join("y.txt"), "y\n").unwrap();
+        commit_all(&wt, "Add y");
+        let out = retire_worktree(&d, &wt, "agent-d", Some("main")).unwrap();
+        assert!(out.contains("kept agent-d-detached"), "{out}");
+        assert_eq!(run(&d, &["show", "agent-d-detached:y.txt"]).unwrap(), "y\n");
     }
 
     fn commit_all(dir: &Path, msg: &str) {

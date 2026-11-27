@@ -138,8 +138,10 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
             Response::Ok
         }
         Request::Remove { id, prune_worktree } => {
-            d.remove_task(&id, prune_worktree).await?;
-            Response::Ok
+            match d.remove_task(&id, prune_worktree).await? {
+                kept if kept.is_empty() => Response::Ok,
+                kept => Response::Text(kept),
+            }
         }
 
         Request::LendWorktree { id, dir } => {
@@ -174,9 +176,13 @@ async fn handle(d: &Arc<Daemon>, conn: &Arc<Conn>, req: Request) -> Result<Respo
         Request::ReturnWorktree { id, quit } => {
             let t = d.task(&id)?;
             let t2 = t.clone();
-            tokio::task::spawn_blocking(move || t2.return_worktree(quit)).await??;
+            let kept = tokio::task::spawn_blocking(move || t2.return_worktree(quit)).await??;
             d.saved_changed(&t);
-            Response::Ok
+            if kept.is_empty() {
+                Response::Ok
+            } else {
+                Response::Text(kept)
+            }
         }
 
         Request::Attach {

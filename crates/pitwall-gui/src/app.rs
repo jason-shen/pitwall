@@ -363,6 +363,8 @@ pub enum Reply {
     RemarksSent(String, Result<usize, String>),
     Diffstats(Vec<(String, (usize, usize, usize))>),
     Heads(Vec<Head>),
+    /// Each project's leftover branches: its root, the repo, what's left.
+    Leftovers(Vec<(String, PathBuf, Vec<git::Leftover>)>),
     Fleet(crate::remote::FleetReply),
 }
 
@@ -503,6 +505,23 @@ pub enum Confirm {
     ResetApiKeys {
         text: String,
     },
+    /// Merge a branch no task has any more, then delete it and the worktree
+    /// it's still checked out in.
+    MergeLeftover {
+        root: PathBuf,
+        branch: String,
+        target: String,
+        branches: Vec<String>,
+        worktree: Option<PathBuf>,
+        text: String,
+    },
+    /// Throw a leftover branch away, worktree and all.
+    DeleteLeftover {
+        root: PathBuf,
+        branch: String,
+        worktree: Option<PathBuf>,
+        text: String,
+    },
 }
 
 impl Confirm {
@@ -520,6 +539,8 @@ impl Confirm {
             | Confirm::DeleteApiKey { text, .. }
             | Confirm::ResetApiKeys { text }
             | Confirm::ReturnWorktree { text, .. }
+            | Confirm::MergeLeftover { text, .. }
+            | Confirm::DeleteLeftover { text, .. }
             | Confirm::RestartDaemon { text } => text,
         }
     }
@@ -598,6 +619,11 @@ pub struct App {
     merged: HashMap<String, bool>,
     /// Accepts still running; their reply asks about the worktree itself.
     accepting: HashSet<String>,
+    /// Work on branches whose task is gone, by project: the repo and what's
+    /// left there. Ones a task still owns are filtered out when shown.
+    leftovers: HashMap<String, (PathBuf, Vec<git::Leftover>)>,
+    leftovers_running: bool,
+    last_leftovers: Instant,
     pub ask_branch: Option<AskBranch>,
     /// When you last typed; a dialog doesn't open under your fingers.
     last_typed: Instant,
@@ -797,6 +823,9 @@ impl App {
             merge_offers: HashMap::new(),
             merged: HashMap::new(),
             accepting: HashSet::new(),
+            leftovers: HashMap::new(),
+            leftovers_running: false,
+            last_leftovers: Instant::now() - Duration::from_secs(60),
             ask_branch: None,
             last_typed: Instant::now(),
             reviews_due: vec![],
@@ -2199,6 +2228,9 @@ impl App {
         if self.last_heads.elapsed() > every.max(Duration::from_secs(3)) {
             self.watch_commits();
         }
+        if self.last_leftovers.elapsed() > every.max(Duration::from_secs(20)) {
+            self.watch_leftovers();
+        }
         let theme = self.cfg.tui.theme.clone();
         let mut reloaded = vec![];
         for e in self.tabs.iter_mut().flat_map(|t| t.files.iter_mut()) {
@@ -2483,6 +2515,8 @@ impl App {
         self.heads.remove(id);
         self.merge_offers.remove(id);
         self.merged.remove(id);
+        // Its branch may be left over now.
+        self.last_leftovers = Instant::now() - Duration::from_secs(60);
         self.parent_of.retain(|k, v| k != id && v != id);
         self.ungroup(id);
         // A later task can reuse the id; it shouldn't inherit the name.
@@ -2635,8 +2669,13 @@ impl App {
                 self.reload_main();
                 // Maybe a commit from the Changes card: offer the merge now.
                 self.last_heads = Instant::now() - Duration::from_secs(60);
+                self.last_leftovers = Instant::now() - Duration::from_secs(60);
             }
             Reply::Heads(v) => self.on_heads(v),
+            Reply::Leftovers(v) => {
+                self.leftovers_running = false;
+                self.leftovers = v.into_iter().map(|(p, repo, l)| (p, (repo, l))).collect();
+            }
             Reply::Fleet(r) => self.on_fleet(r),
             Reply::Diffstats(v) => {
                 self.stats_running = false;
@@ -2658,6 +2697,7 @@ impl App {
                 self.refresh_git_now();
                 self.reload_main();
                 self.last_heads = Instant::now() - Duration::from_secs(60);
+                self.last_leftovers = Instant::now() - Duration::from_secs(60);
                 match result {
                     // Don't replace a question that's already open; Remove
                     // is in the agent's menu for later.
@@ -3784,11 +3824,10 @@ impl App {
         std::thread::spawn(move || {
             let v = jobs
                 .into_iter()
-                .filter_map(|(id, wt, root, branch, base_branch, base)| {
-                    // Switched to another branch in there: not what Accept merges.
-                    if git::current_branch(&wt)? != branch {
-                        return None;
-                    }
+                .filter_map(|(id, wt, root, _given, base_branch, base)| {
+                    // Whatever it's on now: an agent told to use a branch of
+                    // its own makes one, and its commits are there.
+                    let branch = git::current_branch(&wt)?;
                     let commit = git::head(&wt)?;
                     // Older daemons don't say; Accept would pick the main checkout's.
                     let target = base_branch.or_else(|| git::current_branch(&root))?;
@@ -3880,6 +3919,162 @@ impl App {
         }
     }
 
+    /// Look for work left on branches whose task is gone, in every project.
+    fn watch_leftovers(&mut self) {
+        if self.leftovers_running {
+            return;
+        }
+        self.last_leftovers = Instant::now();
+        let roots = self.project_roots();
+        if roots.is_empty() {
+            self.leftovers.clear();
+            return;
+        }
+        self.leftovers_running = true;
+        let under = pitwall_core::paths::worktrees();
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let v = roots
+                .into_iter()
+                .filter_map(|p| {
+                    let repo = git::root(Path::new(&p))?;
+                    let left = git::leftovers(&repo, &under);
+                    Some((p, repo, left))
+                })
+                .collect();
+            let _ = tx.send(Ev::Reply(Reply::Leftovers(v)));
+            ctx.request_repaint();
+        });
+    }
+
+    /// The project's leftovers that no task here owns: the repo, and each
+    /// branch with what's left on it.
+    pub fn leftovers_in(&self, root: &str) -> Option<(PathBuf, Vec<git::Leftover>)> {
+        let (repo, list) = self.leftovers.get(root)?;
+        let owned = |l: &git::Leftover| {
+            self.tasks.values().filter(|t| t.host.is_none()).any(|t| {
+                let wt = t.worktree.as_deref().map(Path::new);
+                (wt.is_some() && wt == l.worktree.as_deref())
+                    || (t.branch.as_deref() == Some(l.branch.as_str())
+                        && t.repo.as_deref().map(Path::new) == Some(repo.as_path()))
+            })
+        };
+        let list: Vec<_> = list.iter().filter(|l| !owned(l)).cloned().collect();
+        (!list.is_empty()).then(|| (repo.clone(), list))
+    }
+
+    fn leftover(&self, root: &str, branch: &str) -> Option<(PathBuf, git::Leftover)> {
+        let (repo, list) = self.leftovers_in(root)?;
+        let l = list.into_iter().find(|l| l.branch == branch)?;
+        Some((repo, l))
+    }
+
+    pub fn ask_merge_leftover(&mut self, root: &str, branch: &str) {
+        let Some((repo, l)) = self.leftover(root, branch) else {
+            return;
+        };
+        let agents: HashSet<&str> = self
+            .tasks
+            .values()
+            .filter_map(|t| t.branch.as_deref())
+            .collect();
+        let left: HashSet<String> = self
+            .leftovers
+            .get(root)
+            .map(|(_, v)| v.iter().map(|l| l.branch.clone()).collect())
+            .unwrap_or_default();
+        let branches: Vec<String> = git::branches(&repo)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|b| b.name)
+            .filter(|b| !b.starts_with("pitwall/") && !agents.contains(b.as_str()) && !left.contains(b))
+            .collect();
+        let target = l
+            .target
+            .clone()
+            .or_else(|| git::current_branch(&repo))
+            .filter(|b| branches.contains(b))
+            .or_else(|| branches.first().cloned())
+            .unwrap_or_else(|| "HEAD".into());
+        let mut text = trf!("Merge {branch}?", branch = l.branch);
+        if l.dirty > 0 {
+            text.push_str("\n\n");
+            text.push_str(&trf!(
+                "• Commit the {n} uncommitted change(s) in its worktree first",
+                n = l.dirty
+            ));
+        }
+        text.push_str("\n\n");
+        text.push_str(tr("Once it's merged, the branch and its worktree are deleted."));
+        self.confirm = Some(Confirm::MergeLeftover {
+            root: repo,
+            branch: l.branch,
+            target,
+            branches,
+            worktree: l.worktree,
+            text,
+        });
+    }
+
+    pub fn ask_delete_leftover(&mut self, root: &str, branch: &str) {
+        let Some((repo, l)) = self.leftover(root, branch) else {
+            return;
+        };
+        let mut text = match &l.target {
+            Some(t) => trf!(
+                "Delete {branch}? Its {n} commit(s) not in {target} are thrown away.",
+                branch = l.branch,
+                n = l.ahead,
+                target = t
+            ),
+            None => trf!(
+                "Delete {branch}? Its {n} commit(s) no other branch has are thrown away.",
+                branch = l.branch,
+                n = l.ahead
+            ),
+        };
+        if l.dirty > 0 {
+            text.push_str("\n\n");
+            text.push_str(&trf!(
+                "Its worktree goes too, with {n} uncommitted change(s).",
+                n = l.dirty
+            ));
+        } else if l.worktree.is_some() {
+            text.push_str("\n\n");
+            text.push_str(tr("Its worktree goes too."));
+        }
+        self.confirm = Some(Confirm::DeleteLeftover {
+            root: repo,
+            branch: l.branch,
+            worktree: l.worktree,
+            text,
+        });
+    }
+
+    /// Take a leftover's worktree folder away and keep the branch. Nothing
+    /// is lost, so there's no question.
+    pub fn retire_leftover(&mut self, root: &str, branch: &str) {
+        let Some((repo, l)) = self.leftover(root, branch) else {
+            return;
+        };
+        let Some(wt) = l.worktree else { return };
+        self.in_background(
+            move || {
+                git::retire_worktree(&repo, &wt, &l.branch, l.target.as_deref())
+                    .map(|kept| {
+                        let done = trf!("removed {branch}'s worktree", branch = l.branch);
+                        if kept.is_empty() {
+                            done
+                        } else {
+                            format!("{done}; {kept}")
+                        }
+                    })
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Reply::GitDone,
+        );
+    }
+
     pub fn dismiss_merge(&mut self, id: &str) {
         // Its commit stays in `heads`, so only the next one offers again.
         self.merge_offers.remove(id);
@@ -3922,6 +4117,10 @@ impl App {
         };
         let root = PathBuf::from(root);
         let worktree = PathBuf::from(t.worktree.clone().unwrap_or_else(|| t.cwd.clone()));
+        // The agent may have moved to a branch it made; that one has the work.
+        let branch = git::current_branch(&worktree)
+            .filter(|_| worktree.is_dir())
+            .unwrap_or(branch);
         let here = git::current_branch(&root);
         // Other agents' branches aren't somewhere you'd merge into. Older
         // versions put theirs under pitwall/.
@@ -4133,11 +4332,15 @@ impl App {
                     self.reviewed.insert(id.clone());
                 }
                 let id2 = id.clone();
+                // GitDone, so the sidebar picks up a branch it kept.
                 self.call(Request::ReturnWorktree { id, quit }, move |r| {
-                    Some(match r {
-                        Ok(_) => Reply::Notice(trf!("removed {id}'s worktree", id = id2), false),
-                        Err(e) => Reply::Notice(e, true),
-                    })
+                    Some(Reply::GitDone(r.map(|r| {
+                        let done = trf!("removed {id}'s worktree", id = id2);
+                        match r {
+                            Response::Text(kept) => format!("{done}; {kept}"),
+                            _ => done,
+                        }
+                    })))
                 });
             }
             Confirm::Revert { task, snapshot, .. } => {
@@ -4181,12 +4384,55 @@ impl App {
                         id: id.clone(),
                         prune_worktree: prune,
                     },
-                    move |r| match r {
-                        Ok(_) => Some(Reply::Notice(trf!("removed {id}", id = id), false)),
-                        Err(e) => Some(Reply::Notice(e, true)),
+                    move |r| {
+                        Some(Reply::GitDone(r.map(|r| {
+                            let done = trf!("removed {id}", id = id);
+                            match r {
+                                Response::Text(kept) => format!("{done}; {kept}"),
+                                _ => done,
+                            }
+                        })))
                     },
                 );
             }
+            Confirm::MergeLeftover {
+                root,
+                branch,
+                target,
+                worktree,
+                ..
+            } => {
+                self.notify(trf!("merging {branch}…", branch = branch), false);
+                let merge = move || -> anyhow::Result<String> {
+                    let wt = worktree.unwrap_or_default();
+                    let merged = git::accept(
+                        &root,
+                        &wt,
+                        &branch,
+                        &target,
+                        "Work left uncommitted in its worktree",
+                    )?;
+                    let kept = git::retire_worktree(&root, &wt, &branch, Some(&target))?;
+                    Ok(if kept.is_empty() {
+                        merged
+                    } else {
+                        format!("{merged}; {kept}")
+                    })
+                };
+                self.in_background(move || merge().map_err(|e| format!("{e:#}")), Reply::GitDone);
+            }
+            Confirm::DeleteLeftover {
+                root,
+                branch,
+                worktree,
+                ..
+            } => self.in_background(
+                move || {
+                    git::delete_branch(&root, &branch, worktree.as_deref())
+                        .map_err(|e| format!("{e:#}"))
+                },
+                Reply::GitDone,
+            ),
             Confirm::RemoveProject { root, .. } => self.remove_project(&root),
             Confirm::RemoveRemote { name, .. } => self.remove_remote(&name),
             Confirm::DeleteApiKey { id, .. } => self.keys_delete(&id),
